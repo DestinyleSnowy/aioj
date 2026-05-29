@@ -565,9 +565,7 @@ p {
 }
 
 .page-subtitle {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin-top: 1px;
+  display: none !important;
 }
 
 .top-actions {

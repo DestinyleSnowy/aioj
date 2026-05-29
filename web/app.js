@@ -32,9 +32,12 @@ const state = {
   activeProblemTab: 'statement', // Default tab in problem detail
 };
 
-function setPage(title, subtitle = '') {
+function setPage(title) {
   $('pageTitle').textContent = title || 'AIOJ';
-  $('pageSubtitle').textContent = subtitle || '';
+  if ($('pageSubtitle')) {
+    $('pageSubtitle').textContent = '';
+    $('pageSubtitle').style.display = 'none';
+  }
   document.title = title ? `${title} — AIOJ` : 'AIOJ — AI Olympiad Judge';
 }
 
@@ -402,7 +405,7 @@ function logout() {
 
 // ─── Dashboard ──────────────────────────────────────────────────────────────
 async function renderDashboard() {
-  setPage('平台概览', 'AI Olympiad Judge 竞技运营概况');
+  setPage('平台概览');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -445,9 +448,8 @@ async function renderDashboard() {
       <div class="two-col" style="grid-template-columns: 1fr 340px; align-items: start; gap: var(--space-lg);">
         <!-- Main Column (Left) -->
         <div style="display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0;">
-          <div class="dashboard-hero">
-            <h2 class="dashboard-hero-title">AIOJ 智能机器学习评测系统</h2>
-            <p class="dashboard-hero-subtitle">面向 AI 和深度学习算法竞赛的在线自动化评测中心，支持多卡多进程安全沙箱环境、多重评测指标自动优化和实时高性能排行榜。</p>
+          <div class="dashboard-hero" style="padding: var(--space-lg) var(--space-xl);">
+            <h2 class="dashboard-hero-title" style="margin: 0; font-size: 24px;">AIOJ 智能机器学习评测系统</h2>
           </div>
 
           <div class="stats-row" style="margin-bottom: 0;">
@@ -465,7 +467,7 @@ async function renderDashboard() {
             </div>
             <div class="stat-card" style="border-color: var(--color-success);">
               <div class="stat-value" style="color: var(--color-success);">${solvedCount}</div>
-              <div class="stat-label">已通关题数</div>
+              <div class="stat-label">已通过题目</div>
             </div>
           </div>
 
@@ -476,8 +478,36 @@ async function renderDashboard() {
                   <span class="pulsing-dot"></span> 🔥 正在进行的比赛
                 </h3>
               </div>
-              <div class="contest-grid">
-                ${runningContests.map(c => contestCard(c)).join('')}
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 140px;">赛事状态</th>
+                      <th>竞赛名称与基本规格</th>
+                      <th style="width: 150px;">赛题数量</th>
+                      <th style="width: 140px; text-align: right;">进入行动</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${runningContests.map(c => `
+                      <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(c.slug)}')" style="transition: all var(--transition-fast);">
+                        <td>
+                          <span class="pill green" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;"><span class="pulsing-dot" style="display:inline-block; margin-right:4px;"></span>进行中</span>
+                        </td>
+                        <td>
+                          <div style="font-weight: 700; font-size: 14.5px; color: var(--text-main); font-family: var(--font-display);">${esc(c.title)}</div>
+                          <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">SLUG: ${esc(c.slug)}</div>
+                        </td>
+                        <td>
+                          <span class="pill blue" style="font-family: var(--font-mono); font-size: 11px;">${c.problem_count || 0} 道题</span>
+                        </td>
+                        <td style="text-align: right;">
+                          <a href="/contests/${esc(c.slug)}" class="btn btn-primary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即参赛 🚀</a>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
               </div>
             </div>
           ` : ''}
@@ -487,8 +517,36 @@ async function renderDashboard() {
               <div class="card-header" style="margin-bottom: var(--space-md);">
                 <h3 class="card-title">📅 即将开始的比赛</h3>
               </div>
-              <div class="contest-grid">
-                ${upcomingContests.map(c => contestCard(c)).join('')}
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 140px;">赛事状态</th>
+                      <th>竞赛名称与基本规格</th>
+                      <th style="width: 150px;">赛题数量</th>
+                      <th style="width: 140px; text-align: right;">进入行动</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${upcomingContests.map(c => `
+                      <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(c.slug)}')" style="transition: all var(--transition-fast);">
+                        <td>
+                          <span class="pill yellow" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">📅 未开启</span>
+                        </td>
+                        <td>
+                          <div style="font-weight: 700; font-size: 14.5px; color: var(--text-main); font-family: var(--font-display);">${esc(c.title)}</div>
+                          <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">SLUG: ${esc(c.slug)}</div>
+                        </td>
+                        <td>
+                          <span class="pill blue" style="font-family: var(--font-mono); font-size: 11px;">${c.problem_count || 0} 道题</span>
+                        </td>
+                        <td style="text-align: right;">
+                          <a href="/contests/${esc(c.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>查看详情</a>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
               </div>
             </div>
           ` : ''}
@@ -499,16 +557,36 @@ async function renderDashboard() {
               <a href="/problems" class="btn btn-ghost btn-sm" data-link>题库主页 →</a>
             </div>
             ${problems.length === 0 ? emptyBox('暂无可用题目') : `
-              <div class="card-grid compact">
-                ${problems.slice(0, 6).map(p => `
-                  <a href="/problems/${esc(p.slug)}" class="mini-card" data-link>
-                    <div class="mini-card-title">${esc(p.title)}</div>
-                    <div class="mini-card-meta" style="display:flex; justify-content:space-between; margin-top:6px; font-size:11px;">
-                      <span>${esc(p.slug)}</span>
-                      <span class="text-primary" style="font-weight:600;">挑战 →</span>
-                    </div>
-                  </a>
-                `).join('')}
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>算法题目信息</th>
+                      <th style="width: 160px;">评测指标</th>
+                      <th style="width: 220px;">系统限制规格</th>
+                      <th style="width: 120px; text-align: right;">挑战行动</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${problems.slice(0, 6).map(p => `
+                      <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/problems/${esc(p.slug)}')" style="transition: all var(--transition-fast);">
+                        <td>
+                          <div style="font-weight: 700; font-size: 15px; color: var(--text-main); font-family: var(--font-display);">${esc(p.title)}</div>
+                          <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">ID: ${esc(p.slug)}</div>
+                        </td>
+                        <td>
+                          <span class="pill blue" style="text-transform: lowercase; font-family: var(--font-mono);">${esc(p.metric || 'accuracy')}</span>
+                        </td>
+                        <td style="font-family: var(--font-mono); font-size: 12.5px; color: var(--text-secondary);">
+                          ⏱️ ${p.time_limit_sec || 60}s &nbsp;·&nbsp; 💾 ${Math.round((p.memory_limit_mb || 2048) / 1024 * 10) / 10}GB
+                        </td>
+                        <td style="text-align: right;">
+                          <a href="/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即挑战 🚀</a>
+                        </td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
               </div>
             `}
           </div>
@@ -530,7 +608,7 @@ async function renderDashboard() {
                 </div>
                 <div>
                   <div style="font-weight: 700; color: var(--text-main); font-size: 15px;">${esc(state.user.username)}</div>
-                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">已通关 ${solvedCount} / ${totalCount} 题</div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">已通过 ${solvedCount} / ${totalCount} 题</div>
                 </div>
               </div>
             ` : `
@@ -593,23 +671,25 @@ async function renderDashboard() {
 function contestCard(c) {
   const st = c.state || c.status || '';
   return `
-    <a href="/contests/${esc(c.slug)}" class="contest-card" data-link>
-      <div class="contest-card-header">
-        <span class="contest-card-title">${esc(c.title)}</span>
-        ${contestStatePill(st)}
+    <div class="contest-card" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(c.slug)}')" style="cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; gap: var(--space-md); transition: all var(--transition-base);">
+      <div>
+        <div style="display: flex; justify-content: space-between; align-items: start; gap: var(--space-sm);">
+          <span style="font-weight: 700; font-size: 14.5px; color: var(--text-main); font-family: var(--font-display);">${esc(c.title)}</span>
+          ${contestStatePill(st)}
+        </div>
+        <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">ID: ${esc(c.slug)}</div>
       </div>
-      <div class="contest-card-meta">
-        <span>标识: ${esc(c.slug)}</span>
-        <span>共 ${c.problem_count || 0} 道题</span>
-        ${c.start_at ? `<span>开始: ${formatDate(c.start_at)}</span>` : ''}
+      <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-subtle); padding-top: var(--space-sm); font-size: 12px;">
+        <span class="pill blue" style="font-size: 10px; font-family: var(--font-mono);">${c.problem_count || 0} 道题</span>
+        <a href="/contests/${esc(c.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 4px 10px;" data-link>立即进入</a>
       </div>
-    </a>
+    </div>
   `;
 }
 
 // ─── Problems Library ───────────────────────────────────────────────────────
 async function renderProblems() {
-  setPage('公开题库', '挑战各种 AI / 机器学习场景题目');
+  setPage('公开题库');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -618,28 +698,77 @@ async function renderProblems() {
     </div>
   `;
   try {
-    const data = await api('/api/problems');
-    const items = data.items || [];
+    const [problemsData, subsData] = await Promise.allSettled([
+      api('/api/problems'),
+      state.token ? api('/api/my/submissions', { headers: authHeaders() }) : Promise.resolve({ items: [] }),
+    ]);
+
+    const items = problemsData.status === 'fulfilled' ? (problemsData.value.items || []) : [];
+    const submissions = subsData.status === 'fulfilled' ? (subsData.value.items || []) : [];
+
     if (items.length === 0) {
       app.innerHTML = emptyBox('题库尚未上传公开题目');
       return;
     }
-    
+
+    const solvedSlugs = new Set();
+    const attemptedSlugs = new Set();
+    submissions.forEach(s => {
+      const slug = s.problem_slug || s.problem_title;
+      if (!slug) return;
+      if (s.status === 'ACCEPTED' || s.status === 'RUN_FINISHED') {
+        solvedSlugs.add(slug);
+      } else {
+        attemptedSlugs.add(slug);
+      }
+    });
+
+    const getStatusPill = (slug) => {
+      if (solvedSlugs.has(slug)) {
+        return `<span class="pill green" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">已通过</span>`;
+      }
+      if (attemptedSlugs.has(slug)) {
+        return `<span class="pill yellow" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">已尝试</span>`;
+      }
+      return `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px; opacity:0.65;">未尝试</span>`;
+    };
+
     app.innerHTML = `
-      <div class="problem-grid">
-        ${items.map(p => `
-          <a href="/problems/${esc(p.slug)}" class="problem-card" data-link>
-            <div class="problem-card-header">
-              <h3 class="problem-card-title">${esc(p.title)}</h3>
-              ${statusPill(p.status || 'PUBLIC')}
-            </div>
-            <div class="problem-card-slug">${esc(p.slug)}</div>
-            <div class="problem-card-footer" style="justify-content: space-between; border-top: 1px solid hsla(0,0%,100%,0.04); padding-top: 10px;">
-              <span class="pill blue">${esc(p.metric || 'accuracy')}</span>
-              <span class="text-muted" style="font-size: 11px;">${metricText(p)}</span>
-            </div>
-          </a>
-        `).join('')}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 140px;">我的状态</th>
+              <th>算法题目信息</th>
+              <th style="width: 160px;">评测指标</th>
+              <th style="width: 220px;">系统限制规格</th>
+              <th style="width: 120px; text-align: right;">挑战行动</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(p => `
+              <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/problems/${esc(p.slug)}')" style="transition: all var(--transition-fast);">
+                <td style="font-weight: 500;">
+                  ${getStatusPill(p.slug)}
+                </td>
+                <td>
+                  <div style="font-weight: 700; font-size: 15px; color: var(--text-main); font-family: var(--font-display);">${esc(p.title)}</div>
+                  <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">ID: ${esc(p.slug)}</div>
+                </td>
+                <td>
+                  <span class="pill blue" style="text-transform: lowercase; font-family: var(--font-mono);">${esc(p.metric || 'accuracy')}</span>
+                </td>
+                <td style="font-family: var(--font-mono); font-size: 12.5px; color: var(--text-secondary);">
+                  <div>⏱️ ${p.time_limit_sec || 60}s &nbsp;·&nbsp; 💾 ${Math.round((p.memory_limit_mb || 2048) / 1024 * 10) / 10}GB</div>
+                  <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">CPU: ${p.cpu_count || 2} 核</div>
+                </td>
+                <td style="text-align: right;">
+                  <a href="/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即挑战 🚀</a>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
       </div>
     `;
   } catch (err) {
@@ -649,7 +778,7 @@ async function renderProblems() {
 
 // ─── Problem Workspace ──────────────────────────────────────────────────────
 async function renderProblemDetail(slug, contestSlug = null) {
-  setPage('正在载入题目', slug);
+  setPage('正在载入题目');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -664,7 +793,7 @@ async function renderProblemDetail(slug, contestSlug = null) {
     ]);
     const subs = subsData.items || [];
 
-    setPage(problem.title, `评测指标: ${problem.metric || 'accuracy'}`);
+    setPage(problem.title);
 
     app.innerHTML = `
       ${contestSlug ? `
@@ -937,7 +1066,7 @@ async function submitSolution(slug, contestSlug) {
 
 // ─── Contests Module ────────────────────────────────────────────────────────
 async function renderContests() {
-  setPage('竞技比赛', '参加机器学习/算法比赛');
+  setPage('竞技比赛');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -959,10 +1088,76 @@ async function renderContests() {
     const draft = items.filter(c => (c.state || c.status) === 'DRAFT');
     const other = items.filter(c => !['RUNNING', 'UPCOMING', 'ENDED', 'DRAFT'].includes(c.state || c.status));
 
+    const getContestStatusBadge = (st) => {
+      switch (st) {
+        case 'RUNNING':
+          return `<span class="pill green" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;"><span class="pulsing-dot" style="display:inline-block; margin-right:4px;"></span>进行中</span>`;
+        case 'UPCOMING':
+          return `<span class="pill yellow" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">📅 未开启</span>`;
+        case 'ENDED':
+          return `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">🏁 已结束</span>`;
+        case 'DRAFT':
+          return `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px; opacity:0.5;">📝 调试中</span>`;
+        default:
+          return `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">${esc(st)}</span>`;
+      }
+    };
+
+    const getContestActionButton = (st, slug) => {
+      switch (st) {
+        case 'RUNNING':
+          return `<a href="/contests/${esc(slug)}" class="btn btn-primary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即参赛 🚀</a>`;
+        case 'UPCOMING':
+          return `<a href="/contests/${esc(slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>查看详情</a>`;
+        case 'ENDED':
+          return `<a href="/contests/${esc(slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>查看排行榜</a>`;
+        default:
+          return `<a href="/contests/${esc(slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>进入</a>`;
+      }
+    };
+
     const renderSection = (title, list) => list.length === 0 ? '' : `
-      <h3 class="section-title" style="margin-bottom: var(--space-md); font-size: 16px;">${title}</h3>
-      <div class="contest-grid mb-lg">
-        ${list.map(c => contestCard(c)).join('')}
+      <h3 class="section-title mb-md" style="font-size: 15px; font-weight: 700; margin-top: var(--space-lg); color: var(--text-main);">${title} (${list.length})</h3>
+      <div class="table-wrap mb-lg">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 140px;">赛事状态</th>
+              <th>竞赛名称与基本规格</th>
+              <th style="width: 150px;">赛题数量</th>
+              <th style="width: 320px;">起止时间安排</th>
+              <th style="width: 140px; text-align: right;">进入行动</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${list.map(c => {
+              const st = c.state || c.status || '';
+              return `
+                <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(c.slug)}')" style="transition: all var(--transition-fast);">
+                  <td>
+                    ${getContestStatusBadge(st)}
+                  </td>
+                  <td>
+                    <div style="font-weight: 700; font-size: 14.5px; color: var(--text-main); font-family: var(--font-display);">${esc(c.title)}</div>
+                    <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">SLUG: ${esc(c.slug)} &nbsp;·&nbsp; 报名限制: ${esc(c.registration_mode || 'OPEN')}</div>
+                  </td>
+                  <td>
+                    <span class="pill blue" style="font-family: var(--font-mono); font-size: 11px;">${c.problem_count || 0} 道算法题</span>
+                  </td>
+                  <td style="font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);">
+                    ${c.start_at ? `
+                      <div>起: ${formatDate(c.start_at)}</div>
+                      <div style="margin-top: 2px;">止: ${formatDate(c.end_at)}</div>
+                    ` : '<span class="text-muted">— 未排程 —</span>'}
+                  </td>
+                  <td style="text-align: right;">
+                    ${getContestActionButton(st, c.slug)}
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
       </div>
     `;
 
@@ -980,7 +1175,7 @@ async function renderContests() {
 
 // ─── Contest Arena Workspace ────────────────────────────────────────────────
 async function renderContestDetail(slug) {
-  setPage('载入竞赛中', slug);
+  setPage('载入竞赛中');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -1011,11 +1206,23 @@ async function renderContestDetail(slug) {
 
     const st = contest.state || contest.status || '';
     const problems = contest.problems || [];
+    const solvedSlugs = new Set();
+    const attemptedSlugs = new Set();
+    submissions.forEach(s => {
+      const pSlug = s.problem_slug || s.problem_title;
+      if (!pSlug) return;
+      if (s.status === 'ACCEPTED' || s.status === 'RUN_FINISHED') {
+        solvedSlugs.add(pSlug);
+      } else {
+        attemptedSlugs.add(pSlug);
+      }
+    });
+
     const canViewProblems = access.can_view_problems !== false;
     const participantStatus = access.participant_status || access.status || null;
     const isParticipant = participantStatus === 'ACCEPTED';
 
-    setPage(contest.title, `竞赛标识: ${contest.slug}`);
+    setPage(contest.title);
 
     app.innerHTML = `
       <div class="contest-detail">
@@ -1090,22 +1297,49 @@ async function renderContestDetail(slug) {
           <!-- Problems tab -->
           <div class="tab-panel active" id="tab-problems">
             ${!canViewProblems ? emptyBox('题目尚未公开，请在竞赛开启后查看') : problems.length === 0 ? emptyBox('本场竞赛尚未绑定题目') : `
-              <div class="problem-grid">
-                ${problems.map(p => {
-                  const ps = problemStats.find(s => s.slug === p.slug || s.id === p.id) || {};
-                  return `
-                    <a href="/contests/${esc(slug)}/problems/${esc(p.slug)}" class="problem-card" data-link>
-                      <div class="problem-card-header">
-                        <h3 class="problem-card-title">${esc(p.title)}</h3>
-                      </div>
-                      <div class="problem-card-slug">${esc(p.slug)}</div>
-                      <div class="problem-card-footer" style="justify-content: space-between; border-top: 1px solid hsla(0,0%,100%,0.04); padding-top: 10px; font-size: 12px; color: var(--text-muted);">
-                        <span>已通过 ${ps.solved_users || 0} 人</span>
-                        <span>累计提交 ${ps.submissions || 0} 次</span>
-                      </div>
-                    </a>
-                  `;
-                }).join('')}
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 140px;">我的状态</th>
+                      <th>算法题目信息</th>
+                      <th style="width: 200px;">过题情况</th>
+                      <th style="width: 160px; text-align: right;">挑战行动</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${problems.map(p => {
+                      const ps = problemStats.find(s => s.slug === p.slug || s.id === p.id) || {};
+                      const isSolved = solvedSlugs.has(p.slug);
+                      const isAttempted = attemptedSlugs.has(p.slug);
+                      let statusPill = `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px; opacity:0.65;">未尝试</span>`;
+                      if (isSolved) {
+                        statusPill = `<span class="pill green" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">已通过</span>`;
+                      } else if (isAttempted) {
+                        statusPill = `<span class="pill yellow" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">已尝试</span>`;
+                      }
+
+                      return `
+                        <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(slug)}/problems/${esc(p.slug)}')" style="transition: all var(--transition-fast);">
+                          <td>
+                            ${statusPill}
+                          </td>
+                          <td>
+                            <div style="font-weight: 700; font-size: 15px; color: var(--text-main); font-family: var(--font-display);">${esc(p.title)}</div>
+                            <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">ID: ${esc(p.slug)}</div>
+                          </td>
+                          <td style="font-family: var(--font-mono); font-size: 12.5px; color: var(--text-secondary);">
+                            <div>💚 已通过: <strong>${ps.solved_users || 0}</strong> 人</div>
+                            <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">📈 提报次数: ${ps.submissions || 0} 次</div>
+                          </td>
+                          <td style="text-align: right;">
+                            <a href="/contests/${esc(slug)}/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即挑战 🚀</a>
+                          </td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
               </div>
             `}
           </div>
@@ -1594,7 +1828,7 @@ async function closeQuestion(slug, questionId) {
 
 // ─── Submissions Log ────────────────────────────────────────────────────────
 async function renderSubmissions() {
-  setPage('提交历史', '监控评测任务运行队列与日志');
+  setPage('提交历史');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -1662,7 +1896,7 @@ async function renderSubmissions() {
 
 // ─── Submission Detail (Terminal Output) ───────────────────────────────────
 async function renderSubmissionDetail(id) {
-  setPage('提取评测报告', `#${id}`);
+  setPage('提取评测报告');
   const app = $('app');
   app.innerHTML = `
     <div class="loading-overlay">
@@ -1791,7 +2025,7 @@ function copyTerminalText() {
 
 // ─── Account Settings ───────────────────────────────────────────────────────
 async function renderAccount() {
-  setPage('个人中心', '维护与更新您的 AIOJ 会员档案');
+  setPage('个人中心');
   const app = $('app');
   if (!state.user) {
     app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button>。</div>`;
@@ -1801,7 +2035,7 @@ async function renderAccount() {
   app.innerHTML = `
     <div class="loading-overlay">
       <div class="spinner-ring"></div>
-      <span class="loading-text">正在同步个人中心档案与通关进度...</span>
+      <span class="loading-text">正在同步个人中心档案与解题进度...</span>
     </div>
   `;
 
@@ -1857,7 +2091,7 @@ async function renderAccount() {
 
         <!-- Solved Circular Ring -->
         <div class="card" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: var(--space-lg);">
-          <h3 class="card-title" style="margin-bottom: var(--space-md); width: 100%; text-align: left;">通关挑战进度</h3>
+          <h3 class="card-title" style="margin-bottom: var(--space-md); width: 100%; text-align: left;">解题挑战进度</h3>
           <div style="position: relative; width: 120px; height: 120px; display: flex; align-items: center; justify-content: center; margin-bottom: var(--space-sm);">
             <svg width="120" height="120">
               <circle stroke="var(--border-light)" stroke-width="8" fill="transparent" r="48" cx="60" cy="60"/>
@@ -1866,7 +2100,7 @@ async function renderAccount() {
             <span style="position: absolute; font-size: 18px; font-weight: 800; font-family: var(--font-mono); color: var(--text-main);">${solvedPercent}%</span>
           </div>
           <div style="font-size: 13px; color: var(--text-secondary); font-weight: 500;">
-            已通关 <strong class="text-accent" style="font-size: 15px;">${solvedCount}</strong> / ${totalCount} 题
+            已通过 <strong class="text-accent" style="font-size: 15px;">${solvedCount}</strong> / ${totalCount} 题
           </div>
         </div>
       </div>
@@ -1949,7 +2183,7 @@ function requireAdmin() {
 
 // Admin: User Administration
 async function renderUsers() {
-  setPage('用户管理', '控制平台选手与系统组权限');
+  setPage('用户管理');
   if (!requireAdmin()) return;
   const app = $('app');
   app.innerHTML = `
@@ -2073,7 +2307,7 @@ async function resetUserPassword(userId) {
 
 // Admin: Problem Repository Manager
 async function renderProblemAdmin() {
-  setPage('题目管理', '导入、测试与部署智能算法题目包');
+  setPage('题目管理');
   if (!requireAdmin()) return;
   const app = $('app');
   app.innerHTML = `
@@ -2189,7 +2423,7 @@ async function setProblemStatus(slug, status) {
 
 // Admin: Contest Management
 async function renderContestAdmin() {
-  setPage('比赛管理', '编排、监控与运作算法及深度学习赛事');
+  setPage('比赛管理');
   if (!requireAdmin()) return;
   const app = $('app');
   app.innerHTML = `
@@ -2606,7 +2840,7 @@ function route() {
   }
 
   // 404 handler
-  setPage('异常访问', '404 错误');
+  setPage('异常访问');
   app.innerHTML = `
     <div class="empty-state">
       <div class="empty-icon">🔍</div>
