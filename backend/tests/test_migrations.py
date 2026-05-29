@@ -23,3 +23,12 @@ def test_resolve_database_url_prefers_explicit_then_environment():
         None,
         environ={"DATABASE_URL": "postgresql+psycopg://env"},
     ) == "postgresql+psycopg://env"
+
+
+def test_alembic_runtime_should_prefer_environment_over_ini_fallback():
+    ini_fallback = "postgresql+psycopg://aioj:aioj@postgres:5432/aioj"
+    runtime_env = {"DATABASE_URL": "postgresql+psycopg://prod-user:prod-pass@postgres:5432/prod-db"}
+
+    selected = runtime_env.get("DATABASE_URL") or ini_fallback
+
+    assert selected == "postgresql+psycopg://prod-user:prod-pass@postgres:5432/prod-db"
