@@ -10,4 +10,5 @@ def test_create_app_registers_core_routes():
     assert "/api/admin/problems/import" in paths
     assert "/api/admin/judge/overview" in paths
     assert "/api/internal/judge/claim" in paths
+    assert "/api/internal/judge/heartbeat" in paths
     assert "/api/contests/{slug}/scoreboard-advanced" in paths

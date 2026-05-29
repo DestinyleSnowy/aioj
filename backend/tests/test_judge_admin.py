@@ -1,6 +1,15 @@
 from datetime import datetime, timedelta, timezone
 
-from app.services.judge_admin import is_job_stale, is_node_online, normalize_run_spec, queue_submission_status
+from app.services.judge_admin import (
+    is_job_stale,
+    is_node_online,
+    normalize_max_parallel,
+    normalize_run_spec,
+    normalize_tags,
+    queue_submission_status,
+    should_retry_job,
+    tags_match,
+)
 
 
 def test_normalize_run_spec_parses_json_strings():
@@ -13,6 +22,24 @@ def test_normalize_run_spec_parses_json_strings():
 def test_queue_submission_status_uses_test_run_flag():
     assert queue_submission_status({"is_test_run": False}) == "QUEUED"
     assert queue_submission_status({"is_test_run": True}) == "TEST_QUEUED"
+
+
+def test_normalize_tags_deduplicates_and_preserves_order():
+    assert normalize_tags("cpu, gpu, cpu") == ["cpu", "gpu"]
+
+
+def test_normalize_max_parallel_enforces_bounds():
+    assert normalize_max_parallel("4") == 4
+
+
+def test_should_retry_job_uses_max_attempts():
+    assert should_retry_job(1, max_attempts=3) is True
+    assert should_retry_job(3, max_attempts=3) is False
+
+
+def test_tags_match_requires_subset():
+    assert tags_match(["python", "gpu"], ["python", "gpu", "cuda"]) is True
+    assert tags_match(["python", "gpu"], ["python"]) is False
 
 
 def test_is_node_online_respects_heartbeat_ttl():

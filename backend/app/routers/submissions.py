@@ -179,6 +179,7 @@ async def create_submission(
             "problem_version": pv["version"],
             "runner_image": pv["runner_image"],
             "run_command": pv["run_command"],
+            "required_tags": list(pv.get("required_tags") or []),
             "limits": {
                 "cpu_count": pv["cpu_count"],
                 "time_limit_sec": pv["time_limit_sec"],
@@ -199,14 +200,21 @@ async def create_submission(
         job = conn.execute(
             text(
                 """
-                insert into judge_jobs(submission_id, problem_id, status, run_spec)
-                values (:submission_id, :problem_id, 'PENDING', cast(:run_spec as jsonb))
+                insert into judge_jobs(submission_id, problem_id, required_tags, status, run_spec)
+                values (
+                    :submission_id,
+                    :problem_id,
+                    :required_tags,
+                    'PENDING',
+                    cast(:run_spec as jsonb)
+                )
                 returning id
                 """
             ),
             {
                 "submission_id": submission_id,
                 "problem_id": pv["problem_id"],
+                "required_tags": list(pv.get("required_tags") or []),
                 "run_spec": json.dumps(run_spec),
             },
         ).mappings().first()

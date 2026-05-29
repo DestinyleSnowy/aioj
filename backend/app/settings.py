@@ -55,6 +55,8 @@ class Settings(BaseSettings):
 
     stale_job_minutes: int = 15
     max_job_attempts: int = 3
+    judge_node_offline_seconds: int = 90
+    judge_heartbeat_interval_seconds: int = 15
     judge_node_name: str = "local-worker"
 
     @field_validator("cors_allowed_origins", mode="before")

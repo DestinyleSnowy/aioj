@@ -38,6 +38,7 @@ create table if not exists problem_versions (
   scorer_object_key text,
   runner_image text not null default 'aioj-python-basic:latest',
   run_command jsonb not null default '["python","/workspace/predict.py","--input","/input/test.csv","--output","/output/submission.csv"]',
+  required_tags text[] not null default '{}',
   created_at timestamptz not null default now(),
   unique(problem_id, version)
 );
@@ -172,6 +173,8 @@ create table if not exists system_settings (
 );
 
 create index if not exists judge_jobs_status_idx on judge_jobs(status, id);
+create index if not exists judge_jobs_claimed_by_status_idx on judge_jobs(claimed_by, status, id);
+create index if not exists judge_nodes_status_heartbeat_idx on judge_nodes(status, last_heartbeat_at desc);
 create index if not exists submissions_problem_idx on submissions(problem_id, created_at desc);
 create index if not exists leaderboard_problem_idx on leaderboard_entries(problem_id, public_score desc);
 create index if not exists idx_submissions_contest_id on submissions(contest_id);

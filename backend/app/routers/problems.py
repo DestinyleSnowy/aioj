@@ -7,6 +7,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import require_admin
+from app.services.judge_admin import normalize_tags
 from app.services.problems import latest_problem_version
 from app.settings import settings
 from app.storage import S3_BUCKET_PROBLEMS, get_text, put_bytes
@@ -192,6 +193,10 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
         ]
         if not isinstance(run_command, list) or not all(isinstance(item, str) for item in run_command):
             raise HTTPException(status_code=400, detail="run_command must be a list of strings")
+        try:
+            required_tags = normalize_tags(cfg.get("required_tags", cfg.get("runner_tags")))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         statement_md = statement.read_text(encoding="utf-8", errors="replace")
         status = str(cfg.get("status") or "PUBLIC").upper()
@@ -286,12 +291,12 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
                     insert into problem_versions (
                         problem_id, version, statement_md, test_input_object_key,
                         label_object_key, sample_submission_object_key, scorer_object_key,
-                        runner_image, run_command
+                        runner_image, run_command, required_tags
                     )
                     values (
                         :problem_id, :version, :statement_md, :test_input_object_key,
                         :label_object_key, :sample_submission_object_key, :scorer_object_key,
-                        :runner_image, cast(:run_command as jsonb)
+                        :runner_image, cast(:run_command as jsonb), :required_tags
                     )
                     returning id
                     """
@@ -306,6 +311,7 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
                     "scorer_object_key": scorer_key,
                     "runner_image": runner_image,
                     "run_command": json.dumps(run_command),
+                    "required_tags": required_tags,
                 },
             ).mappings().first()
 

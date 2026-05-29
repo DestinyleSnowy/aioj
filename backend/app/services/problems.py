@@ -25,7 +25,8 @@ def latest_problem_version(conn, slug: str, public_only: bool = True):
                 pv.sample_submission_object_key,
                 pv.scorer_object_key,
                 pv.runner_image,
-                pv.run_command
+                pv.run_command,
+                pv.required_tags
             from problems p
             join problem_versions pv on pv.problem_id = p.id
             where p.slug = :slug

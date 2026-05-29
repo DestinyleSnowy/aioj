@@ -243,7 +243,15 @@ def evaluate_submission(conn, submission_id: int) -> None:
 
     # Check if this is a test run
     job_row = conn.execute(
-        text("select run_spec from judge_jobs where submission_id = :submission_id"),
+        text(
+            """
+            select run_spec
+            from judge_jobs
+            where submission_id = :submission_id
+            order by id desc
+            limit 1
+            """
+        ),
         {"submission_id": submission_id},
     ).mappings().first()
 

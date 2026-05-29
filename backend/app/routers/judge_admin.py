@@ -7,11 +7,11 @@ from sqlalchemy import text
 from app.db import engine
 from app.dependencies import require_admin
 from app.services.judge_admin import (
-    JOB_STALE_AFTER_SECONDS,
-    NODE_HEARTBEAT_TTL_SECONDS,
     failed_submission_status,
     is_job_stale,
     is_node_online,
+    job_stale_after_seconds,
+    node_heartbeat_ttl_seconds,
     normalize_run_spec,
     queue_submission_status,
 )
@@ -136,7 +136,8 @@ def _build_run_spec_from_submission(conn, submission_id: int) -> dict:
                 pv.version as problem_version,
                 pv.runner_image,
                 pv.run_command,
-                pv.test_input_object_key
+                pv.test_input_object_key,
+                pv.required_tags
             from submissions s
             join problems p on p.id = s.problem_id
             join problem_versions pv on pv.id = s.problem_version_id
@@ -155,6 +156,7 @@ def _build_run_spec_from_submission(conn, submission_id: int) -> dict:
         "problem_version": row["problem_version"],
         "runner_image": row["runner_image"],
         "run_command": row["run_command"],
+        "required_tags": list(row["required_tags"] or []),
         "limits": {
             "cpu_count": row["cpu_count"],
             "time_limit_sec": row["time_limit_sec"],
@@ -215,6 +217,7 @@ def admin_judge_overview(user=Depends(require_admin)):
                     n.id,
                     n.name,
                     n.status,
+                    n.tags,
                     n.max_parallel,
                     n.last_heartbeat_at,
                     count(j.id) filter (where j.status = 'CLAIMED') as active_jobs
@@ -235,6 +238,7 @@ def admin_judge_overview(user=Depends(require_admin)):
                     j.problem_id,
                     j.status,
                     j.attempt,
+                    j.required_tags,
                     j.claimed_by,
                     j.claimed_at,
                     j.started_at,
@@ -302,8 +306,8 @@ def admin_judge_overview(user=Depends(require_admin)):
             "stale_jobs": stale_jobs,
         },
         "timing": {
-            "node_heartbeat_ttl_seconds": NODE_HEARTBEAT_TTL_SECONDS,
-            "job_stale_after_seconds": JOB_STALE_AFTER_SECONDS,
+            "node_heartbeat_ttl_seconds": node_heartbeat_ttl_seconds(),
+            "job_stale_after_seconds": job_stale_after_seconds(),
             "generated_at": now,
         },
         "nodes": nodes,
@@ -362,7 +366,7 @@ def admin_rejudge_submission(submission_id: int, user=Depends(require_admin)):
             problem_id = latest_job["problem_id"]
         else:
             run_spec = _build_run_spec_from_submission(conn, submission_id)
-            required_tags = []
+            required_tags = run_spec.get("required_tags") or []
             problem_id = submission["problem_id"]
 
         queue_status = _reset_submission_for_queue(conn, submission_id, run_spec)
