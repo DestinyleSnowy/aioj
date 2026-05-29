@@ -1,5 +1,7 @@
+from typing import Annotated
+
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_CORS_ALLOWED_ORIGINS = [
     "https://yxyx.space",
@@ -33,7 +35,9 @@ class Settings(BaseSettings):
     internal_api_token: str = ""
     jwt_secret: str = ""
     jwt_exp_seconds: int = 604800
-    cors_allowed_origins: list[str] = Field(default_factory=lambda: DEFAULT_CORS_ALLOWED_ORIGINS.copy())
+    cors_allowed_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: DEFAULT_CORS_ALLOWED_ORIGINS.copy()
+    )
 
     admin_username: str = "admin"
     admin_email: str = "admin@example.com"
