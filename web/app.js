@@ -1179,31 +1179,52 @@ async function renderContestDetail(slug) {
             </div>
             
             ${questions.length === 0 ? emptyBox('尚未有选手发起赛题答疑') : questions.map(q => `
-              <div class="card mb-md ${q.is_public ? '' : 'card-private'}">
-                <div class="card-header" style="align-items: flex-start;">
+              <div class="card mb-md ${q.is_public ? '' : 'card-private'}" style="padding: var(--space-md);">
+                <!-- Header of the Q&A thread -->
+                <div class="qa-thread-header" style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid var(--border-subtle); padding-bottom: var(--space-sm); margin-bottom: var(--space-md);">
                   <div>
-                    <h4 class="card-title">${esc(q.title)}</h4>
-                    <div class="row gap-sm mt-xs" style="font-size: 12px; color: var(--text-muted);">
-                      <span>提问人: ${esc(q.username || '匿名选手')}</span>
-                      <span>提问时间: ${formatDate(q.created_at)}</span>
+                    <h4 style="font-size: 15px; font-weight: 700; color: var(--text-main);">${esc(q.title)}</h4>
+                    <div style="display: flex; flex-wrap: wrap; gap: var(--space-sm); align-items: center; margin-top: 4px; font-size: 11px; color: var(--text-muted);">
+                      <span>提问人: <strong>${esc(q.username || '匿名选手')}</strong></span>
+                      <span>•</span>
+                      <span>时间: ${formatDate(q.created_at)}</span>
+                      <span>•</span>
                       ${statusPill(q.status)}
-                      ${q.is_public ? '<span class="pill blue">公开回答</span>' : '<span class="pill gray">私密会话</span>'}
+                      ${q.is_public ? '<span class="pill blue btn-sm" style="font-size:9px; padding:1px 6px;">公开回答</span>' : '<span class="pill gray btn-sm" style="font-size:9px; padding:1px 6px;">私密会话</span>'}
                     </div>
                   </div>
                   ${state.user && state.user.role === 'ADMIN' ? `
-                    <div class="row gap-sm">
-                      <button class="btn btn-secondary btn-sm" onclick="showAnswerQuestionModal('${esc(slug)}', ${q.id})">进行解答</button>
-                      ${q.status !== 'CLOSED' ? `<button class="btn btn-danger btn-sm" onclick="closeQuestion('${esc(slug)}', ${q.id})">关闭问题</button>` : ''}
+                    <div style="display: flex; gap: var(--space-xs);">
+                      <button class="btn btn-secondary btn-sm" style="padding: 4px 8px; font-size: 11px;" onclick="showAnswerQuestionModal('${esc(slug)}', ${q.id})">进行解答</button>
+                      ${q.status !== 'CLOSED' ? `<button class="btn btn-danger btn-sm" style="padding: 4px 8px; font-size: 11px;" onclick="closeQuestion('${esc(slug)}', ${q.id})">关闭问题</button>` : ''}
                     </div>
                   ` : ''}
                 </div>
+
+                <!-- Chat bubble flow -->
                 ${q.can_view_body !== false ? `
-                  <div class="card-body" style="padding-top: var(--space-md); border-top: 1px solid hsla(0,0%,100%,0.03);">
-                    <div style="font-size: 13.5px; color: var(--text-secondary);">${renderMd(q.body_md)}</div>
+                  <div class="qa-chat-flow" style="display: flex; flex-direction: column; gap: var(--space-md); padding: var(--space-sm) 0;">
+                    
+                    <!-- Question Bubble (Left-aligned) -->
+                    <div class="qa-bubble question-bubble" style="align-self: flex-start; max-width: 85%; width: 100%;">
+                      <div class="qa-bubble-header" style="font-size: 11px; color: var(--text-muted); margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">
+                        <span>👤 ${esc(q.username || '选手')} 发起的提问</span>
+                      </div>
+                      <div class="qa-bubble-body" style="background: var(--bg-mini-card); border: var(--border-light); border-radius: 0px 12px 12px 12px; padding: var(--space-md); font-size: 13.5px; color: var(--text-main); line-height: 1.6;">
+                        ${renderMd(q.body_md)}
+                      </div>
+                    </div>
+
+                    <!-- Answer Bubble (Right-aligned) -->
                     ${q.answer_md ? `
-                      <div class="answer-block">
-                        <div class="answer-label">📝 官方答疑回复</div>
-                        <div style="font-size: 13.5px; color: var(--text-main);">${renderMd(q.answer_md)}</div>
+                      <div class="qa-bubble answer-bubble" style="align-self: flex-end; max-width: 85%; width: 100%; display: flex; flex-direction: column; align-items: flex-end;">
+                        <div class="qa-bubble-header" style="font-size: 11px; color: var(--color-success); margin-bottom: 4px; display: flex; align-items: center; gap: 4px; font-weight: 600;">
+                          <span>📝 官方裁判组回复</span>
+                          <span class="pill green" style="font-size: 8px; padding: 1px 4px; border-radius: 4px;">已验证 OFFICIAL</span>
+                        </div>
+                        <div class="qa-bubble-body" style="background: var(--bg-answer-block); border: 1px solid hsla(var(--hue-success), 84%, 45%, 0.2); border-radius: 12px 0px 12px 12px; padding: var(--space-md); font-size: 13.5px; color: var(--text-main); line-height: 1.6; width: 100%;">
+                          ${renderMd(q.answer_md)}
+                        </div>
                       </div>
                     ` : ''}
                   </div>
@@ -1660,51 +1681,88 @@ async function renderSubmissionDetail(id) {
     app.innerHTML = `
       <a href="/submissions" class="breadcrumb" data-link>← 返回提报队列</a>
       
-      <div class="submission-layout" style="display: flex; flex-direction: column; gap: var(--space-lg);">
-        <div class="card highlight">
-          <div class="card-header" style="border-bottom: 1px solid hsla(0,0%,100%,0.04); padding-bottom: var(--space-sm);">
-            <h2 class="card-title">评测提报报告 #${id}</h2>
-            ${statusPill(sub.status)}
-          </div>
-          <div class="card-body" style="padding-top: var(--space-md);">
-            <div class="detail-grid">
-              <div class="detail-item"><span class="detail-label">题目标识</span><span style="font-family: var(--font-mono); font-weight: 600;">${esc(sub.problem_slug || sub.problem_id || '')}</span></div>
-              <div class="detail-item"><span class="detail-label">参赛选手</span><span><strong>${esc(sub.username || '—')}</strong></span></div>
-              <div class="detail-item"><span class="detail-label">公开成绩 (Public)</span><span class="text-accent">${scoreDisplay(sub.public_score)}</span></div>
-              <div class="detail-item"><span class="detail-label">最终成绩 (Private)</span><span style="font-weight: 600; color: var(--color-success);">${scoreDisplay(sub.private_score)}</span></div>
-              <div class="detail-item"><span class="detail-label">执行时长</span><span>${sub.runtime_ms != null ? sub.runtime_ms + 'ms' : '—'}</span></div>
-              <div class="detail-item"><span class="detail-label">内容峰值</span><span>${sub.memory_peak_mb != null ? sub.memory_peak_mb + 'MB' : '—'}</span></div>
-              <div class="detail-item"><span class="detail-label">提报时间</span><span>${formatDate(sub.created_at)}</span></div>
-              <div class="detail-item"><span class="detail-label">评测完成时间</span><span>${formatDate(sub.judged_at)}</span></div>
+      <div class="submission-grid mt-md">
+        <!-- Left Side: Terminal Log Console -->
+        <div class="submission-main">
+          ${logContent ? `
+            <div class="terminal-window">
+              <div class="terminal-header">
+                <div class="terminal-dots">
+                  <span class="terminal-dot red"></span>
+                  <span class="terminal-dot yellow"></span>
+                  <span class="terminal-dot green"></span>
+                </div>
+                <div class="terminal-title">AIOJ Sandbox Log Terminal Console</div>
+                <button class="btn btn-secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="copyTerminalText()">复制输出</button>
+              </div>
+              <pre class="log-output" id="terminalLog" style="max-height: 600px; height: 600px;"><code>${esc(logContent)}</code></pre>
+            </div>
+          ` : `
+            <div class="empty-state">
+              <div class="empty-icon">📂</div>
+              <h3>暂无运行日志</h3>
+              <p class="text-muted">当评测未开始、已取消或容器运行失败时，可能无日志输出</p>
+            </div>
+          `}
+        </div>
+
+        <!-- Right Side: Diagnostics Report Summary Card -->
+        <div class="submission-sidebar" style="display: flex; flex-direction: column; gap: var(--space-md);">
+          <div class="card highlight">
+            <div class="card-header" style="border-bottom: 1px solid var(--border-subtle); padding-bottom: var(--space-sm); margin-bottom: var(--space-md);">
+              <h2 class="card-title">评测提报报告 #${id}</h2>
+              ${statusPill(sub.status)}
+            </div>
+            <div class="card-body" style="padding: 0;">
+              <div class="config-list">
+                <div class="config-item">
+                  <span class="config-label">题目标识</span>
+                  <span style="font-family: var(--font-mono); font-weight: 600;">${esc(sub.problem_slug || sub.problem_id || '')}</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">参赛选手</span>
+                  <span><strong>${esc(sub.username || '—')}</strong></span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">公开成绩 (Public)</span>
+                  <span class="text-accent" style="font-size: 16px;">${scoreDisplay(sub.public_score)}</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">最终成绩 (Private)</span>
+                  <span style="font-size: 16px; font-weight: 600; color: var(--color-success);">${scoreDisplay(sub.private_score)}</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">执行时长</span>
+                  <span>${sub.runtime_ms != null ? sub.runtime_ms + 'ms' : '—'}</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">内存峰值</span>
+                  <span>${sub.memory_peak_mb != null ? sub.memory_peak_mb + 'MB' : '—'}</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">提报时间</span>
+                  <span class="text-muted" style="font-size: 12px;">${formatDate(sub.created_at)}</span>
+                </div>
+                <div class="config-item">
+                  <span class="config-label">完成时间</span>
+                  <span class="text-muted" style="font-size: 12px;">${formatDate(sub.judged_at)}</span>
+                </div>
+              </div>
+              
               ${sub.error_message ? `
-                <div class="detail-item full" style="margin-top: 10px;">
-                  <span class="detail-label" style="color: var(--color-danger);">评测核心异常诊断:</span>
-                  <div class="notice error" style="margin-top: 4px;">${esc(sub.error_message)}</div>
+                <div style="margin-top: var(--space-md);">
+                  <span class="detail-label" style="font-size: 12.5px; font-weight: 600; color: var(--color-danger);">评测核心异常诊断:</span>
+                  <div class="notice error" style="margin-top: var(--space-xs); font-size: 12px; line-height: 1.4; padding: var(--space-sm);">${esc(sub.error_message)}</div>
                 </div>
               ` : ''}
             </div>
           </div>
-        </div>
 
-        <!-- Terminal Windows Console Mock -->
-        ${logContent ? `
-          <div class="terminal-window">
-            <div class="terminal-header">
-              <div class="terminal-dots">
-                <span class="terminal-dot red"></span>
-                <span class="terminal-dot yellow"></span>
-                <span class="terminal-dot green"></span>
-              </div>
-              <div class="terminal-title">AIOJ Sandbox Log Terminal Console</div>
-              <button class="btn btn-secondary btn-sm" style="padding: 2px 8px; font-size: 11px;" onclick="copyTerminalText()">复制输出</button>
-            </div>
-            <pre class="log-output" id="terminalLog"><code>${esc(logContent)}</code></pre>
+          <!-- Actions Card -->
+          <div class="card" style="display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md);">
+            ${sub.problem_slug ? `<a href="/problems/${esc(sub.problem_slug)}" class="btn btn-secondary w-full" data-link>回到题目工作区</a>` : ''}
+            <a href="/api/submissions/${id}/output" target="_blank" class="btn btn-primary w-full">📥 下载容器输出 (.zip)</a>
           </div>
-        ` : ''}
-
-        <div style="display: flex; gap: var(--space-md); flex-wrap: wrap;">
-          ${sub.problem_slug ? `<a href="/problems/${esc(sub.problem_slug)}" class="btn btn-secondary" data-link>回到题目工作区</a>` : ''}
-          <a href="/api/submissions/${id}/output" target="_blank" class="btn btn-primary">📥 下载容器输出打包文件 (.zip)</a>
         </div>
       </div>
     `;
@@ -1739,34 +1797,116 @@ async function renderAccount() {
     app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button>。</div>`;
     return;
   }
+
   app.innerHTML = `
-    <div class="max-w-md" style="display: flex; flex-direction: column; gap: var(--space-lg);">
-      <div class="card highlight">
-        <h3 class="card-title" style="margin-bottom: var(--space-md);">您的账号信息</h3>
-        <div class="detail-grid">
-          <div class="detail-item"><span class="detail-label">登录用户名</span><span style="font-weight: 600;">${esc(state.user.username)}</span></div>
-          <div class="detail-item"><span class="detail-label">关联邮箱</span><span>${esc(state.user.email || '尚未绑定邮箱')}</span></div>
-          <div class="detail-item"><span class="detail-label">安全权限组</span><span>${statusPill(state.user.role)}</span></div>
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在同步个人中心档案与通关进度...</span>
+    </div>
+  `;
+
+  let solvedCount = 0;
+  let totalCount = 0;
+  let solvedPercent = 0;
+  let circumference = 0;
+  let strokeDashoffset = 0;
+
+  try {
+    const [problemsRes, subsRes] = await Promise.allSettled([
+      api('/api/problems'),
+      api('/api/my/submissions', { headers: authHeaders() }),
+    ]);
+
+    const problems = problemsRes.status === 'fulfilled' ? (problemsRes.value.items || []) : [];
+    const submissions = subsRes.status === 'fulfilled' ? (subsRes.value.items || []) : [];
+
+    const solvedSlugs = new Set(
+      submissions
+        .filter(s => s.status === 'ACCEPTED' || s.status === 'RUN_FINISHED')
+        .map(s => s.problem_slug || s.problem_title)
+        .filter(Boolean)
+    );
+    solvedCount = solvedSlugs.size;
+    totalCount = problems.length;
+    solvedPercent = totalCount > 0 ? Math.round((solvedCount / totalCount) * 100) : 0;
+
+    const radius = 48;
+    circumference = 2 * Math.PI * radius;
+    strokeDashoffset = circumference - (solvedPercent / 100) * circumference;
+  } catch (err) {
+    console.error('Error fetching profile stats:', err);
+  }
+
+  app.innerHTML = `
+    <div class="account-layout">
+      <!-- Left Sidebar: Profile Avatar Card & Solved Stats -->
+      <div class="account-sidebar" style="display: flex; flex-direction: column; gap: var(--space-lg);">
+        <div class="card highlight" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: var(--space-xl) var(--space-lg);">
+          <div class="profile-avatar-container" style="width: 80px; height: 80px; border-radius: 50%; background: var(--grad-main); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 32px; font-weight: 700; box-shadow: var(--shadow-accent-glow); margin-bottom: var(--space-md); text-transform: uppercase;">
+            ${esc(state.user.username.slice(0, 2))}
+          </div>
+          <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">${esc(state.user.username)}</h2>
+          <span class="pill blue" style="font-size: 10px; padding: 2px 10px; border-radius: 4px;">${esc(state.user.role)}</span>
+          
+          <div style="width: 100%; border-top: var(--border-subtle); margin-top: var(--space-lg); padding-top: var(--space-lg); text-align: left; display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
+            <div style="display: flex; justify-content: space-between;"><span class="text-muted">关联邮箱</span><span style="font-weight:500;">${esc(state.user.email || '尚未绑定邮箱')}</span></div>
+            <div style="display: flex; justify-content: space-between;"><span class="text-muted">安全角色组</span><span style="font-weight:500;">${esc(state.user.role === 'ADMIN' ? '裁判组 / 管理员' : '参赛选手')}</span></div>
+            <div style="display: flex; justify-content: space-between;"><span class="text-muted">注册时间</span><span class="text-muted">${state.user.created_at ? formatDate(state.user.created_at) : '—'}</span></div>
+          </div>
+        </div>
+
+        <!-- Solved Circular Ring -->
+        <div class="card" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: var(--space-lg);">
+          <h3 class="card-title" style="margin-bottom: var(--space-md); width: 100%; text-align: left;">通关挑战进度</h3>
+          <div style="position: relative; width: 120px; height: 120px; display: flex; align-items: center; justify-content: center; margin-bottom: var(--space-sm);">
+            <svg width="120" height="120">
+              <circle stroke="var(--border-light)" stroke-width="8" fill="transparent" r="48" cx="60" cy="60"/>
+              <circle stroke="var(--color-primary)" stroke-width="8" stroke-dasharray="${circumference}" stroke-dashoffset="${strokeDashoffset}" stroke-linecap="round" fill="transparent" r="48" cx="60" cy="60" style="transform: rotate(-90deg); transform-origin: 60px 60px; transition: stroke-dashoffset 0.5s ease-in-out;"/>
+            </svg>
+            <span style="position: absolute; font-size: 18px; font-weight: 800; font-family: var(--font-mono); color: var(--text-main);">${solvedPercent}%</span>
+          </div>
+          <div style="font-size: 13px; color: var(--text-secondary); font-weight: 500;">
+            已通关 <strong class="text-accent" style="font-size: 15px;">${solvedCount}</strong> / ${totalCount} 题
+          </div>
         </div>
       </div>
 
-      <div class="card">
-        <h3 class="card-title" style="margin-bottom: var(--space-md);">重设安全密钥密码</h3>
-        <div class="form-group">
-          <label for="oldPass">当前密码</label>
-          <input type="password" id="oldPass" placeholder="验证老密码密码" />
+      <!-- Right Main: Change Password Form -->
+      <div class="account-main">
+        <div class="card" style="padding: var(--space-xl) var(--space-lg);">
+          <h3 class="card-title" style="margin-bottom: var(--space-lg); display: flex; align-items: center; gap: 10px;">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            重设安全密钥密码
+          </h3>
+          
+          <div class="form-group">
+            <label for="oldPass">当前验证密码</label>
+            <input type="password" id="oldPass" placeholder="请输入当前正在使用的安全验证密码" />
+          </div>
+          
+          <div class="form-group" style="margin-top: var(--space-md);">
+            <label for="newPass">设置新安全密码</label>
+            <input type="password" id="newPass" placeholder="请输入高强度的数字与字母组合" />
+          </div>
+          
+          <div id="pwdError" class="notice error" style="display:none; margin-top: var(--space-md);"></div>
+          <div id="pwdSuccess" class="notice success" style="display:none; margin-top: var(--space-md);"></div>
+          
+          <button class="btn btn-primary mt-lg" onclick="changePassword()">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 2px;">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            确定修改密码
+          </button>
         </div>
-        <div class="form-group">
-          <label for="newPass">设置新密码</label>
-          <input type="password" id="newPass" placeholder="保障密钥强度" />
-        </div>
-        <div id="pwdError" class="notice error" style="display:none"></div>
-        <div id="pwdSuccess" class="notice success" style="display:none"></div>
-        <button class="btn btn-primary mt-sm" onclick="changePassword()">确定修改密码</button>
       </div>
     </div>
   `;
 }
+
 
 async function changePassword() {
   const oldPwd = $('oldPass')?.value;
