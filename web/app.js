@@ -1,1530 +1,2164 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   AIOJ — AI Olympiad Judge  ·  Frontend SPA
+   Complete rewrite — modern, clean, premium UI
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// ─── Utilities ──────────────────────────────────────────────────────────────
+
 const $ = (id) => document.getElementById(id);
 
-    const state = {
-      token: localStorage.getItem("aioj_token") || "",
-      user: null,
-      healthOk: false,
-      currentRoute: "",
-      countdownTimer: null,
-    };
+const state = {
+  token: localStorage.getItem('aioj_token') || '',
+  user: null,
+  healthOk: false,
+  currentRoute: '',
+  countdownTimer: null,
+};
 
-    function setPage(title, subtitle = "") {
-      $("pageTitle").textContent = title || "AIOJ";
-      $("pageSubtitle").textContent = subtitle || "";
-      document.title = title ? `${title} · AIOJ` : "AIOJ";
-    }
+function setPage(title, subtitle = '') {
+  $('pageTitle').textContent = title || 'AIOJ';
+  $('pageSubtitle').textContent = subtitle || '';
+  document.title = title ? `${title} — AIOJ` : 'AIOJ — AI Olympiad Judge';
+}
 
-    function authHeaders() {
-      return state.token ? { Authorization: `Bearer ${state.token}` } : {};
-    }
+function authHeaders() {
+  return state.token ? { Authorization: `Bearer ${state.token}` } : {};
+}
 
-    async function api(path, options = {}) {
-      const headers = { ...(options.headers || {}) };
-      const opts = { ...options, headers };
+async function api(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  const opts = { ...options, headers };
+  if (!(opts.body instanceof FormData) && opts.body && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+  const res = await fetch(path, opts);
+  const ct = res.headers.get('content-type') || '';
+  let payload;
+  if (ct.includes('application/json')) {
+    payload = await res.json();
+  } else {
+    payload = await res.text();
+  }
+  if (!res.ok) {
+    const detail = typeof payload === 'object'
+      ? (payload.detail || payload.message || JSON.stringify(payload))
+      : payload;
+    throw new Error(detail || `${res.status} ${res.statusText}`);
+  }
+  return payload;
+}
 
-      if (!(opts.body instanceof FormData) && opts.body && !headers["Content-Type"]) {
-        headers["Content-Type"] = "application/json";
-      }
+async function tryApi(paths, options = {}) {
+  let lastErr;
+  for (const p of paths) {
+    try { return await api(p, options); } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('No API candidates');
+}
 
-      const res = await fetch(path, opts);
-      const contentType = res.headers.get("content-type") || "";
-      let payload;
-      if (contentType.includes("application/json")) {
-        payload = await res.json();
-      } else {
-        payload = await res.text();
-      }
+// ─── HTML helpers ───────────────────────────────────────────────────────────
 
-      if (!res.ok) {
-        const detail = typeof payload === "object" ? (payload.detail || payload.message || JSON.stringify(payload)) : payload;
-        throw new Error(detail || `${res.status} ${res.statusText}`);
-      }
-      return payload;
-    }
+function esc(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
 
-    async function tryApi(paths, options = {}) {
-      let lastErr;
-      for (const p of paths) {
-        try { return await api(p, options); } catch (e) { lastErr = e; }
-      }
-      throw lastErr || new Error("No API candidates");
-    }
+function formatDate(v) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
 
-    function escapeHtml(value) {
-      return String(value ?? "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
-    }
+function renderMd(md) {
+  let t = esc(md || '');
+  t = t.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
+  t = t.replace(/^### (.*)$/gm, '<h3>$1</h3>');
+  t = t.replace(/^## (.*)$/gm, '<h2>$1</h2>');
+  t = t.replace(/^# (.*)$/gm, '<h1>$1</h1>');
+  t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  t = t.replace(/\n{2,}/g, '</p><p>');
+  t = t.replace(/\n/g, '<br>');
+  return `<div class="md-content"><p>${t}</p></div>`;
+}
 
-    function formatDate(value) {
-      if (!value) return "";
-      const d = new Date(value);
-      if (Number.isNaN(d.getTime())) return String(value);
-      return d.toLocaleString();
-    }
+function statusPill(s) {
+  s = String(s || '').toUpperCase();
+  const cls =
+    s === 'ACCEPTED' || s === 'PUBLIC' || s === 'RUNNING' || s === 'RUN_FINISHED' ? 'green' :
+    s.includes('FAIL') || s === 'REJECTED' || s === 'ENDED' || s === 'ERROR' ? 'red' :
+    s === 'PENDING' || s === 'UPCOMING' || s === 'DRAFT' || s === 'QUEUED' ? 'yellow' : 'gray';
+  return `<span class="pill ${cls}">${esc(s || 'UNKNOWN')}</span>`;
+}
 
-    function renderMarkdown(md) {
-      let text = escapeHtml(md || "");
-      text = text.replace(/```([\s\S]*?)```/g, (_, code) => `<pre>${code.trim()}</pre>`);
-      text = text.replace(/^### (.*)$/gm, "<h3>$1</h3>");
-      text = text.replace(/^## (.*)$/gm, "<h2>$1</h2>");
-      text = text.replace(/^# (.*)$/gm, "<h1>$1</h1>");
-      text = text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
-      text = text.replace(/\n{2,}/g, "</p><p>");
-      text = text.replace(/\n/g, "<br>");
-      return `<p>${text}</p>`;
-    }
+function contestStateLabel(st) {
+  return ({ UPCOMING: '未开始', RUNNING: '进行中', ENDED: '已结束', DRAFT: '草稿' })[st] || st || '未知';
+}
 
-    function emptyBox(text) {
-      return `<div class="notice" style="text-align:center;color:#64748b;background:#f8fafc;border-style:dashed;">${escapeHtml(text || "暂无数据")}</div>`;
-    }
+function contestStatePill(st) {
+  const s = String(st || '').toUpperCase();
+  const cls = s === 'RUNNING' ? 'green' : s === 'ENDED' ? 'red' : s === 'UPCOMING' ? 'yellow' : 'gray';
+  return `<span class="pill ${cls}">${esc(contestStateLabel(s))}</span>`;
+}
 
-    function errorBox(err) {
-      const message = err && err.message ? err.message : String(err || "Unknown error");
-      return `<div class="error">${escapeHtml(message)}</div>`;
-    }
+function emptyBox(text) {
+  return `<div class="empty-state"><div class="empty-icon">📭</div><p>${esc(text || '暂无数据')}</p></div>`;
+}
 
-    function statusPill(status) {
-      const s = String(status || "").toUpperCase();
-      const cls =
-        s === "ACCEPTED" || s === "PUBLIC" || s === "RUNNING" ? "green" :
-        s.includes("FAIL") || s === "REJECTED" || s === "ENDED" ? "red" :
-        s === "PENDING" || s === "UPCOMING" || s === "DRAFT" ? "yellow" : "gray";
-      return `<span class="pill ${cls}">${escapeHtml(s || "UNKNOWN")}</span>`;
-    }
+function errorBox(err) {
+  const msg = err && err.message ? err.message : String(err || 'Unknown error');
+  return `<div class="notice error">${esc(msg)}</div>`;
+}
 
-    function contestStateLabel(state) {
-      return ({ UPCOMING: "未开始", RUNNING: "进行中", ENDED: "已结束", DRAFT: "草稿" })[state] || state || "未知";
-    }
+function metricText(p) {
+  return `${p.time_limit_sec || 60}s · ${p.memory_limit_mb || 2048}MB · ${p.cpu_count || 2} CPU`;
+}
 
-    function contestStatePill(state) {
-      const s = String(state || "").toUpperCase();
-      const cls = s === "RUNNING" ? "green" : s === "ENDED" ? "red" : s === "UPCOMING" ? "yellow" : "gray";
-      return `<span class="pill ${cls}">${escapeHtml(contestStateLabel(s))}</span>`;
-    }
+function scoreDisplay(score) {
+  if (score === null || score === undefined) return '—';
+  return Number(score).toFixed(4);
+}
 
-    function metricText(problem) {
-      return `${problem.time_limit_sec || 60}s · ${problem.memory_limit_mb || 2048}MB · ${problem.cpu_count || 2} CPU`;
-    }
+// ─── Toast Notifications ────────────────────────────────────────────────────
 
-    function openModal({ title, body, footer = "" }) {
-      $("modalTitle").textContent = title || "";
-      $("modalBody").innerHTML = body || "";
-      $("modalFooter").innerHTML = footer || `<button class="button ghost" onclick="closeModal()">关闭</button>`;
-      $("modalRoot").classList.add("open");
-    }
+function toast(message, type = 'info', duration = 4000) {
+  const container = $('toastContainer');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `
+    <div class="toast-content">
+      <span class="toast-icon">${type === 'success' ? '✓' : type === 'error' ? '✕' : type === 'warning' ? '⚠' : 'ℹ'}</span>
+      <span class="toast-message">${esc(message)}</span>
+    </div>
+    <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+  `;
+  container.appendChild(el);
+  setTimeout(() => {
+    el.classList.add('toast-exit');
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+}
 
-    function closeModal() {
-      $("modalRoot").classList.remove("open");
-      $("modalBody").innerHTML = "";
-      $("modalFooter").innerHTML = "";
-    }
+// ─── Modal ──────────────────────────────────────────────────────────────────
 
-    function modalBackdropClick(event) {
-      if (event.target && event.target.id === "modalRoot") closeModal();
-    }
+function openModal({ title, body, footer = '', wide = false }) {
+  $('modalTitle').textContent = title || '';
+  $('modalBody').innerHTML = body || '';
+  $('modalFooter').innerHTML = footer || '';
+  const root = $('modalRoot');
+  root.querySelector('.modal').classList.toggle('wide', !!wide);
+  root.classList.add('open');
+}
 
-    function clearPageState() {
-      if (state.countdownTimer) {
-        clearInterval(state.countdownTimer);
-        state.countdownTimer = null;
-      }
-      $("sidebar").classList.remove("open");
-    }
+function closeModal() {
+  $('modalRoot').classList.remove('open');
+  $('modalBody').innerHTML = '';
+  $('modalFooter').innerHTML = '';
+}
 
-    function updateNav() {
-      const path = location.pathname || "/";
-      document.querySelectorAll(".nav-link").forEach((a) => {
-        const route = a.dataset.route || "/";
-        const active = route === "/" ? path === "/" : path.startsWith(route);
-        a.classList.toggle("active", active);
+// ─── Navigation ─────────────────────────────────────────────────────────────
+
+function clearPageState() {
+  if (state.countdownTimer) {
+    clearInterval(state.countdownTimer);
+    state.countdownTimer = null;
+  }
+  $('sidebar').classList.remove('open');
+  $('sidebarOverlay').classList.remove('open');
+}
+
+function updateNav() {
+  const path = location.pathname || '/';
+  document.querySelectorAll('.nav-link').forEach((a) => {
+    const route = a.dataset.route || '/';
+    const active = route === '/' ? path === '/' : path.startsWith(route);
+    a.classList.toggle('active', active);
+  });
+  const isAdmin = state.user && state.user.role === 'ADMIN';
+  $('adminNav').style.display = isAdmin ? '' : 'none';
+
+  $('userPill').style.display = state.user ? '' : 'none';
+  $('userPill').textContent = state.user ? state.user.username : '';
+  $('authBtn').style.display = state.user ? 'none' : '';
+  $('logoutBtn').style.display = state.user ? '' : 'none';
+
+  const footerEl = $('sidebarUser');
+  if (state.user) {
+    footerEl.innerHTML = `<span class="user-avatar">${esc(state.user.username[0].toUpperCase())}</span>
+      <div><div class="text-primary">${esc(state.user.username)}</div>
+      <div class="text-muted text-sm">${esc(state.user.role)}</div></div>`;
+  } else {
+    footerEl.innerHTML = '<span class="text-muted">未登录</span>';
+  }
+}
+
+function navigate(path) {
+  history.pushState(null, '', path);
+  route();
+}
+
+function handleSpaLinkClick(e) {
+  const link = e.target.closest('a[href]');
+  if (!link) return;
+  const href = link.getAttribute('href');
+  if (!href || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:') ||
+      link.target === '_blank' || link.hasAttribute('download') ||
+      href.startsWith('/api/') || href.startsWith('/health')) return;
+  if (href.startsWith('#/')) {
+    e.preventDefault();
+    navigate(href.slice(1));
+    return;
+  }
+  if (href.startsWith('/')) {
+    e.preventDefault();
+    navigate(href);
+  }
+}
+
+// ─── Health Check ───────────────────────────────────────────────────────────
+
+async function checkHealth() {
+  const statusEl = $('apiStatus');
+  try {
+    await api('/health');
+    state.healthOk = true;
+    statusEl.classList.add('online');
+    statusEl.querySelector('.status-text').textContent = '在线';
+  } catch {
+    state.healthOk = false;
+    statusEl.classList.remove('online');
+    statusEl.querySelector('.status-text').textContent = '离线';
+  }
+}
+
+// ─── Auth ───────────────────────────────────────────────────────────────────
+
+async function loadMe() {
+  if (!state.token) { state.user = null; updateNav(); return; }
+  try {
+    const data = await api('/api/auth/me', { headers: authHeaders() });
+    state.user = data.user || data;
+    updateNav();
+  } catch {
+    state.token = '';
+    localStorage.removeItem('aioj_token');
+    state.user = null;
+    updateNav();
+  }
+}
+
+function showAuthModal(tab = 'login') {
+  const body = `
+    <div class="tabs" id="authTabs">
+      <button class="tab ${tab === 'login' ? 'active' : ''}" onclick="switchAuthTab('login')">登录</button>
+      <button class="tab ${tab === 'register' ? 'active' : ''}" onclick="switchAuthTab('register')">注册</button>
+    </div>
+    <div id="authLogin" style="${tab !== 'login' ? 'display:none' : ''}">
+      <div class="form-group">
+        <label for="loginUser">用户名或邮箱</label>
+        <input type="text" id="loginUser" placeholder="请输入用户名或邮箱" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="loginPass">密码</label>
+        <input type="password" id="loginPass" placeholder="请输入密码" autocomplete="current-password" />
+      </div>
+      <div id="loginError" class="notice error" style="display:none"></div>
+    </div>
+    <div id="authRegister" style="${tab !== 'register' ? 'display:none' : ''}">
+      <div class="form-group">
+        <label for="regUser">用户名</label>
+        <input type="text" id="regUser" placeholder="请输入用户名" autocomplete="username" />
+      </div>
+      <div class="form-group">
+        <label for="regEmail">邮箱 (可选)</label>
+        <input type="email" id="regEmail" placeholder="请输入邮箱" autocomplete="email" />
+      </div>
+      <div class="form-group">
+        <label for="regPass">密码</label>
+        <input type="password" id="regPass" placeholder="请输入密码" autocomplete="new-password" />
+      </div>
+      <div id="regError" class="notice error" style="display:none"></div>
+    </div>
+  `;
+  const footer = `
+    <button class="button ghost" onclick="closeModal()">取消</button>
+    <button class="button" id="authSubmitBtn" onclick="submitAuth()">确定</button>
+  `;
+  openModal({ title: '登录 / 注册', body, footer });
+
+  // Enter key support
+  setTimeout(() => {
+    const inputs = $('modalBody').querySelectorAll('input');
+    inputs.forEach(inp => inp.addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); }));
+  }, 50);
+}
+
+function switchAuthTab(tab) {
+  $('authLogin').style.display = tab === 'login' ? '' : 'none';
+  $('authRegister').style.display = tab === 'register' ? '' : 'none';
+  $('authTabs').querySelectorAll('.tab').forEach((t, i) => {
+    t.classList.toggle('active', (i === 0 && tab === 'login') || (i === 1 && tab === 'register'));
+  });
+}
+
+function currentAuthTab() {
+  return $('authLogin') && $('authLogin').style.display !== 'none' ? 'login' : 'register';
+}
+
+async function submitAuth() {
+  const tab = currentAuthTab();
+  const btn = $('authSubmitBtn');
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  try {
+    if (tab === 'login') {
+      const data = await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({
+          username_or_email: $('loginUser').value.trim(),
+          password: $('loginPass').value,
+        }),
       });
-
-      const isAdmin = state.user && state.user.role === "ADMIN";
-      $("adminNav").style.display = isAdmin ? "" : "none";
-
-      $("userPill").textContent = state.user
-        ? `当前用户：${state.user.username || state.user.email || "user"}${isAdmin ? " · ADMIN" : ""}`
-        : "未登录";
-
-      $("authBtn").style.display = state.user ? "none" : "";
-      $("logoutBtn").style.display = state.user ? "" : "none";
-
-      $("sidebarUser").innerHTML = state.user
-        ? `已登录<br><strong>${escapeHtml(state.user.username || state.user.email || "user")}</strong>${isAdmin ? " (ADMIN)" : ""}<br><span class="muted">https://yxyx.space</span>`
-        : `未登录<br><span class="muted">https://yxyx.space</span>`;
-    }
-
-
-    async function checkHealth() {
-      try {
-        await api("/health");
-        state.healthOk = true;
-        $("apiStatus").textContent = "API online";
-      } catch (e) {
-        state.healthOk = false;
-        $("apiStatus").textContent = "API offline";
-        $("apiStatus").style.color = "var(--danger)";
-      }
-    }
-
-    async function loadMe() {
-      if (!state.token) {
-        state.user = null;
-        updateNav();
-        return;
-      }
-      try {
-        const data = await api("/api/auth/me", { headers: authHeaders() });
-        state.user = data.user || data;
-      } catch (e) {
-        state.token = "";
-        localStorage.removeItem("aioj_token");
-        state.user = null;
-      }
-      updateNav();
-    }
-
-    function openAuthModal() {
-      openModal({
-        title: "登录 / 注册",
-        body: `
-          <div class="tabs">
-            <div class="tab active" id="loginTab" onclick="switchAuthTab('login')">登录</div>
-            <div class="tab" id="registerTab" onclick="switchAuthTab('register')">注册</div>
-          </div>
-
-          <div id="loginPane" class="form-grid" style="margin-top:18px;">
-            <div class="form-row">
-              <label>用户名或邮箱</label>
-              <input id="loginUser" placeholder="admin" autocomplete="username">
-            </div>
-            <div class="form-row">
-              <label>密码</label>
-              <input id="loginPass" type="password" autocomplete="current-password">
-            </div>
-            <div id="authMessage"></div>
-          </div>
-
-          <div id="registerPane" class="form-grid" style="margin-top:18px;display:none;">
-            <div class="form-row">
-              <label>用户名</label>
-              <input id="regUser" placeholder="username">
-            </div>
-            <div class="form-row">
-              <label>邮箱</label>
-              <input id="regEmail" placeholder="email@example.com">
-            </div>
-            <div class="form-row">
-              <label>密码</label>
-              <input id="regPass" type="password" autocomplete="new-password">
-            </div>
-            <div id="registerMessage"></div>
-          </div>
-        `,
-        footer: `
-          <button class="button ghost" onclick="closeModal()">取消</button>
-          <button class="button" id="authSubmitBtn" onclick="submitLogin()">登录</button>
-        `
+      state.token = data.token || data.access_token;
+      localStorage.setItem('aioj_token', state.token);
+      await loadMe();
+      closeModal();
+      toast('登录成功', 'success');
+      route();
+    } else {
+      const data = await api('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          username: $('regUser').value.trim(),
+          email: $('regEmail').value.trim() || undefined,
+          password: $('regPass').value,
+        }),
       });
-    }
-
-    function switchAuthTab(tab) {
-      const login = tab === "login";
-      $("loginTab").classList.toggle("active", login);
-      $("registerTab").classList.toggle("active", !login);
-      $("loginPane").style.display = login ? "" : "none";
-      $("registerPane").style.display = login ? "none" : "";
-      $("authSubmitBtn").textContent = login ? "登录" : "注册";
-      $("authSubmitBtn").onclick = login ? submitLogin : submitRegister;
-    }
-
-    async function submitLogin() {
-      const username_or_email = $("loginUser").value.trim();
-      const password = $("loginPass").value;
-      $("authMessage").innerHTML = "";
-      try {
-        const data = await api("/api/auth/login", {
-          method: "POST",
-          body: JSON.stringify({ username_or_email, password })
-        });
-        state.token = data.token || data.access_token || "";
-        if (!state.token) throw new Error("登录响应缺少 token");
-        localStorage.setItem("aioj_token", state.token);
-        state.user = data.user || null;
+      if (data.token || data.access_token) {
+        state.token = data.token || data.access_token;
+        localStorage.setItem('aioj_token', state.token);
         await loadMe();
         closeModal();
-        await route();
-      } catch (e) {
-        $("authMessage").innerHTML = errorBox(e);
+        toast('注册成功', 'success');
+        route();
+      } else {
+        toast('注册成功，请登录', 'success');
+        switchAuthTab('login');
+        if ($('loginUser')) $('loginUser').value = $('regUser').value;
       }
     }
-
-    async function submitRegister() {
-      const username = $("regUser").value.trim();
-      const email = $("regEmail").value.trim();
-      const password = $("regPass").value;
-      $("registerMessage").innerHTML = "";
-      try {
-        const data = await api("/api/auth/register", {
-          method: "POST",
-          body: JSON.stringify({ username, email, password })
-        });
-        if (data.token || data.access_token) {
-          state.token = data.token || data.access_token;
-          localStorage.setItem("aioj_token", state.token);
-          state.user = data.user || null;
-          await loadMe();
-          closeModal();
-          await route();
-        } else {
-          $("registerMessage").innerHTML = `<div class="success">注册成功，请切换到登录。</div>`;
-          switchAuthTab("login");
-          $("loginUser").value = username || email;
-        }
-      } catch (e) {
-        $("registerMessage").innerHTML = errorBox(e);
-      }
+  } catch (err) {
+    const errEl = tab === 'login' ? $('loginError') : $('regError');
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
     }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '确定';
+  }
+}
 
-    function logout() {
-      state.token = "";
-      state.user = null;
-      localStorage.removeItem("aioj_token");
-      updateNav();
-      route();
-    }
+function logout() {
+  state.token = '';
+  state.user = null;
+  localStorage.removeItem('aioj_token');
+  updateNav();
+  toast('已退出登录', 'info');
+  navigate('/');
+}
 
-    async function renderDashboard() {
-      setPage("概览", "AIOJ 系统状态与入口");
-      updateNav();
+// ─── Dashboard ──────────────────────────────────────────────────────────────
 
-      $("app").innerHTML = `
-        <div class="grid grid-3" id="statsGrid">
-          <div class="stat-card"><div class="stat-label">题目</div><div class="stat-value">...</div></div>
-          <div class="stat-card"><div class="stat-label">比赛</div><div class="stat-value">...</div></div>
-          <div class="stat-card"><div class="stat-label">提交</div><div class="stat-value">...</div></div>
+async function renderDashboard() {
+  setPage('概览', 'AI Olympiad Judge 平台总览');
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+
+  try {
+    const [problemsRes, contestsRes, subsRes] = await Promise.allSettled([
+      api('/api/problems'),
+      api('/api/contests'),
+      state.token ? api('/api/my/submissions', { headers: authHeaders() }) : Promise.resolve({ items: [] }),
+    ]);
+
+    const problems = problemsRes.status === 'fulfilled' ? (problemsRes.value.items || []) : [];
+    const contests = contestsRes.status === 'fulfilled' ? (contestsRes.value.items || []) : [];
+    const submissions = subsRes.status === 'fulfilled' ? (subsRes.value.items || []) : [];
+
+    const runningContests = contests.filter(c => c.state === 'RUNNING' || c.status === 'RUNNING');
+    const upcomingContests = contests.filter(c => c.state === 'UPCOMING' || c.status === 'UPCOMING');
+
+    app.innerHTML = `
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-value">${problems.length}</div>
+          <div class="stat-label">题目总数</div>
         </div>
-        <div class="grid grid-2" style="margin-top:18px;">
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">最近题目</h2><a class="button ghost small" href="/problems">全部题目</a></div>
-            <div class="card-body" id="dashboardProblems">${emptyBox("加载中...")}</div>
+        <div class="stat-card">
+          <div class="stat-value">${contests.length}</div>
+          <div class="stat-label">比赛总数</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${runningContests.length}</div>
+          <div class="stat-label">进行中比赛</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${submissions.length}</div>
+          <div class="stat-label">我的提交</div>
+        </div>
+      </div>
+
+      ${runningContests.length > 0 ? `
+        <div class="card highlight mt-lg">
+          <div class="card-header">
+            <h3 class="card-title">🔥 正在进行的比赛</h3>
           </div>
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">比赛</h2><a class="button ghost small" href="/contests">全部比赛</a></div>
-            <div class="card-body" id="dashboardContests">${emptyBox("加载中...")}</div>
+          <div class="card-grid">
+            ${runningContests.map(c => contestCard(c)).join('')}
           </div>
         </div>
-      `;
+      ` : ''}
 
-      const [problems, contests, submissions] = await Promise.all([
-        api("/api/problems").catch(() => ({ items: [] })),
-        api("/api/contests", { headers: authHeaders() }).catch(() => ({ items: [] })),
-        state.user ? api("/api/submissions", { headers: authHeaders() }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
-      ]);
-
-      $("statsGrid").innerHTML = `
-        <div class="stat-card"><div class="stat-label">公开题目</div><div class="stat-value">${problems.items?.length || 0}</div></div>
-        <div class="stat-card"><div class="stat-label">比赛</div><div class="stat-value">${contests.items?.length || 0}</div></div>
-        <div class="stat-card"><div class="stat-label">我的提交</div><div class="stat-value">${submissions.items?.length || 0}</div></div>
-      `;
-
-      $("dashboardProblems").innerHTML = (problems.items || []).slice(0, 4).map(problemMiniCard).join("") || emptyBox("暂无题目");
-      $("dashboardContests").innerHTML = (contests.items || []).slice(0, 4).map(contestMiniCard).join("") || emptyBox("暂无比赛");
-    }
-
-    function problemMiniCard(p) {
-      return `
-        <a class="problem-card" style="margin-bottom:12px;" href="/problems/${encodeURIComponent(p.slug)}">
-          <div class="row" style="justify-content:space-between;">
-            <h3 class="problem-title">${escapeHtml(p.title || p.slug)}</h3>
-            <span class="pill">${escapeHtml(p.metric || "")}</span>
+      ${upcomingContests.length > 0 ? `
+        <div class="card mt-lg">
+          <div class="card-header">
+            <h3 class="card-title">📅 即将开始的比赛</h3>
           </div>
-          <div class="problem-slug">${escapeHtml(p.slug)}</div>
-          <div class="muted small-text">${metricText(p)}</div>
-        </a>
-      `;
-    }
-
-    function contestMiniCard(c) {
-      return `
-        <a class="problem-card" style="margin-bottom:12px;" href="/contests/${encodeURIComponent(c.slug)}">
-          <div class="row" style="justify-content:space-between;">
-            <h3 class="problem-title">${escapeHtml(c.title || c.slug)}</h3>
-            ${contestStatePill(c.state || c.status)}
+          <div class="card-grid">
+            ${upcomingContests.map(c => contestCard(c)).join('')}
           </div>
-          <div class="problem-slug">${escapeHtml(c.slug)}</div>
-          <div class="muted small-text">${escapeHtml(formatDate(c.start_at) || "不限")} - ${escapeHtml(formatDate(c.end_at) || "不限")} · ${c.problem_count || 0} 题</div>
-        </a>
-      `;
-    }
+        </div>
+      ` : ''}
 
-    async function renderProblems() {
-      setPage("题库", "选择题目，阅读题面，提交 source.zip");
-      updateNav();
-      $("app").innerHTML = `
+      <div class="two-col mt-lg">
         <div class="card">
           <div class="card-header">
-            <div><h2 class="card-title">公开题目列表</h2><div class="muted">普通练习题，不带比赛上下文</div></div>
-            <button class="button ghost small" onclick="renderProblems()">刷新</button>
+            <h3 class="card-title">题目列表</h3>
+            <a href="/problems" class="button ghost sm" data-link>查看全部 →</a>
           </div>
-          <div class="card-body" id="problemsBox">${emptyBox("加载中...")}</div>
+          ${problems.length === 0 ? emptyBox('暂无题目') : `
+            <div class="card-grid compact">
+              ${problems.slice(0, 6).map(p => `
+                <a href="/problems/${esc(p.slug)}" class="mini-card" data-link>
+                  <div class="mini-card-title">${esc(p.title)}</div>
+                  <div class="mini-card-meta">${esc(p.slug)} · ${esc(p.metric || '')}</div>
+                </a>
+              `).join('')}
+            </div>
+          `}
         </div>
-      `;
-      try {
-        const data = await api("/api/problems");
-        const items = data.items || [];
-        $("problemsBox").innerHTML = items.length ? `<div class="grid grid-2">${items.map(problemMiniCard).join("")}</div>` : emptyBox("暂无公开题目");
-      } catch (e) {
-        $("problemsBox").innerHTML = errorBox(e);
-      }
-    }
-
-    async function loadProblem(slug) {
-      return await api(`/api/problems/${encodeURIComponent(slug)}`);
-    }
-
-    async function renderProblemDetail(slug, contestSlug = null) {
-      setPage("题目详情", slug);
-      updateNav();
-
-      $("app").innerHTML = emptyBox("加载中...");
-      try {
-        const problem = await loadProblem(slug);
-        setPage(problem.title || slug, contestSlug ? `${slug} · ${contestSlug}` : slug);
-
-        const contestBanner = contestSlug ? `
-          <div class="notice">
-            当前处于比赛 <strong>${escapeHtml(contestSlug)}</strong>，提交会计入该比赛。
-            <a class="strong" href="/contests/${encodeURIComponent(contestSlug)}">返回比赛</a>
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">最近提交</h3>
+            <a href="/submissions" class="button ghost sm" data-link>查看全部 →</a>
           </div>
-        ` : "";
+          ${submissions.length === 0 ? emptyBox('暂无提交记录') : `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>ID</th><th>题目</th><th>状态</th><th>得分</th><th>时间</th></tr></thead>
+                <tbody>
+                  ${submissions.slice(0, 8).map(s => `
+                    <tr class="clickable-row" onclick="navigate('/submissions/${s.id}')">
+                      <td>#${s.id}</td>
+                      <td>${esc(s.problem_slug || s.problem_title || '')}</td>
+                      <td>${statusPill(s.status)}</td>
+                      <td>${scoreDisplay(s.public_score)}</td>
+                      <td>${formatDate(s.created_at)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
 
-        $("app").innerHTML = `
-          <div class="grid grid-main-side">
-            <div class="grid">
-              ${contestBanner}
-              <div class="card">
+function contestCard(c) {
+  const st = c.state || c.status || '';
+  return `
+    <a href="/contests/${esc(c.slug)}" class="contest-card" data-link>
+      <div class="contest-card-header">
+        <span class="contest-card-title">${esc(c.title)}</span>
+        ${contestStatePill(st)}
+      </div>
+      <div class="contest-card-meta">
+        <span>${esc(c.slug)}</span>
+        <span>${c.problem_count || 0} 题</span>
+        ${c.start_at ? `<span>${formatDate(c.start_at)}</span>` : ''}
+      </div>
+    </a>
+  `;
+}
+
+// ─── Problems ───────────────────────────────────────────────────────────────
+
+async function renderProblems() {
+  setPage('题库', '浏览所有公开题目');
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const data = await api('/api/problems');
+    const items = data.items || [];
+    if (items.length === 0) {
+      app.innerHTML = emptyBox('暂无公开题目');
+      return;
+    }
+    app.innerHTML = `
+      <div class="problem-grid">
+        ${items.map(p => `
+          <a href="/problems/${esc(p.slug)}" class="problem-card" data-link>
+            <div class="problem-card-header">
+              <h3 class="problem-card-title">${esc(p.title)}</h3>
+              ${statusPill(p.status || 'PUBLIC')}
+            </div>
+            <div class="problem-card-slug">${esc(p.slug)}</div>
+            <div class="problem-card-footer">
+              <span class="pill blue">${esc(p.metric || 'accuracy')}</span>
+              <span class="text-muted text-sm">${metricText(p)}</span>
+            </div>
+          </a>
+        `).join('')}
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+// ─── Problem Detail ─────────────────────────────────────────────────────────
+
+async function renderProblemDetail(slug, contestSlug = null) {
+  setPage('题目详情', slug);
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const [problem, subsData] = await Promise.all([
+      api(`/api/problems/${slug}`),
+      loadProblemSubmissions(slug, contestSlug),
+    ]);
+    const subs = subsData.items || [];
+
+    app.innerHTML = `
+      ${contestSlug ? `
+        <a href="/contests/${esc(contestSlug)}" class="breadcrumb" data-link>← 返回比赛 ${esc(contestSlug)}</a>
+      ` : ''}
+      <div class="problem-layout">
+        <div class="problem-main">
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">${esc(problem.title)}</h2>
+              <div class="row gap-sm">
+                <span class="pill blue">${esc(problem.metric || 'accuracy')}</span>
+                ${statusPill(problem.status || 'PUBLIC')}
+              </div>
+            </div>
+            <div class="card-body">
+              ${renderMd(problem.statement_md)}
+            </div>
+          </div>
+
+          <div class="card mt-lg">
+            <div class="card-header">
+              <h3 class="card-title">提交记录</h3>
+            </div>
+            ${subs.length === 0 ? emptyBox('暂无提交') : `
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>ID</th><th>用户</th><th>状态</th><th>公开分</th><th>耗时</th><th>提交时间</th></tr></thead>
+                  <tbody>
+                    ${subs.map(s => `
+                      <tr class="clickable-row" onclick="navigate('/submissions/${s.id}')">
+                        <td>#${s.id}</td>
+                        <td>${esc(s.username || '—')}</td>
+                        <td>${statusPill(s.status)}</td>
+                        <td>${scoreDisplay(s.public_score)}</td>
+                        <td>${s.runtime_ms != null ? s.runtime_ms + 'ms' : '—'}</td>
+                        <td>${formatDate(s.created_at)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            `}
+          </div>
+        </div>
+
+        <div class="problem-side">
+          <div class="card">
+            <h3 class="card-title mb-md">提交方案</h3>
+            <div class="file-upload" id="uploadArea">
+              <input type="file" id="submitFile" accept=".zip" />
+              <div class="file-upload-label">
+                <span class="file-upload-icon">📁</span>
+                <span>选择 .zip 文件</span>
+              </div>
+            </div>
+            <button class="button mt-md full-width" onclick="submitSolution('${esc(slug)}', ${contestSlug ? `'${esc(contestSlug)}'` : 'null'})">
+              提交
+            </button>
+            <a href="/api/problems/${esc(slug)}/sample-submission" target="_blank" class="button ghost sm mt-sm full-width">
+              📥 下载示例提交
+            </a>
+          </div>
+
+          <div class="card mt-md">
+            <h3 class="card-title mb-md">评测配置</h3>
+            <div class="config-list">
+              <div class="config-item"><span class="config-label">评测指标</span><span>${esc(problem.metric || 'accuracy')}</span></div>
+              <div class="config-item"><span class="config-label">优化方向</span><span>${problem.higher_is_better ? '越高越好 ↑' : '越低越好 ↓'}</span></div>
+              <div class="config-item"><span class="config-label">时间限制</span><span>${problem.time_limit_sec || 60}s</span></div>
+              <div class="config-item"><span class="config-label">内存限制</span><span>${problem.memory_limit_mb || 2048}MB</span></div>
+              <div class="config-item"><span class="config-label">CPU 数量</span><span>${problem.cpu_count || 2}</span></div>
+              <div class="config-item"><span class="config-label">输出限制</span><span>${problem.output_limit_mb || 64}MB</span></div>
+            </div>
+          </div>
+
+          <div class="card mt-md">
+            <div class="card-header">
+              <h3 class="card-title">排行榜</h3>
+            </div>
+            <div id="problemLeaderboard"><div class="spinner"></div></div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Load leaderboard
+    loadProblemLeaderboard(slug);
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function loadProblemSubmissions(slug, contestSlug) {
+  try {
+    if (contestSlug && state.token) {
+      return await api(`/api/contests/${contestSlug}/submissions?limit=50`, { headers: authHeaders() });
+    }
+    return await api(`/api/problems/${slug}/submissions`, { headers: authHeaders() });
+  } catch {
+    return { items: [] };
+  }
+}
+
+async function loadProblemLeaderboard(slug) {
+  const el = $('problemLeaderboard');
+  if (!el) return;
+  try {
+    const data = await api(`/api/problems/${slug}/leaderboard`);
+    const items = data.items || [];
+    if (items.length === 0) {
+      el.innerHTML = `<div class="text-muted text-sm text-center">暂无排行</div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="leaderboard-mini">
+        ${items.slice(0, 10).map((e, i) => `
+          <div class="lb-row ${i < 3 ? 'lb-top' : ''}">
+            <span class="lb-rank">${i < 3 ? ['🥇', '🥈', '🥉'][i] : (i + 1)}</span>
+            <span class="lb-name">${esc(e.username)}</span>
+            <span class="lb-score">${scoreDisplay(e.public_score)}</span>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  } catch {
+    el.innerHTML = `<div class="text-muted text-sm">排行榜加载失败</div>`;
+  }
+}
+
+async function submitSolution(slug, contestSlug) {
+  const fileInput = $('submitFile');
+  if (!fileInput || !fileInput.files.length) {
+    toast('请选择一个 .zip 文件', 'warning');
+    return;
+  }
+  if (!state.token) {
+    showAuthModal();
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  if (contestSlug) fd.append('contest_slug', contestSlug);
+  try {
+    const data = await api(`/api/problems/${slug}/submissions`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    toast('提交成功', 'success');
+    navigate(`/submissions/${data.submission_id || data.id}`);
+  } catch (err) {
+    toast(`提交失败: ${err.message}`, 'error');
+  }
+}
+
+// ─── Contests ───────────────────────────────────────────────────────────────
+
+async function renderContests() {
+  setPage('比赛', '参加 AI/ML 竞赛');
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const data = await api('/api/contests');
+    const items = data.items || [];
+    if (items.length === 0) {
+      app.innerHTML = emptyBox('暂无比赛');
+      return;
+    }
+    // Group by state
+    const running = items.filter(c => (c.state || c.status) === 'RUNNING');
+    const upcoming = items.filter(c => (c.state || c.status) === 'UPCOMING');
+    const ended = items.filter(c => (c.state || c.status) === 'ENDED');
+    const draft = items.filter(c => (c.state || c.status) === 'DRAFT');
+    const other = items.filter(c => !['RUNNING', 'UPCOMING', 'ENDED', 'DRAFT'].includes(c.state || c.status));
+
+    const renderSection = (title, list) => list.length === 0 ? '' : `
+      <h3 class="section-title">${title}</h3>
+      <div class="contest-grid">
+        ${list.map(c => contestCard(c)).join('')}
+      </div>
+    `;
+
+    app.innerHTML = `
+      ${renderSection('🔥 进行中', running)}
+      ${renderSection('📅 即将开始', upcoming)}
+      ${renderSection('🏁 已结束', ended)}
+      ${renderSection('📝 草稿', draft)}
+      ${renderSection('其他', other)}
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+// ─── Contest Detail ─────────────────────────────────────────────────────────
+
+async function renderContestDetail(slug) {
+  setPage('比赛详情', slug);
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const results = await Promise.allSettled([
+      api(`/api/contests/${slug}`),
+      api(`/api/contests/${slug}/access`, { headers: authHeaders() }),
+      api(`/api/contests/${slug}/stats`),
+      api(`/api/contests/${slug}/announcements`),
+      api(`/api/contests/${slug}/questions`, { headers: authHeaders() }).catch(() => ({ items: [] })),
+      state.token ? api(`/api/contests/${slug}/submissions?show_all=true`, { headers: authHeaders() }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      api(`/api/contests/${slug}/problem-stats`).catch(() => ({ items: [] })),
+    ]);
+
+    const contest = results[0].status === 'fulfilled' ? results[0].value : null;
+    if (!contest) throw new Error('比赛不存在');
+
+    const access = results[1].status === 'fulfilled' ? results[1].value : {};
+    const stats = results[2].status === 'fulfilled' ? results[2].value : {};
+    const announcements = results[3].status === 'fulfilled' ? (results[3].value.items || []) : [];
+    const questions = results[4].status === 'fulfilled' ? (results[4].value.items || []) : [];
+    const submissions = results[5].status === 'fulfilled' ? (results[5].value.items || []) : [];
+    const problemStats = results[6].status === 'fulfilled' ? (results[6].value.items || []) : [];
+
+    const st = contest.state || contest.status || '';
+    const problems = contest.problems || [];
+    const canViewProblems = access.can_view_problems !== false;
+    const participantStatus = access.participant_status || access.status || null;
+    const isParticipant = participantStatus === 'ACCEPTED';
+
+    setPage(contest.title, contestStateLabel(st));
+
+    app.innerHTML = `
+      <div class="contest-detail">
+        <!-- Contest Header -->
+        <div class="card glass highlight">
+          <div class="contest-header-row">
+            <div>
+              <h2 class="contest-title">${esc(contest.title)}</h2>
+              <div class="row gap-sm mt-sm">
+                ${contestStatePill(st)}
+                <span class="pill gray">${esc(contest.slug)}</span>
+                ${contest.visibility ? `<span class="pill blue">${esc(contest.visibility)}</span>` : ''}
+                ${contest.registration_mode ? `<span class="pill gray">${esc(contest.registration_mode)}</span>` : ''}
+              </div>
+            </div>
+            <div class="contest-actions" id="contestActions">
+              ${renderContestActions(contest, access, participantStatus, isParticipant, slug)}
+            </div>
+          </div>
+
+          <!-- Countdown -->
+          <div id="contestCountdown" class="countdown mt-md"></div>
+
+          <!-- Stats row -->
+          <div class="contest-stats mt-md">
+            <div class="contest-stat"><span class="contest-stat-value">${stats.participant_count || access.participant_counts?.accepted_count || 0}</span><span class="contest-stat-label">参赛者</span></div>
+            <div class="contest-stat"><span class="contest-stat-value">${stats.submission_count || 0}</span><span class="contest-stat-label">提交数</span></div>
+            <div class="contest-stat"><span class="contest-stat-value">${stats.accepted_count || 0}</span><span class="contest-stat-label">通过数</span></div>
+            <div class="contest-stat"><span class="contest-stat-value">${problems.length}</span><span class="contest-stat-label">题目数</span></div>
+          </div>
+
+          <!-- Date info -->
+          <div class="contest-dates mt-md">
+            ${contest.start_at ? `<span>🕐 开始: ${formatDate(contest.start_at)}</span>` : ''}
+            ${contest.end_at ? `<span>🏁 结束: ${formatDate(contest.end_at)}</span>` : ''}
+          </div>
+
+          ${contest.description_md ? `<div class="mt-md">${renderMd(contest.description_md)}</div>` : ''}
+        </div>
+
+        <!-- Tabs Navigation -->
+        <div class="tabs mt-lg" id="contestTabs">
+          <button class="tab active" onclick="showContestTab('problems')">题目</button>
+          <button class="tab" onclick="showContestTab('scoreboard')">排行榜</button>
+          <button class="tab" onclick="showContestTab('submissions')">提交</button>
+          <button class="tab" onclick="showContestTab('announcements')">公告 ${announcements.length > 0 ? `<span class="badge">${announcements.length}</span>` : ''}</button>
+          <button class="tab" onclick="showContestTab('questions')">答疑 ${questions.length > 0 ? `<span class="badge">${questions.length}</span>` : ''}</button>
+        </div>
+
+        <!-- Tab Content -->
+        <div id="contestTabContent">
+          <!-- Problems Tab (default) -->
+          <div class="tab-panel active" id="tab-problems">
+            ${!canViewProblems ? emptyBox('题目在比赛开始前不可见') : problems.length === 0 ? emptyBox('暂无题目') : `
+              <div class="problem-grid">
+                ${problems.map(p => {
+                  const ps = problemStats.find(s => s.slug === p.slug || s.id === p.id) || {};
+                  return `
+                    <a href="/contests/${esc(slug)}/problems/${esc(p.slug)}" class="problem-card" data-link>
+                      <div class="problem-card-header">
+                        <h3 class="problem-card-title">${esc(p.title)}</h3>
+                      </div>
+                      <div class="problem-card-slug">${esc(p.slug)}</div>
+                      <div class="problem-card-footer">
+                        <span class="text-muted text-sm">${ps.solved_users || 0} 人通过</span>
+                        <span class="text-muted text-sm">${ps.submissions || 0} 次提交</span>
+                      </div>
+                    </a>
+                  `;
+                }).join('')}
+              </div>
+            `}
+          </div>
+
+          <!-- Scoreboard Tab -->
+          <div class="tab-panel" id="tab-scoreboard">
+            <div id="scoreboardContent"><div class="loading-overlay"><div class="spinner"></div><span>加载排行榜…</span></div></div>
+          </div>
+
+          <!-- Submissions Tab -->
+          <div class="tab-panel" id="tab-submissions">
+            ${submissions.length === 0 ? emptyBox('暂无提交记录') : `
+              <div class="table-wrap">
+                <table>
+                  <thead><tr><th>ID</th><th>题目</th><th>状态</th><th>公开分</th><th>耗时</th><th>时间</th></tr></thead>
+                  <tbody>
+                    ${submissions.map(s => `
+                      <tr class="clickable-row" onclick="navigate('/submissions/${s.id}')">
+                        <td>#${s.id}</td>
+                        <td>${esc(s.problem_slug || s.problem_title || '')}</td>
+                        <td>${statusPill(s.status)}</td>
+                        <td>${scoreDisplay(s.public_score)}</td>
+                        <td>${s.runtime_ms != null ? s.runtime_ms + 'ms' : '—'}</td>
+                        <td>${formatDate(s.created_at)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            `}
+          </div>
+
+          <!-- Announcements Tab -->
+          <div class="tab-panel" id="tab-announcements">
+            ${announcements.length === 0 ? emptyBox('暂无公告') : announcements.map(a => `
+              <div class="card mb-md">
+                <div class="card-header">
+                  <h4 class="card-title">${esc(a.title)}</h4>
+                  <span class="text-muted text-sm">${formatDate(a.created_at)}</span>
+                </div>
+                <div class="card-body">${renderMd(a.body_md)}</div>
+              </div>
+            `).join('')}
+          </div>
+
+          <!-- Questions Tab -->
+          <div class="tab-panel" id="tab-questions">
+            ${isParticipant || (state.user && state.user.role === 'ADMIN') ? `
+              <button class="button sm mb-md" onclick="showAskQuestionModal('${esc(slug)}')">✏️ 提问</button>
+            ` : ''}
+            ${questions.length === 0 ? emptyBox('暂无问题') : questions.map(q => `
+              <div class="card mb-md ${q.is_public ? '' : 'card-private'}">
                 <div class="card-header">
                   <div>
-                    <h2 class="card-title">${escapeHtml(problem.title || slug)}</h2>
-                    <div class="muted">${escapeHtml(problem.slug || slug)}</div>
+                    <h4 class="card-title">${esc(q.title)}</h4>
+                    <div class="row gap-sm mt-xs">
+                      <span class="text-muted text-sm">${esc(q.username || '匿名')}</span>
+                      <span class="text-muted text-sm">${formatDate(q.created_at)}</span>
+                      ${statusPill(q.status)}
+                      ${q.is_public ? '<span class="pill blue">公开</span>' : '<span class="pill gray">私密</span>'}
+                    </div>
                   </div>
-                  <span class="pill">${escapeHtml(problem.metric || "")}</span>
+                  ${state.user && state.user.role === 'ADMIN' ? `
+                    <div class="row gap-sm">
+                      <button class="button ghost sm" onclick="showAnswerQuestionModal('${esc(slug)}', ${q.id})">回复</button>
+                      ${q.status !== 'CLOSED' ? `<button class="button ghost sm danger" onclick="closeQuestion('${esc(slug)}', ${q.id})">关闭</button>` : ''}
+                    </div>
+                  ` : ''}
                 </div>
-                <div class="card-body statement">${renderMarkdown(problem.statement_md || problem.description_md || "暂无题面")}</div>
-              </div>
-
-              <div class="card">
-                <div class="card-header">
-                  <h2 class="card-title">${contestSlug ? "当前比赛提交" : "当前题目提交"}</h2>
-                  <button class="button ghost small" onclick="loadProblemSubmissions('${escapeHtml(slug)}', '${escapeHtml(contestSlug || "")}')">刷新</button>
-                </div>
-                <div class="card-body" id="problemSubmissionsBox">${state.user ? emptyBox("加载中...") : emptyBox("登录后查看提交")}</div>
-              </div>
-            </div>
-
-            <div class="grid">
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">提交答案</h2></div>
-                <div class="card-body">
-                  <div class="form-grid">
-                    <div class="notice">上传 <strong>source.zip</strong>，根目录通常需要包含 <code>predict.py</code>。</div>
-                    <input type="file" id="submitFile" accept=".zip">
-                    <button class="button" onclick="submitSolution('${escapeHtml(slug)}', '${escapeHtml(contestSlug || "")}')">上传提交</button>
-                    <button class="button ghost" onclick="downloadSample('${escapeHtml(slug)}')">下载 sample_submission.csv</button>
-                    <div id="submitMessage"></div>
+                ${q.can_view_body !== false ? `
+                  <div class="card-body">
+                    ${renderMd(q.body_md)}
+                    ${q.answer_md ? `
+                      <div class="answer-block mt-md">
+                        <div class="answer-label">📝 回复</div>
+                        ${renderMd(q.answer_md)}
+                      </div>
+                    ` : ''}
                   </div>
-                </div>
+                ` : ''}
               </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
 
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">评测配置</h2></div>
-                <div class="card-body">
-                  <div class="table-wrap">
-                    <table style="min-width:0;">
-                      <tr><th>Metric</th><td>${escapeHtml(problem.metric || "")}</td></tr>
-                      <tr><th>Direction</th><td>${problem.higher_is_better === false ? "lower is better" : "higher is better"}</td></tr>
-                      <tr><th>Time</th><td>${problem.time_limit_sec || 60}s</td></tr>
-                      <tr><th>Memory</th><td>${problem.memory_limit_mb || 2048}MB</td></tr>
-                      <tr><th>CPU</th><td>${problem.cpu_count || 2}</td></tr>
-                      <tr><th>Runner</th><td>${escapeHtml(problem.runner_image || "aioj-python-basic:latest")}</td></tr>
-                    </table>
-                  </div>
-                </div>
-              </div>
+    // Start countdown
+    startContestCountdown(contest);
+    // Load scoreboard in background
+    loadContestScoreboard(slug, contest);
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+function renderContestActions(contest, access, participantStatus, isParticipant, slug) {
+  const st = contest.state || contest.status || '';
+  if (!state.user) {
+    return `<button class="button" onclick="showAuthModal()">登录参赛</button>`;
+  }
+  if (isParticipant) {
+    return `
+      <span class="pill green">已参赛</span>
+      <button class="button ghost sm danger" onclick="leaveContest('${esc(slug)}')">退出比赛</button>
+    `;
+  }
+  if (participantStatus === 'PENDING') {
+    return `<span class="pill yellow">审核中</span>`;
+  }
+  if (participantStatus === 'REJECTED') {
+    const canReregister = access.allow_join_after_start !== false || st !== 'RUNNING';
+    return `
+      <span class="pill red">已拒绝</span>
+      ${canReregister ? `<button class="button sm" onclick="joinContest('${esc(slug)}', '${esc(contest.registration_mode || 'OPEN')}')">重新报名</button>` : ''}
+    `;
+  }
+  // Not registered
+  return `<button class="button" onclick="joinContest('${esc(slug)}', '${esc(contest.registration_mode || 'OPEN')}')">报名参赛</button>`;
+}
+
+function showContestTab(tabName) {
+  document.querySelectorAll('#contestTabs .tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const tabBtn = document.querySelector(`#contestTabs .tab[onclick*="'${tabName}'"]`);
+  if (tabBtn) tabBtn.classList.add('active');
+  const panel = $(`tab-${tabName}`);
+  if (panel) panel.classList.add('active');
+}
+
+async function joinContest(slug, registrationMode) {
+  if (!state.token) { showAuthModal(); return; }
+  if (registrationMode === 'INVITE') {
+    showInviteCodeModal(slug);
+    return;
+  }
+  try {
+    await tryApi(
+      [`/api/contests/${slug}/register`, `/api/contests/${slug}/join`],
+      { method: 'POST', headers: { ...authHeaders(), 'Content-Type': 'application/json' }, body: '{}' }
+    );
+    toast('报名成功', 'success');
+    renderContestDetail(slug);
+  } catch (err) {
+    toast(`报名失败: ${err.message}`, 'error');
+  }
+}
+
+function showInviteCodeModal(slug) {
+  openModal({
+    title: '输入邀请码',
+    body: `
+      <div class="form-group">
+        <label for="inviteCode">邀请码</label>
+        <input type="text" id="inviteCode" placeholder="请输入邀请码" />
+      </div>
+      <div id="inviteError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="button ghost" onclick="closeModal()">取消</button>
+      <button class="button" onclick="submitInviteCode('${esc(slug)}')">确定</button>
+    `,
+  });
+}
+
+async function submitInviteCode(slug) {
+  const code = $('inviteCode')?.value?.trim();
+  if (!code) { toast('请输入邀请码', 'warning'); return; }
+  try {
+    await api(`/api/contests/${slug}/join`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invite_code: code }),
+    });
+    closeModal();
+    toast('报名成功', 'success');
+    renderContestDetail(slug);
+  } catch (err) {
+    const el = $('inviteError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+async function leaveContest(slug) {
+  if (!confirm('确定要退出比赛吗？')) return;
+  try {
+    await api(`/api/contests/${slug}/leave`, { method: 'POST', headers: authHeaders() });
+    toast('已退出比赛', 'info');
+    renderContestDetail(slug);
+  } catch (err) {
+    toast(`退出失败: ${err.message}`, 'error');
+  }
+}
+
+// Contest countdown
+function startContestCountdown(contest) {
+  const st = contest.state || contest.status || '';
+  const el = $('contestCountdown');
+  if (!el) return;
+
+  function updateCountdown() {
+    const now = Date.now();
+    let targetTime, label;
+    if (st === 'UPCOMING' && contest.start_at) {
+      targetTime = new Date(contest.start_at).getTime();
+      label = '距离开始';
+    } else if (st === 'RUNNING' && contest.end_at) {
+      targetTime = new Date(contest.end_at).getTime();
+      label = '距离结束';
+    } else {
+      el.innerHTML = st === 'ENDED' ? '<div class="countdown-ended">比赛已结束</div>' : '';
+      return false;
+    }
+    const diff = targetTime - now;
+    if (diff <= 0) {
+      el.innerHTML = `<div class="countdown-ended">${label === '距离开始' ? '比赛已开始' : '比赛已结束'}</div>`;
+      return false;
+    }
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    el.innerHTML = `
+      <span class="countdown-label">${esc(label)}</span>
+      <div class="countdown-digits">
+        ${d > 0 ? `<div class="cd-unit"><span class="cd-value">${d}</span><span class="cd-label">天</span></div>` : ''}
+        <div class="cd-unit"><span class="cd-value">${String(h).padStart(2, '0')}</span><span class="cd-label">时</span></div>
+        <div class="cd-unit"><span class="cd-value">${String(m).padStart(2, '0')}</span><span class="cd-label">分</span></div>
+        <div class="cd-unit"><span class="cd-value">${String(s).padStart(2, '0')}</span><span class="cd-label">秒</span></div>
+      </div>
+    `;
+    return true;
+  }
+
+  if (updateCountdown()) {
+    state.countdownTimer = setInterval(() => {
+      if (!updateCountdown()) clearInterval(state.countdownTimer);
+    }, 1000);
+  }
+}
+
+// Contest scoreboard
+async function loadContestScoreboard(slug, contest) {
+  const el = $('scoreboardContent');
+  if (!el) return;
+  try {
+    let data;
+    try {
+      data = await api(`/api/contests/${slug}/scoreboard-advanced`, { headers: authHeaders() });
+    } catch {
+      try {
+        data = await api(`/api/contests/${slug}/scoreboard`, { headers: authHeaders() });
+      } catch {
+        data = await api(`/api/contests/${slug}/leaderboard`);
+      }
+    }
+    const items = data.items || [];
+    const mode = data.mode || contest?.scoreboard_mode || 'SCORE';
+
+    if (items.length === 0) {
+      el.innerHTML = emptyBox('暂无排行数据');
+      return;
+    }
+
+    if (mode === 'ACM') {
+      el.innerHTML = renderAcmScoreboard(items, data);
+    } else {
+      el.innerHTML = renderScoreScoreboard(items, data);
+    }
+  } catch (err) {
+    el.innerHTML = `<div class="notice warning">排行榜暂不可用: ${esc(err.message)}</div>`;
+  }
+}
+
+function renderScoreScoreboard(items, data) {
+  const showPrivate = data.show_private === true;
+  return `
+    ${data.is_frozen ? '<div class="notice warning mb-md">🧊 排行榜已冻结</div>' : ''}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>排名</th><th>用户</th><th>已解决</th><th>公开分</th>
+            ${showPrivate ? '<th>最终分</th>' : ''}
+            ${(items[0]?.problems || []).map(p => `<th>${esc(p.slug || p.title || '')}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map(r => `
+            <tr>
+              <td><strong>${r.rank || ''}</strong></td>
+              <td>${esc(r.username)}</td>
+              <td>${r.solved || 0}</td>
+              <td>${scoreDisplay(r.total_public_score)}</td>
+              ${showPrivate ? `<td>${scoreDisplay(r.total_private_score)}</td>` : ''}
+              ${(r.problems || []).map(p => `
+                <td class="${p.solved ? 'cell-solved' : p.attempts > 0 ? 'cell-attempted' : ''}">
+                  ${p.visible_score != null ? scoreDisplay(p.visible_score) : (p.solved ? '✓' : p.attempts > 0 ? `−${p.attempts}` : '')}
+                </td>
+              `).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function renderAcmScoreboard(items, data) {
+  return `
+    ${data.is_frozen ? '<div class="notice warning mb-md">🧊 排行榜已冻结</div>' : ''}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>排名</th><th>用户</th><th>已解决</th><th>罚时</th>
+            ${(items[0]?.problems || []).map(p => `<th>${esc(p.slug || p.title || '')}</th>`).join('')}
+          </tr>
+        </thead>
+        <tbody>
+          ${items.map(r => `
+            <tr>
+              <td><strong>${r.rank || ''}</strong></td>
+              <td>${esc(r.username)}</td>
+              <td>${r.solved || 0}</td>
+              <td>${r.penalty || 0}</td>
+              ${(r.problems || []).map(p => `
+                <td class="${p.solved ? 'cell-solved' : p.attempts > 0 ? 'cell-attempted' : ''}">
+                  ${p.solved ? `✓ (${p.penalty || 0})` : p.attempts > 0 ? `−${p.attempts}` : ''}
+                </td>
+              `).join('')}
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// Contest Q&A
+function showAskQuestionModal(slug) {
+  openModal({
+    title: '提问',
+    body: `
+      <div class="form-group">
+        <label for="qTitle">标题</label>
+        <input type="text" id="qTitle" placeholder="问题标题" />
+      </div>
+      <div class="form-group">
+        <label for="qBody">内容 (Markdown)</label>
+        <textarea id="qBody" placeholder="详细描述你的问题…" rows="6"></textarea>
+      </div>
+      <div id="qError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="button ghost" onclick="closeModal()">取消</button>
+      <button class="button" onclick="submitQuestion('${esc(slug)}')">提交</button>
+    `,
+  });
+}
+
+async function submitQuestion(slug) {
+  const title = $('qTitle')?.value?.trim();
+  const body = $('qBody')?.value?.trim();
+  if (!title) { toast('请输入标题', 'warning'); return; }
+  try {
+    await api(`/api/contests/${slug}/questions`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body_md: body || '' }),
+    });
+    closeModal();
+    toast('提问成功', 'success');
+    renderContestDetail(slug);
+  } catch (err) {
+    const el = $('qError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+function showAnswerQuestionModal(slug, questionId) {
+  openModal({
+    title: '回复问题',
+    body: `
+      <div class="form-group">
+        <label for="answerMd">回复内容 (Markdown)</label>
+        <textarea id="answerMd" placeholder="输入回复…" rows="6"></textarea>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="answerPublic" /> 公开此回复</label>
+      </div>
+      <div id="answerError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="button ghost" onclick="closeModal()">取消</button>
+      <button class="button" onclick="submitAnswer('${esc(slug)}', ${questionId})">提交回复</button>
+    `,
+  });
+}
+
+async function submitAnswer(slug, questionId) {
+  const answer = $('answerMd')?.value?.trim();
+  const isPublic = $('answerPublic')?.checked || false;
+  if (!answer) { toast('请输入回复内容', 'warning'); return; }
+  try {
+    await api(`/api/admin/contests/${slug}/questions/${questionId}/answer`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ answer_md: answer, is_public: isPublic }),
+    });
+    closeModal();
+    toast('回复成功', 'success');
+    renderContestDetail(slug);
+  } catch (err) {
+    const el = $('answerError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+async function closeQuestion(slug, questionId) {
+  if (!confirm('确定关闭此问题？')) return;
+  try {
+    await api(`/api/admin/contests/${slug}/questions/${questionId}/close`, {
+      method: 'POST', headers: authHeaders(),
+    });
+    toast('问题已关闭', 'info');
+    renderContestDetail(slug);
+  } catch (err) {
+    toast(`操作失败: ${err.message}`, 'error');
+  }
+}
+
+// ─── Submissions ────────────────────────────────────────────────────────────
+
+async function renderSubmissions() {
+  setPage('提交记录', '查看所有提交');
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    let data;
+    if (state.user && state.user.role === 'ADMIN') {
+      data = await api('/api/admin/submissions/recent', { headers: authHeaders() });
+    } else if (state.token) {
+      data = await api('/api/my/submissions', { headers: authHeaders() });
+    } else {
+      app.innerHTML = `<div class="notice info">请<button class="button ghost sm" onclick="showAuthModal()">登录</button>查看提交记录</div>`;
+      return;
+    }
+    const items = data.items || [];
+    if (items.length === 0) {
+      app.innerHTML = emptyBox('暂无提交');
+      return;
+    }
+    app.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th><th>题目</th><th>用户</th><th>状态</th><th>公开分</th>
+              <th>最终分</th><th>耗时</th><th>内存</th><th>提交时间</th><th>评测时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.map(s => `
+              <tr class="clickable-row" onclick="navigate('/submissions/${s.id}')">
+                <td>#${s.id}</td>
+                <td>${esc(s.problem_slug || '')}</td>
+                <td>${esc(s.username || '—')}</td>
+                <td>${statusPill(s.status)}</td>
+                <td>${scoreDisplay(s.public_score)}</td>
+                <td>${scoreDisplay(s.private_score)}</td>
+                <td>${s.runtime_ms != null ? s.runtime_ms + 'ms' : '—'}</td>
+                <td>${s.memory_peak_mb != null ? s.memory_peak_mb + 'MB' : '—'}</td>
+                <td>${formatDate(s.created_at)}</td>
+                <td>${formatDate(s.judged_at)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+// ─── Submission Detail ──────────────────────────────────────────────────────
+
+async function renderSubmissionDetail(id) {
+  setPage('提交详情', `#${id}`);
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const sub = await api(`/api/submissions/${id}`, { headers: authHeaders() });
+    let logContent = '';
+    try {
+      const logData = await api(`/api/submissions/${id}/log`, { headers: authHeaders() });
+      logContent = logData.log || '';
+    } catch {}
+
+    app.innerHTML = `
+      <a href="/submissions" class="breadcrumb" data-link>← 返回提交列表</a>
+      <div class="submission-layout">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">提交 #${id}</h2>
+            ${statusPill(sub.status)}
+          </div>
+          <div class="card-body">
+            <div class="detail-grid">
+              <div class="detail-item"><span class="detail-label">题目</span><span>${esc(sub.problem_slug || sub.problem_id || '')}</span></div>
+              <div class="detail-item"><span class="detail-label">用户</span><span>${esc(sub.username || '—')}</span></div>
+              <div class="detail-item"><span class="detail-label">公开分</span><span class="text-accent">${scoreDisplay(sub.public_score)}</span></div>
+              <div class="detail-item"><span class="detail-label">最终分</span><span>${scoreDisplay(sub.private_score)}</span></div>
+              <div class="detail-item"><span class="detail-label">运行时间</span><span>${sub.runtime_ms != null ? sub.runtime_ms + 'ms' : '—'}</span></div>
+              <div class="detail-item"><span class="detail-label">内存峰值</span><span>${sub.memory_peak_mb != null ? sub.memory_peak_mb + 'MB' : '—'}</span></div>
+              <div class="detail-item"><span class="detail-label">提交时间</span><span>${formatDate(sub.created_at)}</span></div>
+              <div class="detail-item"><span class="detail-label">评测时间</span><span>${formatDate(sub.judged_at)}</span></div>
+              ${sub.error_message ? `<div class="detail-item full"><span class="detail-label">错误信息</span><div class="notice error">${esc(sub.error_message)}</div></div>` : ''}
             </div>
           </div>
-        `;
+        </div>
 
-        if (state.user) await loadProblemSubmissions(slug, contestSlug || "");
-      } catch (e) {
-        $("app").innerHTML = errorBox(e);
-      }
-    }
+        ${logContent ? `
+          <div class="card mt-lg">
+            <div class="card-header">
+              <h3 class="card-title">运行日志</h3>
+            </div>
+            <div class="card-body">
+              <pre class="log-output"><code>${esc(logContent)}</code></pre>
+            </div>
+          </div>
+        ` : ''}
 
-    function downloadSample(slug) {
-      window.open(`/api/problems/${encodeURIComponent(slug)}/sample-submission`, "_blank");
-    }
+        <div class="row gap-md mt-lg">
+          ${sub.problem_slug ? `<a href="/problems/${esc(sub.problem_slug)}" class="button ghost" data-link>查看题目</a>` : ''}
+          <a href="/api/submissions/${id}/output" target="_blank" class="button ghost">📥 下载输出</a>
+        </div>
+      </div>
+    `;
 
-    async function submitSolution(slug, contestSlug = "") {
-      const msg = $("submitMessage");
-      msg.innerHTML = "";
-      const file = $("submitFile").files[0];
-      if (!file) {
-        msg.innerHTML = `<div class="error">请选择 source.zip</div>`;
-        return;
-      }
-      if (!state.user) {
-        openAuthModal();
-        return;
-      }
-
-      const form = new FormData();
-      form.append("file", file);
-      if (contestSlug) form.append("contest_slug", contestSlug);
-
-      try {
-        msg.innerHTML = `<div class="notice">正在上传...</div>`;
-        const data = await api(`/api/problems/${encodeURIComponent(slug)}/submit`, {
-          method: "POST",
-          headers: authHeaders(),
-          body: form
-        });
-        const id = data.submission_id || data.id || data.submission?.id;
-        msg.innerHTML = `<div class="success">提交成功${id ? `：#${id}` : ""}</div>`;
-        if (id) navigate(`/submissions/${id}`);
-      } catch (e) {
-        msg.innerHTML = errorBox(e);
-      }
-    }
-
-    async function loadProblemSubmissions(slug, contestSlug = "") {
-      const box = $("problemSubmissionsBox");
-      if (!box || !state.user) return;
-      box.innerHTML = emptyBox("加载中...");
-      try {
-        let data;
-        if (contestSlug) {
-          data = await api(`/api/contests/${encodeURIComponent(contestSlug)}/submissions`, { headers: authHeaders() });
-        } else {
-          data = await tryApi([
-            `/api/problems/${encodeURIComponent(slug)}/submissions`,
-            `/api/submissions?problem_slug=${encodeURIComponent(slug)}`
-          ], { headers: authHeaders() });
+    // Auto-refresh if still judging
+    if (['QUEUED', 'PENDING', 'JUDGING', 'RUNNING'].includes(sub.status)) {
+      setTimeout(() => {
+        if (location.pathname === `/submissions/${id}`) {
+          renderSubmissionDetail(id);
         }
-        box.innerHTML = submissionsTable(data.items || []);
-      } catch (e) {
-        box.innerHTML = errorBox(e);
-      }
+      }, 5000);
     }
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
 
-    function submissionsTable(items) {
-      if (!items || !items.length) return emptyBox("暂无提交");
-      return `
+// ─── Account ────────────────────────────────────────────────────────────────
+
+async function renderAccount() {
+  setPage('账号设置', '管理您的账号信息');
+  const app = $('app');
+  if (!state.user) {
+    app.innerHTML = `<div class="notice info">请先<button class="button ghost sm" onclick="showAuthModal()">登录</button></div>`;
+    return;
+  }
+  app.innerHTML = `
+    <div class="max-w-md">
+      <div class="card">
+        <h3 class="card-title mb-lg">账号信息</h3>
+        <div class="detail-grid">
+          <div class="detail-item"><span class="detail-label">用户名</span><span>${esc(state.user.username)}</span></div>
+          <div class="detail-item"><span class="detail-label">邮箱</span><span>${esc(state.user.email || '未设置')}</span></div>
+          <div class="detail-item"><span class="detail-label">角色</span><span>${statusPill(state.user.role)}</span></div>
+        </div>
+      </div>
+
+      <div class="card mt-lg">
+        <h3 class="card-title mb-lg">修改密码</h3>
+        <div class="form-group">
+          <label for="oldPass">当前密码</label>
+          <input type="password" id="oldPass" placeholder="请输入当前密码" />
+        </div>
+        <div class="form-group">
+          <label for="newPass">新密码</label>
+          <input type="password" id="newPass" placeholder="请输入新密码" />
+        </div>
+        <div id="pwdError" class="notice error" style="display:none"></div>
+        <div id="pwdSuccess" class="notice success" style="display:none"></div>
+        <button class="button mt-md" onclick="changePassword()">修改密码</button>
+      </div>
+    </div>
+  `;
+}
+
+async function changePassword() {
+  const oldPwd = $('oldPass')?.value;
+  const newPwd = $('newPass')?.value;
+  if (!oldPwd || !newPwd) { toast('请填写完整', 'warning'); return; }
+  try {
+    await tryApi(
+      ['/api/auth/change-password', '/api/account/change-password'],
+      {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old_password: oldPwd, new_password: newPwd }),
+      }
+    );
+    const errEl = $('pwdError');
+    if (errEl) errEl.style.display = 'none';
+    const sucEl = $('pwdSuccess');
+    if (sucEl) { sucEl.style.display = ''; sucEl.textContent = '密码修改成功'; }
+    toast('密码修改成功', 'success');
+    $('oldPass').value = '';
+    $('newPass').value = '';
+  } catch (err) {
+    const errEl = $('pwdError');
+    if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ADMIN PAGES
+// ═══════════════════════════════════════════════════════════════════════════
+
+function requireAdmin() {
+  if (!state.user || state.user.role !== 'ADMIN') {
+    $('app').innerHTML = `
+      <div class="notice error">
+        <strong>权限不足</strong> — 需要管理员权限
+      </div>
+    `;
+    return false;
+  }
+  return true;
+}
+
+// ─── Admin: Users ───────────────────────────────────────────────────────────
+
+async function renderUsers() {
+  setPage('用户管理', '管理平台用户');
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const data = await api('/api/admin/users', { headers: authHeaders() });
+    const items = data.items || [];
+    app.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">用户列表 (${items.length})</h3>
+        </div>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>ID</th><th>题目</th><th>状态</th><th>Public</th><th>Private</th><th>Runtime</th><th>时间</th><th>操作</th></tr></thead>
+            <thead><tr><th>ID</th><th>用户名</th><th>邮箱</th><th>角色</th><th>状态</th><th>注册时间</th><th>操作</th></tr></thead>
             <tbody>
-              ${items.map(s => `
+              ${items.map(u => `
                 <tr>
-                  <td>#${s.id}</td>
-                  <td>${escapeHtml(s.problem_slug || s.problem_title || "")}</td>
-                  <td>${statusPill(s.status)}</td>
-                  <td>${s.public_score ?? ""}</td>
-                  <td>${s.private_score ?? ""}</td>
-                  <td>${s.runtime_ms ?? ""}${s.runtime_ms ? " ms" : ""}</td>
-                  <td>${escapeHtml(formatDate(s.created_at || s.judged_at))}</td>
-                  <td><a class="button ghost small" href="/submissions/${s.id}">详情</a></td>
+                  <td>${u.id}</td>
+                  <td><strong>${esc(u.username)}</strong></td>
+                  <td>${esc(u.email || '—')}</td>
+                  <td>${statusPill(u.role)}</td>
+                  <td>${u.is_disabled ? '<span class="pill red">禁用</span>' : '<span class="pill green">正常</span>'}</td>
+                  <td>${formatDate(u.created_at)}</td>
+                  <td>
+                    <div class="row gap-xs">
+                      <button class="button ghost sm" onclick="toggleUserRole(${u.id}, '${u.role}')">${u.role === 'ADMIN' ? '降权' : '升权'}</button>
+                      <button class="button ghost sm ${u.is_disabled ? 'success' : 'danger'}" onclick="toggleUserDisabled(${u.id}, ${u.is_disabled})">${u.is_disabled ? '启用' : '禁用'}</button>
+                      <button class="button ghost sm" onclick="showResetPasswordModal(${u.id}, '${esc(u.username)}')">重置密码</button>
+                    </div>
+                  </td>
                 </tr>
-              `).join("")}
+              `).join('')}
             </tbody>
           </table>
-        </div>`;
-    }
-
-    async function renderContests() {
-      setPage("比赛", "参加比赛，查看赛题、答疑与排行榜");
-      updateNav();
-
-      $("app").innerHTML = `
-        <div class="card">
-          <div class="card-header">
-            <div><h2 class="card-title">比赛列表</h2><div class="muted">公开比赛和你可见的比赛</div></div>
-            <button class="button ghost small" onclick="renderContests()">刷新</button>
-          </div>
-          <div class="card-body" id="contestsBox">${emptyBox("加载中...")}</div>
         </div>
-      `;
-
-      try {
-        const data = await api("/api/contests", { headers: authHeaders() });
-        const items = data.items || [];
-        $("contestsBox").innerHTML = items.length ? `<div class="grid grid-2">${items.map(contestMiniCard).join("")}</div>` : emptyBox("暂无比赛");
-      } catch (e) {
-        $("contestsBox").innerHTML = errorBox(e);
-      }
-    }
-
-    async function renderContestDetail(slug) {
-      clearPageState();
-      setPage("比赛详情", slug);
-      updateNav();
-      $("app").innerHTML = emptyBox("加载中...");
-
-      try {
-        const contest = await api(`/api/contests/${encodeURIComponent(slug)}`, { headers: authHeaders() });
-        const [access, stats, announcements, questions, subs, problemStats] = await Promise.all([
-          api(`/api/contests/${encodeURIComponent(slug)}/access`, { headers: authHeaders() }).catch(() => ({})),
-          api(`/api/contests/${encodeURIComponent(slug)}/stats`).catch(() => ({})),
-          api(`/api/contests/${encodeURIComponent(slug)}/announcements`).catch(() => ({ items: [] })),
-          api(`/api/contests/${encodeURIComponent(slug)}/questions`, { headers: authHeaders() }).catch(() => ({ items: [] })),
-          state.user ? api(`/api/contests/${encodeURIComponent(slug)}/submissions`, { headers: authHeaders() }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
-          api(`/api/contests/${encodeURIComponent(slug)}/problem-stats`).catch(() => ({ items: [] })),
-        ]);
-
-        setPage(contest.title || slug, `${slug} · ${contestStateLabel(contest.state || contest.status)}`);
-        const accessStatus = contestStatusText(access.participant_status);
-        const problemStatMap = {};
-        (problemStats.items || []).forEach(x => problemStatMap[x.slug] = x);
-
-        $("app").innerHTML = `
-          <div class="grid">
-            <div class="card">
-              <div class="card-header">
-                <div>
-                  <h2 class="card-title">${escapeHtml(contest.title || slug)}</h2>
-                  <div class="muted">${escapeHtml(slug)} · ${escapeHtml(access.visibility || "PUBLIC")} · ${escapeHtml(access.registration_mode || "OPEN")} · ${escapeHtml(access.scoreboard_mode || "SCORE")}</div>
-                </div>
-                ${contestStatePill(contest.state || contest.status)}
-              </div>
-              <div class="card-body">
-                <div class="row" style="margin-bottom:14px;">
-                  <span class="pill gray">开始：${escapeHtml(formatDate(contest.start_at) || "不限")}</span>
-                  <span class="pill gray">结束：${escapeHtml(formatDate(contest.end_at) || "不限")}</span>
-                  <span class="pill gray">${(contest.problems || []).length || contest.problem_count || 0} 题</span>
-                  <span class="pill gray">${stats.participant_count ?? access.participant_counts?.accepted_count ?? 0} 人通过</span>
-                  <span class="pill gray">${access.participant_counts?.pending_count ?? 0} 人待审</span>
-                  <span class="pill gray">${stats.submission_count ?? 0} 次提交</span>
-                  <span class="pill gray">我的状态：${escapeHtml(accessStatus)}</span>
-                </div>
-                <div id="contestCountdown" style="margin-bottom:14px;"></div>
-                <div class="statement">${renderMarkdown(contest.description_md || "暂无比赛说明")}</div>
-              </div>
-            </div>
-
-            <div class="grid grid-2">
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">参赛状态</h2></div>
-                <div class="card-body">${contestAccessHtml(slug, access)}</div>
-              </div>
-              <div class="card">
-                <div class="card-header">
-                  <h2 class="card-title">比赛排行榜</h2>
-                  <button class="button ghost small" onclick="loadContestScoreboard('${escapeHtml(slug)}')">刷新</button>
-                </div>
-                <div class="card-body" id="contestScoreboard">${emptyBox("加载中...")}</div>
-              </div>
-            </div>
-
-            ${access.questions_enabled === false ? "" : `
-              <div class="card">
-                <div class="card-header">
-                  <h2 class="card-title">赛中答疑</h2>
-                  ${access.can_ask ? `<button class="button small" onclick="openAskQuestion('${escapeHtml(slug)}')">提问</button>` : ""}
-                </div>
-                <div class="card-body" id="contestQuestions">${questionsHtml(slug, questions.items || [])}</div>
-              </div>
-            `}
-
-            ${access.announcements_enabled === false ? "" : `
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">公告</h2></div>
-                <div class="card-body">${announcementsHtml(announcements.items || [])}</div>
-              </div>
-            `}
-
-            <div class="card">
-              <div class="card-header"><h2 class="card-title">比赛题目</h2></div>
-              <div class="card-body">${contestProblemsHtml(slug, contest.problems || [], access, problemStatMap)}</div>
-            </div>
-
-            <div class="card">
-              <div class="card-header">
-                <h2 class="card-title">我的赛内提交</h2>
-                <button class="button ghost small" onclick="renderContestDetail('${escapeHtml(slug)}')">刷新</button>
-              </div>
-              <div class="card-body">${state.user ? submissionsTable(subs.items || []) : emptyBox("登录后查看你的赛内提交")}</div>
-            </div>
-          </div>
-        `;
-
-        renderContestCountdown(contest);
-        state.countdownTimer = setInterval(() => renderContestCountdown(contest), 1000);
-        await loadContestScoreboard(slug);
-      } catch (e) {
-        $("app").innerHTML = errorBox(e);
-      }
-    }
-
-    function contestStatusText(status) {
-      return ({ PENDING: "待审核", ACCEPTED: "已通过", REJECTED: "已拒绝" })[status] || status || "未报名";
-    }
-
-    function contestAccessHtml(slug, access) {
-      if (!state.user) {
-        return `<div class="form-grid"><div class="notice">登录后可以报名参赛。</div><button class="button" onclick="openAuthModal()">登录 / 注册</button></div>`;
-      }
-      if (access.participant_status === "ACCEPTED") {
-        return `<div class="form-grid"><div class="success">你已报名参赛，状态：已通过。</div><button class="button secondary" onclick="leaveContest('${escapeHtml(slug)}')">退出比赛</button></div>`;
-      }
-      if (access.participant_status === "PENDING") {
-        return `<div class="notice">你的报名正在等待管理员审核。</div>`;
-      }
-      if (access.participant_status === "REJECTED") {
-        return `<div class="form-grid"><div class="error">你的报名已被拒绝。</div>${access.can_register ? `<button class="button" onclick="joinContest('${escapeHtml(slug)}')">重新报名</button>` : ""}</div>`;
-      }
-      if (!access.can_register) {
-        return `<div class="notice">当前不可报名。报名方式：${escapeHtml(access.registration_mode || "OPEN")}</div>`;
-      }
-      return `<div class="form-grid"><div class="notice">报名方式：${escapeHtml(access.registration_mode || "OPEN")}。报名通过后可以赛内提交和提问。</div><button class="button" onclick="joinContest('${escapeHtml(slug)}')">报名参赛</button></div>`;
-    }
-
-    async function joinContest(slug) {
-      if (!state.user) return openAuthModal();
-      let invite_code = "";
-      const access = await api(`/api/contests/${encodeURIComponent(slug)}/access`, { headers: authHeaders() }).catch(() => ({}));
-      if (access.registration_mode === "INVITE") {
-        openModal({
-          title: "邀请码报名",
-          body: `<div class="form-row"><label>邀请码</label><input id="inviteCode" placeholder="请输入邀请码"></div><div id="joinMessage" style="margin-top:12px;"></div>`,
-          footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitContestRegister('${escapeHtml(slug)}')">报名</button>`
-        });
-        return;
-      }
-      await submitContestRegister(slug, invite_code);
-    }
-
-    async function submitContestRegister(slug, inviteCodeValue = null) {
-      const invite_code = inviteCodeValue === null && $("inviteCode") ? $("inviteCode").value.trim() : (inviteCodeValue || "");
-      try {
-        const res = await api(`/api/contests/${encodeURIComponent(slug)}/register`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ invite_code })
-        });
-        closeModal();
-        if (res.participant_status === "PENDING") alert("报名已提交，等待管理员审核。");
-        await renderContestDetail(slug);
-      } catch (e) {
-        if ($("joinMessage")) $("joinMessage").innerHTML = errorBox(e);
-        else alert(e.message);
-      }
-    }
-
-    async function leaveContest(slug) {
-      if (!confirm("确认退出比赛？")) return;
-      await api(`/api/contests/${encodeURIComponent(slug)}/leave`, { method: "POST", headers: authHeaders() });
-      await renderContestDetail(slug);
-    }
-
-    function renderContestCountdown(c) {
-      const box = $("contestCountdown");
-      if (!box) return;
-      const now = Date.now();
-      const start = c.start_at ? new Date(c.start_at).getTime() : null;
-      const end = c.end_at ? new Date(c.end_at).getTime() : null;
-      const stateText = c.state || c.status;
-      if (stateText === "UPCOMING" && start) {
-        box.innerHTML = `<div class="notice"><strong>距离开始：</strong>${durationText(start - now)}</div>`;
-      } else if (stateText === "RUNNING" && end) {
-        box.innerHTML = `<div class="success"><strong>距离结束：</strong>${durationText(end - now)}</div>`;
-      } else if (stateText === "ENDED") {
-        box.innerHTML = `<div class="error"><strong>比赛已结束</strong></div>`;
-      } else {
-        box.innerHTML = `<div class="notice">${escapeHtml(contestStateLabel(stateText))}</div>`;
-      }
-    }
-
-    function durationText(ms) {
-      if (ms <= 0) return "现在";
-      const sec = Math.floor(ms / 1000);
-      const d = Math.floor(sec / 86400);
-      const h = Math.floor((sec % 86400) / 3600);
-      const m = Math.floor((sec % 3600) / 60);
-      const s = sec % 60;
-      if (d) return `${d}天 ${h}小时 ${m}分`;
-      if (h) return `${h}小时 ${m}分 ${s}秒`;
-      if (m) return `${m}分 ${s}秒`;
-      return `${s}秒`;
-    }
-
-    function contestProblemsHtml(contestSlug, problems, access, statsMap) {
-      if (!access.can_view_problems) return emptyBox(access.hide_problems_before_start ? "题目将在比赛开始或报名通过后显示" : "报名通过后显示题目");
-      if (!problems.length) return emptyBox("暂无题目");
-      return `
-        <div class="grid grid-2">
-          ${problems.map(p => {
-            const ps = statsMap[p.slug] || {};
-            return `
-              <a class="problem-card" href="/contests/${encodeURIComponent(contestSlug)}/problems/${encodeURIComponent(p.slug)}">
-                <div class="row" style="justify-content:space-between;">
-                  <h3 class="problem-title">${escapeHtml(p.title || p.slug)}</h3>
-                  <span class="pill">${escapeHtml(p.metric || "")}</span>
-                </div>
-                <div class="problem-slug">${escapeHtml(p.slug)}</div>
-                <div class="muted small-text">${metricText(p)} · ${ps.solved_users ?? 0} 人通过 · ${ps.submissions ?? 0} 次提交</div>
-              </a>
-            `;
-          }).join("")}
-        </div>
-      `;
-    }
-
-    function announcementsHtml(items) {
-      if (!items.length) return emptyBox("暂无公告");
-      return `<div class="grid">${items.map(a => `
-        <div class="notice">
-          <strong>${escapeHtml(a.title)}</strong>
-          <div class="muted small-text">${escapeHtml(formatDate(a.created_at))}</div>
-          <div class="statement" style="margin-top:10px;">${renderMarkdown(a.body_md || "")}</div>
-        </div>
-      `).join("")}</div>`;
-    }
-
-    function questionsHtml(slug, items) {
-      if (!items.length) return emptyBox("暂无答疑");
-      const isAdmin = state.user && state.user.role === "ADMIN";
-      return `<div class="grid">${items.map(q => `
-        <div class="notice">
-          <div class="row" style="justify-content:space-between;align-items:flex-start;">
-            <div>
-              <strong>#${q.id} ${escapeHtml(q.title)}</strong>
-              <div class="muted small-text">${escapeHtml(q.username || "anonymous")} · ${escapeHtml(formatDate(q.created_at))} · ${q.is_public ? "公开" : "私有"} · ${escapeHtml(q.status || "")}</div>
-            </div>
-            ${isAdmin ? `<div class="row"><button class="button small" onclick="openAnswerQuestion('${escapeHtml(slug)}', ${q.id})">回复</button><button class="button secondary small" onclick="closeQuestion('${escapeHtml(slug)}', ${q.id})">关闭</button></div>` : ""}
-          </div>
-          ${q.body_md ? `<div class="statement" style="margin-top:10px;">${renderMarkdown(q.body_md)}</div>` : ""}
-          ${q.answer_md ? `<div class="success" style="margin-top:10px;"><strong>回复</strong><div class="statement">${renderMarkdown(q.answer_md)}</div></div>` : `<div class="muted" style="margin-top:10px;">等待回复</div>`}
-        </div>
-      `).join("")}</div>`;
-    }
-
-    function openAskQuestion(slug) {
-      openModal({
-        title: "赛中提问",
-        body: `
-          <div class="form-grid">
-            <div class="form-row"><label>标题</label><input id="questionTitle" placeholder="例如：输入格式是否保证有 id？"></div>
-            <div class="form-row"><label>内容</label><textarea id="questionBody" placeholder="详细描述你的问题"></textarea></div>
-            <div id="questionMessage"></div>
-          </div>
-        `,
-        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitQuestion('${escapeHtml(slug)}')">提交问题</button>`
-      });
-    }
-
-    async function submitQuestion(slug) {
-      try {
-        await api(`/api/contests/${encodeURIComponent(slug)}/questions`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ title: $("questionTitle").value.trim(), body_md: $("questionBody").value.trim() })
-        });
-        closeModal();
-        await renderContestDetail(slug);
-      } catch (e) {
-        $("questionMessage").innerHTML = errorBox(e);
-      }
-    }
-
-    function openAnswerQuestion(slug, id) {
-      openModal({
-        title: `回复问题 #${id}`,
-        body: `
-          <div class="form-grid">
-            <div class="form-row"><label>回复内容</label><textarea id="answerBody"></textarea></div>
-            <label class="row"><input type="checkbox" id="answerPublic" checked style="width:auto;"> 公开给所有参赛者</label>
-            <div id="answerMessage"></div>
-          </div>
-        `,
-        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitAnswer('${escapeHtml(slug)}', ${id})">保存回复</button>`
-      });
-    }
-
-    async function submitAnswer(slug, id) {
-      try {
-        await api(`/api/admin/contests/${encodeURIComponent(slug)}/questions/${id}/answer`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ answer_md: $("answerBody").value.trim(), is_public: $("answerPublic").checked })
-        });
-        closeModal();
-        await renderContestDetail(slug);
-      } catch (e) {
-        $("answerMessage").innerHTML = errorBox(e);
-      }
-    }
-
-    async function closeQuestion(slug, id) {
-      if (!confirm("确认关闭这个问题？")) return;
-      await api(`/api/admin/contests/${encodeURIComponent(slug)}/questions/${id}/close`, { method: "POST", headers: authHeaders() });
-      await renderContestDetail(slug);
-    }
-
-    async function loadContestScoreboard(slug) {
-      const box = $("contestScoreboard");
-      if (!box) return;
-      box.innerHTML = emptyBox("加载中...");
-      try {
-        const data = await tryApi([
-          `/api/contests/${encodeURIComponent(slug)}/scoreboard-advanced`,
-          `/api/contests/${encodeURIComponent(slug)}/scoreboard`,
-          `/api/contests/${encodeURIComponent(slug)}/leaderboard`
-        ], { headers: authHeaders() });
-
-        const items = data.items || [];
-        if (!items.length) {
-          box.innerHTML = emptyBox("暂无排行榜数据");
-          return;
-        }
-
-        const mode = data.mode || "SCORE";
-        if (mode === "ACM") {
-          box.innerHTML = `
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Rank</th><th>User</th><th>Solved</th><th>Penalty</th><th>Problems</th></tr></thead>
-                <tbody>${items.map(x => `<tr><td><strong>${x.rank}</strong></td><td>${escapeHtml(x.username)}</td><td>${x.solved}</td><td>${x.penalty ?? 0}</td><td class="muted">${escapeHtml(scoreProblemsText(x, mode))}</td></tr>`).join("")}</tbody>
-              </table>
-            </div>`;
-        } else {
-          box.innerHTML = `
-            <div class="table-wrap">
-              <table>
-                <thead><tr><th>Rank</th><th>User</th><th>Solved</th><th>Score</th><th>Public</th><th>Private</th><th>Problems</th></tr></thead>
-                <tbody>${items.map(x => `<tr><td><strong>${x.rank}</strong></td><td>${escapeHtml(x.username)}</td><td>${x.solved ?? x.submission_count ?? ""}</td><td>${x.total_score ?? x.public_score ?? ""}</td><td>${x.total_public_score ?? x.public_score ?? ""}</td><td>${data.show_private ? (x.total_private_score ?? x.private_score ?? "") : "赛后可见"}</td><td class="muted">${escapeHtml(scoreProblemsText(x, mode))}</td></tr>`).join("")}</tbody>
-              </table>
-            </div>`;
-        }
-      } catch (e) {
-        box.innerHTML = errorBox(e);
-      }
-    }
-
-    function scoreProblemsText(x, mode) {
-      if (!x.problems || !x.problems.length) return "";
-      if (mode === "ACM") return x.problems.map(p => `${p.problem_slug}:${p.status || ""}${p.penalty != null ? "/" + p.penalty : ""}`).join(" · ");
-      return x.problems.map(p => `${p.problem_slug}:${p.visible_score ?? ""}`).join(" · ");
-    }
-
-    async function renderSubmissions() {
-      setPage("提交", "查看提交历史与日志");
-      updateNav();
-      $("app").innerHTML = `
-        <div class="card">
-          <div class="card-header">
-            <div><h2 class="card-title">提交历史</h2><div class="muted">${state.user?.role === "ADMIN" ? "管理员可查看更多提交" : "你的提交记录"}</div></div>
-            <button class="button ghost small" onclick="renderSubmissions()">刷新</button>
-          </div>
-          <div class="card-body" id="submissionsBox">${state.user ? emptyBox("加载中...") : emptyBox("登录后查看提交")}</div>
-        </div>
-      `;
-      if (!state.user) return;
-      try {
-        const data = await api("/api/submissions", { headers: authHeaders() });
-        $("submissionsBox").innerHTML = submissionsTable(data.items || []);
-      } catch (e) {
-        $("submissionsBox").innerHTML = errorBox(e);
-      }
-    }
-
-    async function renderSubmissionDetail(id) {
-      setPage(`提交 #${id}`, "查看结果、指标与运行日志");
-      updateNav();
-      $("app").innerHTML = emptyBox("加载中...");
-      try {
-        const detail = await api(`/api/submissions/${encodeURIComponent(id)}`, { headers: authHeaders() }).catch(() => null);
-        const logData = await api(`/api/submissions/${encodeURIComponent(id)}/log`, { headers: authHeaders() }).catch(() => null);
-        const sub = detail?.submission || detail || logData?.submission || { id };
-
-        $("app").innerHTML = `
-          <div class="grid grid-main-side">
-            <div class="grid">
-              <div class="card">
-                <div class="card-header">
-                  <h2 class="card-title">提交概览</h2>
-                  ${statusPill(sub.status)}
-                </div>
-                <div class="card-body">
-                  <div class="table-wrap">
-                    <table style="min-width:0;">
-                      ${[
-                        ["ID", `#${sub.id || id}`],
-                        ["Problem", sub.problem_slug || sub.problem_title || ""],
-                        ["User", sub.username || sub.user_id || ""],
-                        ["Status", sub.status || ""],
-                        ["Public", sub.public_score ?? ""],
-                        ["Private", sub.private_score ?? ""],
-                        ["Runtime", sub.runtime_ms ? `${sub.runtime_ms} ms` : ""],
-                        ["Memory", sub.memory_peak_mb ? `${sub.memory_peak_mb} MB` : ""],
-                        ["Created", formatDate(sub.created_at)],
-                        ["Judged", formatDate(sub.judged_at)],
-                        ["Error", sub.error_message || ""],
-                      ].map(([k,v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join("")}
-                    </table>
-                  </div>
-                </div>
-              </div>
-
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">Metrics</h2></div>
-                <div class="card-body"><pre>${escapeHtml(JSON.stringify(sub.metrics || detail?.metrics || {}, null, 2))}</pre></div>
-              </div>
-
-              <div class="card">
-                <div class="card-header">
-                  <h2 class="card-title">运行日志</h2>
-                  <button class="button ghost small" onclick="renderSubmissionDetail('${escapeHtml(id)}')">刷新</button>
-                </div>
-                <div class="card-body"><pre>${escapeHtml(logData?.log || detail?.log || "暂无日志")}</pre></div>
-              </div>
-            </div>
-
-            <div class="grid">
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">操作</h2></div>
-                <div class="card-body form-grid">
-                  <a class="button" href="/api/submissions/${encodeURIComponent(id)}/output" target="_blank">下载 output/submission.csv</a>
-                  <a class="button secondary" href="/api/submissions/${encodeURIComponent(id)}/log" target="_blank">查看原始日志</a>
-                  <a class="button ghost" href="/submissions">全部提交</a>
-                </div>
-              </div>
-              <div class="card">
-                <div class="card-header"><h2 class="card-title">对象路径</h2></div>
-                <div class="card-body small-text">
-                  <div><strong>source:</strong> ${escapeHtml(sub.source_object_key || "")}</div>
-                  <div><strong>output:</strong> ${escapeHtml(sub.output_object_key || "")}</div>
-                  <div><strong>log:</strong> ${escapeHtml(sub.log_object_key || "")}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        `;
-      } catch (e) {
-        $("app").innerHTML = errorBox(e);
-      }
-    }
-
-    async function renderAccount() {
-      setPage("账号设置", "修改密码与查看登录信息");
-      updateNav();
-
-      $("app").innerHTML = `
-        <div class="grid grid-2">
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">当前账号</h2></div>
-            <div class="card-body">
-              ${state.user ? `
-                <div class="table-wrap">
-                  <table style="min-width:0;">
-                    <tr><th>Username</th><td>${escapeHtml(state.user.username || "")}</td></tr>
-                    <tr><th>Email</th><td>${escapeHtml(state.user.email || "")}</td></tr>
-                    <tr><th>Role</th><td>${escapeHtml(state.user.role || "")}</td></tr>
-                  </table>
-                </div>
-              ` : emptyBox("未登录")}
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">修改密码</h2></div>
-            <div class="card-body">
-              ${state.user ? `
-                <div class="form-grid">
-                  <div class="form-row"><label>当前密码</label><input id="oldPassword" type="password"></div>
-                  <div class="form-row"><label>新密码</label><input id="newPassword" type="password"></div>
-                  <button class="button" onclick="changePassword()">保存新密码</button>
-                  <div id="passwordMessage"></div>
-                </div>
-              ` : emptyBox("登录后修改密码")}
-            </div>
-          </div>
-        </div>
-      `;
-    }
-
-    async function changePassword() {
-      const msg = $("passwordMessage");
-      try {
-        await tryApi([
-          "/api/auth/change-password",
-          "/api/account/change-password"
-        ], {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ old_password: $("oldPassword").value, new_password: $("newPassword").value })
-        });
-        msg.innerHTML = `<div class="success">密码已修改。</div>`;
-      } catch (e) {
-        msg.innerHTML = errorBox(e);
-      }
-    }
-
-    async function renderUsers() {
-      setPage("用户管理", "管理员查看和管理用户");
-      updateNav();
-      if (!requireAdmin()) return;
-      $("app").innerHTML = `<div class="card"><div class="card-header"><h2 class="card-title">用户列表</h2><button class="button ghost small" onclick="renderUsers()">刷新</button></div><div class="card-body" id="usersBox">${emptyBox("加载中...")}</div></div>`;
-      try {
-        const data = await api("/api/admin/users", { headers: authHeaders() });
-        const items = data.items || data.users || [];
-        $("usersBox").innerHTML = items.length ? `
-          <div class="table-wrap"><table><thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Role</th><th>Created</th></tr></thead>
-          <tbody>${items.map(u => `<tr><td>${u.id}</td><td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.email || "")}</td><td>${statusPill(u.role)}</td><td>${escapeHtml(formatDate(u.created_at))}</td></tr>`).join("")}</tbody></table></div>
-        ` : emptyBox("暂无用户");
-      } catch (e) {
-        $("usersBox").innerHTML = errorBox(e);
-      }
-    }
-
-    async function renderProblemAdmin() {
-      setPage("题目管理", "导入题包、发布或下线题目");
-      updateNav();
-      if (!requireAdmin()) return;
-      $("app").innerHTML = `
-        <div class="grid">
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">导入题目包</h2></div>
-            <div class="card-body">
-              <div class="form-grid">
-                <div class="notice">上传 problem.zip，推荐结构：problem.yaml、statement.md、private/test.csv、private/labels.csv、public/sample_submission.csv。</div>
-                <input type="file" id="problemPackage" accept=".zip">
-                <button class="button" onclick="importProblemPackage()">导入题目包</button>
-                <div id="problemImportMessage"></div>
-              </div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">题目列表</h2><button class="button ghost small" onclick="renderProblemAdmin()">刷新</button></div>
-            <div class="card-body" id="problemAdminList">${emptyBox("加载中...")}</div>
-          </div>
-        </div>
-      `;
-      await loadProblemAdminList();
-    }
-
-    async function importProblemPackage() {
-      const msg = $("problemImportMessage");
-      const f = $("problemPackage").files[0];
-      if (!f) return msg.innerHTML = `<div class="error">请选择 zip 文件</div>`;
-      const form = new FormData();
-      form.append("file", f);
-      try {
-        msg.innerHTML = `<div class="notice">正在导入...</div>`;
-        await tryApi(["/api/admin/problems/import", "/api/admin/problem-packages/import"], {
-          method: "POST",
-          headers: authHeaders(),
-          body: form
-        });
-        msg.innerHTML = `<div class="success">导入成功。</div>`;
-        await loadProblemAdminList();
-      } catch (e) {
-        msg.innerHTML = errorBox(e);
-      }
-    }
-
-    async function loadProblemAdminList() {
-      const box = $("problemAdminList");
-      try {
-        const data = await tryApi(["/api/admin/problems", "/api/problems"], { headers: authHeaders() });
-        const items = data.items || [];
-        box.innerHTML = items.length ? `
-          <div class="table-wrap"><table><thead><tr><th>Slug</th><th>Title</th><th>Metric</th><th>Status</th><th>Versions</th><th>Action</th></tr></thead>
-          <tbody>${items.map(p => `<tr><td>${escapeHtml(p.slug)}</td><td>${escapeHtml(p.title)}</td><td>${escapeHtml(p.metric || "")}</td><td>${statusPill(p.status)}</td><td>${p.version_count || p.versions || ""}</td><td><a class="button ghost small" href="/problems/${encodeURIComponent(p.slug)}">查看</a></td></tr>`).join("")}</tbody></table></div>
-        ` : emptyBox("暂无题目");
-      } catch (e) {
-        box.innerHTML = errorBox(e);
-      }
-    }
-
-    async function renderContestAdmin() {
-      setPage("比赛管理", "创建比赛、报名审核、公告、榜单设置");
-      updateNav();
-      if (!requireAdmin()) return;
-      $("app").innerHTML = `
-        <div class="grid">
-          <div class="card">
-            <div class="card-header"><h2 class="card-title">比赛列表</h2><button class="button" onclick="openContestCreate()">新建比赛</button></div>
-            <div class="card-body" id="contestAdminList">${emptyBox("加载中...")}</div>
-          </div>
-        </div>
-      `;
-      await loadContestAdminList();
-    }
-
-    async function loadContestAdminList() {
-      const box = $("contestAdminList");
-      try {
-        const data = await tryApi(["/api/admin/contests", "/api/contests"], { headers: authHeaders() });
-        const items = data.items || [];
-        box.innerHTML = items.length ? `
-          <div class="table-wrap"><table><thead><tr><th>Slug</th><th>Title</th><th>State</th><th>Problems</th><th>Start</th><th>End</th><th>Action</th></tr></thead>
-          <tbody>${items.map(c => `
-            <tr>
-              <td>${escapeHtml(c.slug)}</td>
-              <td>${escapeHtml(c.title)}</td>
-              <td>${contestStatePill(c.state || c.status)}</td>
-              <td>${c.problem_count || (c.problems || []).length || 0}</td>
-              <td>${escapeHtml(formatDate(c.start_at))}</td>
-              <td>${escapeHtml(formatDate(c.end_at))}</td>
-              <td>
-                <div class="row">
-                  <a class="button ghost small" href="/contests/${encodeURIComponent(c.slug)}">查看</a>
-                  <button class="button small" onclick="openContestSettings('${escapeHtml(c.slug)}')">高级</button>
-                  <button class="button secondary small" onclick="openRegistrations('${escapeHtml(c.slug)}')">报名</button>
-                  <button class="button secondary small" onclick="openAnnouncement('${escapeHtml(c.slug)}')">公告</button>
-                  <button class="button ghost small" onclick="exportContestRegistrations('${escapeHtml(c.slug)}')">导出报名</button>
-                  <button class="button ghost small" onclick="exportContestScoreboard('${escapeHtml(c.slug)}')">导出榜单</button>
-                </div>
-              </td>
-            </tr>
-          `).join("")}</tbody></table></div>
-        ` : emptyBox("暂无比赛");
-      } catch (e) {
-        box.innerHTML = errorBox(e);
-      }
-    }
-
-    function openContestCreate() {
-      openModal({
-        title: "新建比赛",
-        body: contestFormHtml({}),
-        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="saveContestCreate()">创建</button>`
-      });
-    }
-
-    function contestFormHtml(c) {
-      return `
-        <div class="form-grid">
-          <div class="grid grid-2">
-            <div class="form-row"><label>Slug</label><input id="contestSlugInput" value="${escapeHtml(c.slug || "")}" placeholder="demo-contest"></div>
-            <div class="form-row"><label>Title</label><input id="contestTitleInput" value="${escapeHtml(c.title || "")}" placeholder="Demo Contest"></div>
-          </div>
-          <div class="grid grid-2">
-            <div class="form-row"><label>开始时间</label><input id="contestStartInput" type="datetime-local"></div>
-            <div class="form-row"><label>结束时间</label><input id="contestEndInput" type="datetime-local"></div>
-          </div>
-          <div class="form-row"><label>题目 Slug，用逗号或换行分隔</label><textarea id="contestProblemsInput">${escapeHtml((c.problems || []).map(p => p.slug).join("\\n"))}</textarea></div>
-          <div class="form-row"><label>说明 Markdown</label><textarea id="contestDescInput">${escapeHtml(c.description_md || "")}</textarea></div>
-          <div id="contestFormMessage"></div>
-        </div>
-      `;
-    }
-
-    async function saveContestCreate() {
-      const start = $("contestStartInput").value ? new Date($("contestStartInput").value).toISOString() : null;
-      const end = $("contestEndInput").value ? new Date($("contestEndInput").value).toISOString() : null;
-      const problem_slugs = $("contestProblemsInput").value.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
-      const payload = {
-        slug: $("contestSlugInput").value.trim(),
-        title: $("contestTitleInput").value.trim(),
-        description_md: $("contestDescInput").value,
-        start_at: start,
-        end_at: end,
-        problem_slugs,
-      };
-      try {
-        await api("/api/admin/contests", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-        closeModal();
-        await renderContestAdmin();
-      } catch (e) {
-        $("contestFormMessage").innerHTML = errorBox(e);
-      }
-    }
-
-    async function openContestSettings(slug) {
-      try {
-        const data = await api(`/api/admin/contests/${encodeURIComponent(slug)}/full-settings`, { headers: authHeaders() });
-        const c = data.contest || {};
-        openModal({
-          title: `高级设置 · ${slug}`,
-          body: `
-            <div class="form-grid">
-              <div class="grid grid-3">
-                <div class="form-row"><label>可见性</label><select id="setVisibility">${["PUBLIC","PRIVATE","UNLISTED"].map(v => `<option ${c.visibility===v?"selected":""}>${v}</option>`).join("")}</select></div>
-                <div class="form-row"><label>报名方式</label><select id="setRegMode">${["OPEN","INVITE","APPROVAL","CLOSED"].map(v => `<option ${c.registration_mode===v?"selected":""}>${v}</option>`).join("")}</select></div>
-                <div class="form-row"><label>榜单模式</label><select id="setScoreMode">${["SCORE","ACM"].map(v => `<option ${c.scoreboard_mode===v?"selected":""}>${v}</option>`).join("")}</select></div>
-              </div>
-              <div class="grid grid-2">
-                <div class="form-row"><label>邀请码</label><input id="setInvite" value="${escapeHtml(c.invite_code || "")}"></div>
-                <div class="form-row"><label>ACM 罚时分钟</label><input id="setPenalty" type="number" value="${escapeHtml(c.penalty_minutes || 20)}"></div>
-              </div>
-              <div class="form-row"><label>封榜时间 ISO，可留空</label><input id="setFreeze" value="${escapeHtml(c.freeze_at || "")}"></div>
-              <label class="row"><input type="checkbox" id="setHideProblems" ${c.hide_problems_before_start ? "checked" : ""} style="width:auto;"> 开始前隐藏题目</label>
-              <label class="row"><input type="checkbox" id="setAllowJoin" ${c.allow_join_after_start !== false ? "checked" : ""} style="width:auto;"> 开赛后允许报名</label>
-              <label class="row"><input type="checkbox" id="setScoreVisible" ${c.scoreboard_visible !== false ? "checked" : ""} style="width:auto;"> 显示榜单</label>
-              <label class="row"><input type="checkbox" id="setQuestions" ${c.questions_enabled !== false ? "checked" : ""} style="width:auto;"> 开启答疑</label>
-              <label class="row"><input type="checkbox" id="setAnnouncements" ${c.announcements_enabled !== false ? "checked" : ""} style="width:auto;"> 开启公告</label>
-              <label class="row"><input type="checkbox" id="setPrivateAfterEnd" ${c.show_private_after_end ? "checked" : ""} style="width:auto;"> 赛后显示 private/final 分数</label>
-              <div id="settingsMessage"></div>
-            </div>
-          `,
-          footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="saveContestSettings('${escapeHtml(slug)}')">保存设置</button>`
-        });
-      } catch (e) {
-        alert(e.message);
-      }
-    }
-
-    async function saveContestSettings(slug) {
-      const payload = {
-        visibility: $("setVisibility").value,
-        registration_mode: $("setRegMode").value,
-        scoreboard_mode: $("setScoreMode").value,
-        invite_code: $("setInvite").value.trim(),
-        penalty_minutes: Number($("setPenalty").value || 20),
-        freeze_at: $("setFreeze").value.trim() || null,
-        hide_problems_before_start: $("setHideProblems").checked,
-        allow_join_after_start: $("setAllowJoin").checked,
-        scoreboard_visible: $("setScoreVisible").checked,
-        questions_enabled: $("setQuestions").checked,
-        announcements_enabled: $("setAnnouncements").checked,
-        show_private_after_end: $("setPrivateAfterEnd").checked,
-      };
-      try {
-        await api(`/api/admin/contests/${encodeURIComponent(slug)}/full-settings`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        closeModal();
-        await renderContestAdmin();
-      } catch (e) {
-        $("settingsMessage").innerHTML = errorBox(e);
-      }
-    }
-
-    async function openRegistrations(slug) {
-      try {
-        const data = await api(`/api/admin/contests/${encodeURIComponent(slug)}/registrations`, { headers: authHeaders() });
-        const items = data.items || [];
-        openModal({
-          title: `报名管理 · ${slug}`,
-          body: `
-            <div class="form-grid">
-              <div class="form-row"><label>批量添加用户名/邮箱，每行一个</label><textarea id="bulkUsers"></textarea></div>
-              <div class="row"><button class="button small" onclick="bulkAddRegistrations('${escapeHtml(slug)}')">批量添加并通过</button></div>
-              <div id="registrationsMessage"></div>
-              ${items.length ? `
-                <div class="table-wrap">
-                  <table>
-                    <thead><tr><th>User</th><th>Email</th><th>Status</th><th>Joined</th><th>Action</th></tr></thead>
-                    <tbody>${items.map(r => `
-                      <tr>
-                        <td>#${r.user_id} ${escapeHtml(r.username)}</td>
-                        <td>${escapeHtml(r.email || "")}</td>
-                        <td>${statusPill(r.status)}</td>
-                        <td>${escapeHtml(formatDate(r.joined_at))}</td>
-                        <td><div class="row">
-                          <button class="button success small" onclick="setRegistrationStatus('${escapeHtml(slug)}', ${r.user_id}, 'ACCEPTED')">通过</button>
-                          <button class="button secondary small" onclick="setRegistrationStatus('${escapeHtml(slug)}', ${r.user_id}, 'PENDING')">待审</button>
-                          <button class="button danger small" onclick="setRegistrationStatus('${escapeHtml(slug)}', ${r.user_id}, 'REJECTED')">拒绝</button>
-                        </div></td>
-                      </tr>
-                    `).join("")}</tbody>
-                  </table>
-                </div>
-              ` : emptyBox("暂无报名")}
-            </div>
-          `,
-          footer: `<button class="button ghost" onclick="closeModal()">关闭</button><button class="button ghost" onclick="exportContestRegistrations('${escapeHtml(slug)}')">导出 CSV</button>`
-        });
-      } catch (e) {
-        alert(e.message);
-      }
-    }
-
-    async function bulkAddRegistrations(slug) {
-      try {
-        await api(`/api/admin/contests/${encodeURIComponent(slug)}/registrations/bulk-add`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ users: $("bulkUsers").value, status: "ACCEPTED" })
-        });
-        $("registrationsMessage").innerHTML = `<div class="success">已批量添加。</div>`;
-        setTimeout(() => openRegistrations(slug), 500);
-      } catch (e) {
-        $("registrationsMessage").innerHTML = errorBox(e);
-      }
-    }
-
-    async function setRegistrationStatus(slug, userId, status) {
-      try {
-        await api(`/api/admin/contests/${encodeURIComponent(slug)}/registrations/${userId}/status`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ status })
-        });
-        await openRegistrations(slug);
-      } catch (e) {
-        alert(e.message);
-      }
-    }
-
-    function openAnnouncement(slug) {
-      openModal({
-        title: `发布公告 · ${slug}`,
-        body: `
-          <div class="form-grid">
-            <div class="form-row"><label>标题</label><input id="announcementTitle"></div>
-            <div class="form-row"><label>内容 Markdown</label><textarea id="announcementBody"></textarea></div>
-            <div id="announcementMessage"></div>
-          </div>
-        `,
-        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitAnnouncement('${escapeHtml(slug)}')">发布</button>`
-      });
-    }
-
-    async function submitAnnouncement(slug) {
-      try {
-        await api(`/api/admin/contests/${encodeURIComponent(slug)}/announcements`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ title: $("announcementTitle").value.trim(), body_md: $("announcementBody").value, is_published: true })
-        });
-        closeModal();
-        await renderContestAdmin();
-      } catch (e) {
-        $("announcementMessage").innerHTML = errorBox(e);
-      }
-    }
-
-    function exportContestRegistrations(slug) {
-      window.open(`/api/admin/contests/${encodeURIComponent(slug)}/registrations.csv`, "_blank");
-    }
-
-    function exportContestScoreboard(slug) {
-      window.open(`/api/admin/contests/${encodeURIComponent(slug)}/scoreboard-advanced.csv`, "_blank");
-    }
-
-    function requireAdmin() {
-      if (!state.user) {
-        $("app").innerHTML = `<div class="card"><div class="card-body">${emptyBox("请先登录管理员账号")}</div></div>`;
-        return false;
-      }
-      if (state.user.role !== "ADMIN") {
-        $("app").innerHTML = `<div class="card"><div class="card-body"><div class="error">需要管理员权限。</div></div></div>`;
-        return false;
-      }
-      return true;
-    }
-
-
-    function navigate(path) {
-      if (!path) path = "/";
-      const url = new URL(path, location.origin);
-      const next = url.pathname + url.search + url.hash;
-      const current = location.pathname + location.search + location.hash;
-      if (next === current) {
-        route();
-        return;
-      }
-      history.pushState(null, "", next);
-      route();
-    }
-
-    function handleSpaLinkClick(event) {
-      const a = event.target.closest && event.target.closest("a");
-      if (!a) return;
-      if (a.target && a.target !== "_self") return;
-      if (a.hasAttribute("download")) return;
-
-      const href = a.getAttribute("href") || "";
-      if (!href || href.startsWith("mailto:") || href.startsWith("tel:")) return;
-
-      const url = new URL(a.href, location.origin);
-      if (url.origin !== location.origin) return;
-      if (url.pathname.startsWith("/api/") || url.pathname === "/health") return;
-
-      // Backward compatibility for any old hash links that survived.
-      if (url.hash && url.hash.startsWith("#/")) {
-        event.preventDefault();
-        navigate(url.hash.slice(1));
-        return;
-      }
-
-      event.preventDefault();
-      navigate(url.pathname + url.search + url.hash);
-    }
-
-    async function route() {
-      clearPageState();
-      updateNav();
-
-      // Backward compatibility: /#/problems -> /problems
-      if (location.hash && location.hash.startsWith("#/")) {
-        const clean = location.hash.slice(1) || "/";
-        history.replaceState(null, "", clean);
-      }
-
-      const path = (location.pathname || "/").replace(/\/+$/, "") || "/";
-      const parts = path.replace(/^\/+/, "").split("/").filter(Boolean).map(decodeURIComponent);
-
-      try {
-        if (!parts.length) return await renderDashboard();
-        if (parts[0] === "problems" && !parts[1]) return await renderProblems();
-        if (parts[0] === "problems" && parts[1]) return await renderProblemDetail(parts[1]);
-        if (parts[0] === "contests" && parts[1] && parts[2] === "problems" && parts[3]) return await renderProblemDetail(parts[3], parts[1]);
-        if (parts[0] === "contests" && !parts[1]) return await renderContests();
-        if (parts[0] === "contests" && parts[1]) return await renderContestDetail(parts[1]);
-        if (parts[0] === "submissions" && parts[1]) return await renderSubmissionDetail(parts[1]);
-        if (parts[0] === "submissions") return await renderSubmissions();
-        if (parts[0] === "account") return await renderAccount();
-        if (parts[0] === "admin" && parts[1] === "users") return await renderUsers();
-        if (parts[0] === "users") return await renderUsers();
-        if (parts[0] === "problem-admin") return await renderProblemAdmin();
-        if (parts[0] === "contest-admin") return await renderContestAdmin();
-
-        setPage("404", "页面不存在");
-        $("app").innerHTML = `<div class="card"><div class="card-body">${emptyBox("页面不存在")}</div></div>`;
-      } catch (e) {
-        console.error(e);
-        $("app").innerHTML = `<div class="card"><div class="card-body">${errorBox(e)}</div></div>`;
-      }
-    }
-
-
-    async function init() {
-      $("authBtn").onclick = openAuthModal;
-      $("logoutBtn").onclick = logout;
-      $("menuBtn").onclick = () => $("sidebar").classList.toggle("open");
-
-      window.addEventListener("popstate", route);
-      document.addEventListener("click", handleSpaLinkClick);
-      window.addEventListener("error", (e) => console.error("[AIOJ]", e.error || e.message));
-      window.addEventListener("unhandledrejection", (e) => console.error("[AIOJ]", e.reason));
-
-      await Promise.all([checkHealth(), loadMe()]);
-      await route();
-    }
-
-    Object.assign(window, {
-      navigate, handleSpaLinkClick,
-      openAuthModal, switchAuthTab, submitLogin, submitRegister, logout,
-      renderProblems, renderProblemDetail, submitSolution, downloadSample, loadProblemSubmissions,
-      renderContests, renderContestDetail, joinContest, submitContestRegister, leaveContest,
-      loadContestScoreboard, openAskQuestion, submitQuestion, openAnswerQuestion, submitAnswer, closeQuestion,
-      renderSubmissions, renderSubmissionDetail, renderAccount, changePassword,
-      renderUsers, renderProblemAdmin, importProblemPackage, renderContestAdmin, openContestCreate,
-      saveContestCreate, openContestSettings, saveContestSettings, openRegistrations, bulkAddRegistrations,
-      setRegistrationStatus, openAnnouncement, submitAnnouncement, exportContestRegistrations, exportContestScoreboard,
-      closeModal, modalBackdropClick
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function toggleUserRole(userId, currentRole) {
+  const newRole = currentRole === 'ADMIN' ? 'USER' : 'ADMIN';
+  if (!confirm(`确定将此用户角色改为 ${newRole}？`)) return;
+  try {
+    await api(`/api/admin/users/${userId}/role`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role: newRole }),
     });
+    toast('角色已更新', 'success');
+    renderUsers();
+  } catch (err) {
+    toast(`操作失败: ${err.message}`, 'error');
+  }
+}
 
-    init();
+async function toggleUserDisabled(userId, currentDisabled) {
+  try {
+    await api(`/api/admin/users/${userId}/disabled`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_disabled: !currentDisabled }),
+    });
+    toast(currentDisabled ? '用户已启用' : '用户已禁用', 'success');
+    renderUsers();
+  } catch (err) {
+    toast(`操作失败: ${err.message}`, 'error');
+  }
+}
 
+function showResetPasswordModal(userId, username) {
+  openModal({
+    title: `重置密码 — ${username}`,
+    body: `
+      <div class="form-group">
+        <label for="newAdminPass">新密码</label>
+        <input type="password" id="newAdminPass" placeholder="请输入新密码" />
+      </div>
+    `,
+    footer: `
+      <button class="button ghost" onclick="closeModal()">取消</button>
+      <button class="button" onclick="resetUserPassword(${userId})">确认重置</button>
+    `,
+  });
+}
+
+async function resetUserPassword(userId) {
+  const pwd = $('newAdminPass')?.value;
+  if (!pwd) { toast('请输入新密码', 'warning'); return; }
+  try {
+    await api(`/api/admin/users/${userId}/password`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_password: pwd }),
+    });
+    closeModal();
+    toast('密码已重置', 'success');
+  } catch (err) {
+    toast(`操作失败: ${err.message}`, 'error');
+  }
+}
+
+// ─── Admin: Problems ────────────────────────────────────────────────────────
+
+async function renderProblemAdmin() {
+  setPage('题目管理', '管理题目和版本');
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const data = await tryApi(['/api/admin/problems', '/api/problems'], { headers: authHeaders() });
+    const items = data.items || [];
+    app.innerHTML = `
+      <div class="card mb-lg">
+        <div class="card-header">
+          <h3 class="card-title">导入题目包</h3>
+        </div>
+        <div class="card-body">
+          <p class="text-muted text-sm mb-md">上传 .zip 格式题目包，包含 problem.yaml, statement.md, private/ 和 public/ 目录</p>
+          <div class="row gap-md">
+            <input type="file" id="problemZip" accept=".zip" />
+            <button class="button" onclick="importProblem()">导入</button>
+          </div>
+          <div id="importResult" class="mt-md"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">题目列表 (${items.length})</h3>
+        </div>
+        ${items.length === 0 ? emptyBox('暂无题目') : `
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Slug</th><th>标题</th><th>状态</th><th>版本数</th><th>操作</th></tr></thead>
+              <tbody>
+                ${items.map(p => `
+                  <tr>
+                    <td><strong>${esc(p.slug)}</strong></td>
+                    <td>${esc(p.title)}</td>
+                    <td>${statusPill(p.status)}</td>
+                    <td>${p.versions || '—'}</td>
+                    <td>
+                      <div class="row gap-xs">
+                        <a href="/problems/${esc(p.slug)}" class="button ghost sm" data-link>查看</a>
+                        <button class="button ghost sm" onclick="setProblemStatus('${esc(p.slug)}', 'PUBLIC')">公开</button>
+                        <button class="button ghost sm" onclick="setProblemStatus('${esc(p.slug)}', 'DRAFT')">草稿</button>
+                        <button class="button ghost sm danger" onclick="setProblemStatus('${esc(p.slug)}', 'ARCHIVED')">归档</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function importProblem() {
+  const fileInput = $('problemZip');
+  if (!fileInput || !fileInput.files.length) { toast('请选择题目包', 'warning'); return; }
+  const resultEl = $('importResult');
+  resultEl.innerHTML = '<div class="spinner"></div>';
+  try {
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+    const data = await tryApi(
+      ['/api/admin/problems/import', '/api/admin/problem-packages/import'],
+      { method: 'POST', headers: authHeaders(), body: fd }
+    );
+    resultEl.innerHTML = `<div class="notice success">导入成功: ${esc(data.slug)} (v${esc(data.version || '')})</div>`;
+    toast('题目导入成功', 'success');
+    setTimeout(() => renderProblemAdmin(), 1500);
+  } catch (err) {
+    resultEl.innerHTML = `<div class="notice error">导入失败: ${esc(err.message)}</div>`;
+  }
+}
+
+async function setProblemStatus(slug, status) {
+  try {
+    await api(`/api/admin/problems/${slug}/status`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    toast(`题目 ${slug} 已设为 ${status}`, 'success');
+    renderProblemAdmin();
+  } catch (err) {
+    toast(`操作失败: ${err.message}`, 'error');
+  }
+}
+
+// ─── Admin: Contests ────────────────────────────────────────────────────────
+
+async function renderContestAdmin() {
+  setPage('比赛管理', '创建和管理比赛');
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `<div class="loading-overlay"><div class="spinner"></div><span>加载中…</span></div>`;
+  try {
+    const data = await api('/api/admin/contests', { headers: authHeaders() });
+    const items = data.items || [];
+    app.innerHTML = `
+      <div class="row flex-between mb-lg">
+        <h3>比赛列表 (${items.length})</h3>
+        <button class="button" onclick="showCreateContestModal()">+ 新建比赛</button>
+      </div>
+
+      ${items.length === 0 ? emptyBox('暂无比赛') : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Slug</th><th>标题</th><th>状态</th><th>题目</th><th>开始</th><th>结束</th><th>操作</th></tr></thead>
+            <tbody>
+              ${items.map(c => `
+                <tr>
+                  <td><strong>${esc(c.slug)}</strong></td>
+                  <td>${esc(c.title)}</td>
+                  <td>${contestStatePill(c.state || c.status)}</td>
+                  <td>${c.problem_count || (c.problems || []).length || 0}</td>
+                  <td>${formatDate(c.start_at)}</td>
+                  <td>${formatDate(c.end_at)}</td>
+                  <td>
+                    <div class="row gap-xs flex-wrap">
+                      <a href="/contests/${esc(c.slug)}" class="button ghost sm" data-link>查看</a>
+                      <button class="button ghost sm" onclick="showContestSettingsModal('${esc(c.slug)}')">高级</button>
+                      <button class="button ghost sm" onclick="showRegistrationModal('${esc(c.slug)}')">报名</button>
+                      <button class="button ghost sm" onclick="showAnnouncementModal('${esc(c.slug)}')">公告</button>
+                      <button class="button ghost sm" onclick="window.open('/api/admin/contests/${esc(c.slug)}/registrations.csv')">📥 注册CSV</button>
+                      <button class="button ghost sm" onclick="window.open('/api/admin/contests/${esc(c.slug)}/scoreboard-advanced.csv')">📥 榜单CSV</button>
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+function showCreateContestModal() {
+  openModal({
+    title: '新建比赛',
+    wide: true,
+    body: `
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cSlug">Slug (唯一标识)</label>
+          <input type="text" id="cSlug" placeholder="例: spring-2026" />
+        </div>
+        <div class="form-group">
+          <label for="cTitle">标题</label>
+          <input type="text" id="cTitle" placeholder="例: 2026 春季 AI 赛" />
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="cStart">开始时间</label>
+          <input type="datetime-local" id="cStart" />
+        </div>
+        <div class="form-group">
+          <label for="cEnd">结束时间</label>
+          <input type="datetime-local" id="cEnd" />
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="cProblems">题目 Slugs (逗号或换行分隔)</label>
+        <textarea id="cProblems" rows="3" placeholder="problem-a, problem-b"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="cDesc">描述 (Markdown)</label>
+        <textarea id="cDesc" rows="5" placeholder="比赛描述…"></textarea>
+      </div>
+      <div id="createContestError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="button ghost" onclick="closeModal()">取消</button>
+      <button class="button" onclick="createContest()">创建</button>
+    `,
+  });
+}
+
+async function createContest() {
+  const slug = $('cSlug')?.value?.trim();
+  const title = $('cTitle')?.value?.trim();
+  if (!slug || !title) { toast('请填写 Slug 和标题', 'warning'); return; }
+  const startAt = $('cStart')?.value ? new Date($('cStart').value).toISOString() : undefined;
+  const endAt = $('cEnd')?.value ? new Date($('cEnd').value).toISOString() : undefined;
+  const problemSlugs = ($('cProblems')?.value || '').split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
+  const desc = $('cDesc')?.value || '';
+  try {
+    await api('/api/admin/contests/upsert', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug, title, description_md: desc,
+        start_at: startAt, end_at: endAt,
+        problem_slugs: problemSlugs,
+      }),
+    });
+    closeModal();
+    toast('比赛创建成功', 'success');
+    renderContestAdmin();
+  } catch (err) {
+    const el = $('createContestError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+async function showContestSettingsModal(slug) {
+  try {
+    const data = await api(`/api/admin/contests/${slug}/full-settings`, { headers: authHeaders() });
+    const c = data.contest || {};
+    const a = data.access || {};
+    openModal({
+      title: `比赛设置 — ${slug}`,
+      wide: true,
+      body: `
+        <div class="form-row">
+          <div class="form-group">
+            <label for="csVisibility">可见性</label>
+            <select id="csVisibility">
+              <option value="PUBLIC" ${c.visibility === 'PUBLIC' ? 'selected' : ''}>PUBLIC</option>
+              <option value="PRIVATE" ${c.visibility === 'PRIVATE' ? 'selected' : ''}>PRIVATE</option>
+              <option value="UNLISTED" ${c.visibility === 'UNLISTED' ? 'selected' : ''}>UNLISTED</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="csRegMode">注册模式</label>
+            <select id="csRegMode">
+              <option value="OPEN" ${c.registration_mode === 'OPEN' ? 'selected' : ''}>OPEN</option>
+              <option value="INVITE" ${c.registration_mode === 'INVITE' ? 'selected' : ''}>INVITE</option>
+              <option value="APPROVAL" ${c.registration_mode === 'APPROVAL' ? 'selected' : ''}>APPROVAL</option>
+              <option value="CLOSED" ${c.registration_mode === 'CLOSED' ? 'selected' : ''}>CLOSED</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="csScoreMode">排行榜模式</label>
+            <select id="csScoreMode">
+              <option value="SCORE" ${c.scoreboard_mode === 'SCORE' ? 'selected' : ''}>SCORE</option>
+              <option value="ACM" ${c.scoreboard_mode === 'ACM' ? 'selected' : ''}>ACM</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="csInviteCode">邀请码</label>
+            <input type="text" id="csInviteCode" value="${esc(c.invite_code || '')}" placeholder="留空则无需邀请码" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label for="csPenalty">ACM 罚时 (分钟)</label>
+            <input type="number" id="csPenalty" value="${c.penalty_minutes || 20}" />
+          </div>
+          <div class="form-group">
+            <label for="csFreeze">榜单冻结时间 (ISO)</label>
+            <input type="text" id="csFreeze" value="${esc(c.freeze_at || '')}" placeholder="例: 2026-06-01T12:00:00Z" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="csHideProblems" ${c.hide_problems_before_start ? 'checked' : ''} /> 开始前隐藏题目</label>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="csAllowJoin" ${c.allow_join_after_start !== false ? 'checked' : ''} /> 允许开始后加入</label>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="csShowScoreboard" ${c.scoreboard_visible !== false ? 'checked' : ''} /> 显示排行榜</label>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="csEnableQA" ${c.questions_enabled !== false ? 'checked' : ''} /> 启用答疑</label>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="csEnableAnn" ${c.announcements_enabled !== false ? 'checked' : ''} /> 启用公告</label>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label"><input type="checkbox" id="csShowPrivate" ${c.show_private_after_end ? 'checked' : ''} /> 结束后显示最终分</label>
+        </div>
+        <div id="csError" class="notice error" style="display:none"></div>
+      `,
+      footer: `
+        <button class="button ghost" onclick="closeModal()">取消</button>
+        <button class="button" onclick="saveContestSettings('${esc(slug)}')">保存</button>
+      `,
+    });
+  } catch (err) {
+    toast(`加载设置失败: ${err.message}`, 'error');
+  }
+}
+
+async function saveContestSettings(slug) {
+  try {
+    await api(`/api/admin/contests/${slug}/full-settings`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visibility: $('csVisibility')?.value,
+        registration_mode: $('csRegMode')?.value,
+        scoreboard_mode: $('csScoreMode')?.value,
+        invite_code: $('csInviteCode')?.value || null,
+        penalty_minutes: parseInt($('csPenalty')?.value) || 20,
+        freeze_at: $('csFreeze')?.value || null,
+        hide_problems_before_start: $('csHideProblems')?.checked,
+        allow_join_after_start: $('csAllowJoin')?.checked,
+        scoreboard_visible: $('csShowScoreboard')?.checked,
+        questions_enabled: $('csEnableQA')?.checked,
+        announcements_enabled: $('csEnableAnn')?.checked,
+        show_private_after_end: $('csShowPrivate')?.checked,
+      }),
+    });
+    closeModal();
+    toast('设置已保存', 'success');
+    renderContestAdmin();
+  } catch (err) {
+    const el = $('csError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+async function showRegistrationModal(slug) {
+  try {
+    const data = await api(`/api/admin/contests/${slug}/registrations`, { headers: authHeaders() });
+    const items = data.items || [];
+    openModal({
+      title: `报名管理 — ${slug}`,
+      wide: true,
+      body: `
+        <div class="card mb-md">
+          <h4 class="card-title mb-md">批量添加用户</h4>
+          <div class="form-group">
+            <textarea id="bulkUsers" rows="3" placeholder="用户名或邮箱，逗号/换行分隔"></textarea>
+          </div>
+          <div class="row gap-sm">
+            <button class="button sm" onclick="bulkAddUsers('${esc(slug)}', 'ACCEPTED')">添加 (自动通过)</button>
+            <button class="button ghost sm" onclick="bulkAddUsers('${esc(slug)}', 'PENDING')">添加 (待审核)</button>
+          </div>
+          <div id="bulkResult" class="mt-sm"></div>
+        </div>
+        <h4 class="mb-md">注册列表 (${items.length})</h4>
+        <div id="regList">
+          ${items.length === 0 ? emptyBox('暂无注册') : `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>用户名</th><th>邮箱</th><th>状态</th><th>加入时间</th><th>操作</th></tr></thead>
+                <tbody>
+                  ${items.map(r => `
+                    <tr>
+                      <td>${esc(r.username)}</td>
+                      <td>${esc(r.email || '—')}</td>
+                      <td>${statusPill(r.status)}</td>
+                      <td>${formatDate(r.joined_at)}</td>
+                      <td>
+                        <div class="row gap-xs">
+                          <button class="button ghost sm success" onclick="setRegStatus('${esc(slug)}', ${r.user_id}, 'ACCEPTED')">通过</button>
+                          <button class="button ghost sm" onclick="setRegStatus('${esc(slug)}', ${r.user_id}, 'PENDING')">待审</button>
+                          <button class="button ghost sm danger" onclick="setRegStatus('${esc(slug)}', ${r.user_id}, 'REJECTED')">拒绝</button>
+                        </div>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      `,
+      footer: `<button class="button ghost" onclick="closeModal()">关闭</button>`,
+    });
+  } catch (err) {
+    toast(`加载注册列表失败: ${err.message}`, 'error');
+  }
+}
+
+async function setRegStatus(slug, userId, status) {
+  try {
+    await api(`/api/admin/contests/${slug}/registrations/${userId}/status`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    toast('状态已更新', 'success');
+    showRegistrationModal(slug); // refresh
+  } catch (err) {
+    toast(`操作失败: ${err.message}`, 'error');
+  }
+}
+
+async function bulkAddUsers(slug, status) {
+  const users = $('bulkUsers')?.value?.trim();
+  if (!users) { toast('请输入用户名', 'warning'); return; }
+  const resultEl = $('bulkResult');
+  try {
+    const data = await api(`/api/admin/contests/${slug}/registrations/bulk-add`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ users, status }),
+    });
+    const added = data.added || [];
+    const missing = data.missing || [];
+    resultEl.innerHTML = `
+      <div class="notice success">添加成功: ${added.length} 人</div>
+      ${missing.length ? `<div class="notice warning mt-sm">未找到: ${missing.join(', ')}</div>` : ''}
+    `;
+    setTimeout(() => showRegistrationModal(slug), 1500);
+  } catch (err) {
+    resultEl.innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+function showAnnouncementModal(slug) {
+  openModal({
+    title: `发布公告 — ${slug}`,
+    body: `
+      <div class="form-group">
+        <label for="annTitle">标题</label>
+        <input type="text" id="annTitle" placeholder="公告标题" />
+      </div>
+      <div class="form-group">
+        <label for="annBody">内容 (Markdown)</label>
+        <textarea id="annBody" rows="6" placeholder="公告内容…"></textarea>
+      </div>
+      <div id="annError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="button ghost" onclick="closeModal()">取消</button>
+      <button class="button" onclick="publishAnnouncement('${esc(slug)}')">发布</button>
+    `,
+  });
+}
+
+async function publishAnnouncement(slug) {
+  const title = $('annTitle')?.value?.trim();
+  const body = $('annBody')?.value || '';
+  if (!title) { toast('请输入标题', 'warning'); return; }
+  try {
+    await api(`/api/admin/contests/${slug}/announcements`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body_md: body }),
+    });
+    closeModal();
+    toast('公告已发布', 'success');
+  } catch (err) {
+    const el = $('annError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ROUTER
+// ═══════════════════════════════════════════════════════════════════════════
+
+function route() {
+  clearPageState();
+  let path = location.pathname || '/';
+
+  // Legacy hash routes
+  if (location.hash.startsWith('#/')) {
+    const newPath = location.hash.slice(1);
+    history.replaceState(null, '', newPath);
+    path = newPath;
+  }
+
+  state.currentRoute = path;
+  updateNav();
+
+  const app = $('app');
+  app.className = 'content animate-fade-in';
+
+  // Route matching
+  if (path === '/') return renderDashboard();
+  if (path === '/problems') return renderProblems();
+  if (path === '/contests') return renderContests();
+  if (path === '/submissions') return renderSubmissions();
+  if (path === '/account') return renderAccount();
+  if (path === '/admin/users' || path === '/users') return renderUsers();
+  if (path === '/problem-admin') return renderProblemAdmin();
+  if (path === '/contest-admin') return renderContestAdmin();
+
+  // Parameterized routes
+  let match;
+  if ((match = path.match(/^\/contests\/([^/]+)\/problems\/([^/]+)$/))) {
+    return renderProblemDetail(match[2], match[1]);
+  }
+  if ((match = path.match(/^\/contests\/([^/]+)$/))) {
+    return renderContestDetail(match[1]);
+  }
+  if ((match = path.match(/^\/problems\/([^/]+)$/))) {
+    return renderProblemDetail(match[1]);
+  }
+  if ((match = path.match(/^\/submissions\/(\d+)$/))) {
+    return renderSubmissionDetail(match[1]);
+  }
+
+  // 404
+  setPage('页面不存在', '404');
+  app.innerHTML = `
+    <div class="empty-state">
+      <div class="empty-icon">🔍</div>
+      <h2>页面不存在</h2>
+      <p class="text-muted">请检查 URL 或返回首页</p>
+      <a href="/" class="button mt-md" data-link>返回首页</a>
+    </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════════════════
+
+document.addEventListener('DOMContentLoaded', () => {
+  // Auth button
+  $('authBtn').addEventListener('click', () => showAuthModal());
+  $('logoutBtn').addEventListener('click', logout);
+
+  // Mobile menu
+  $('menuBtn').addEventListener('click', () => {
+    $('sidebar').classList.toggle('open');
+    $('sidebarOverlay').classList.toggle('open');
+  });
+  $('sidebarOverlay').addEventListener('click', () => {
+    $('sidebar').classList.remove('open');
+    $('sidebarOverlay').classList.remove('open');
+  });
+
+  // Modal close
+  $('modalCloseBtn').addEventListener('click', closeModal);
+  $('modalRoot').addEventListener('click', (e) => {
+    if (e.target.id === 'modalRoot') closeModal();
+  });
+
+  // SPA link handling
+  document.addEventListener('click', handleSpaLinkClick);
+  window.addEventListener('popstate', () => route());
+
+  // File upload styling
+  document.addEventListener('change', (e) => {
+    if (e.target.type === 'file') {
+      const label = e.target.closest('.file-upload')?.querySelector('.file-upload-label span:last-child');
+      if (label && e.target.files.length) {
+        label.textContent = e.target.files[0].name;
+      }
+    }
+  });
+
+  // Init
+  checkHealth();
+  loadMe().then(() => route());
+});
+
+// ─── Global exports for inline handlers ─────────────────────────────────────
+
+Object.assign(window, {
+  navigate, showAuthModal, switchAuthTab, submitAuth, logout,
+  submitSolution, showContestTab,
+  joinContest, submitInviteCode, leaveContest,
+  showAskQuestionModal, submitQuestion,
+  showAnswerQuestionModal, submitAnswer, closeQuestion,
+  changePassword, showResetPasswordModal, resetUserPassword,
+  toggleUserRole, toggleUserDisabled,
+  importProblem, setProblemStatus,
+  showCreateContestModal, createContest,
+  showContestSettingsModal, saveContestSettings,
+  showRegistrationModal, setRegStatus, bulkAddUsers,
+  showAnnouncementModal, publishAnnouncement,
+  closeModal,
+});
