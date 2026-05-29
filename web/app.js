@@ -204,15 +204,17 @@ function updateNav() {
   const isAdmin = state.user && state.user.role === 'ADMIN';
   $('adminNav').style.display = isAdmin ? '' : 'none';
 
-  $('userPill').style.display = state.user ? 'flex' : 'none';
+  $('userDropdownContainer').style.display = state.user ? 'block' : 'none';
   $('authBtn').style.display = state.user ? 'none' : '';
-  $('logoutBtn').style.display = state.user ? 'inline-flex' : 'none';
 
   const userPill = $('userPill');
   if (state.user) {
     userPill.innerHTML = `
       <div class="user-avatar">${esc(state.user.username[0].toUpperCase())}</div>
       <span class="user-name">${esc(state.user.username)}</span>
+      <svg class="dropdown-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 6px;">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
     `;
   }
 
@@ -2852,6 +2854,19 @@ function route() {
 document.addEventListener('DOMContentLoaded', () => {
   $('authBtn').addEventListener('click', () => showAuthModal());
   $('logoutBtn').addEventListener('click', logout);
+
+  // User profile dropdown toggle
+  const userPill = $('userPill');
+  if (userPill) {
+    userPill.addEventListener('click', (e) => {
+      e.stopPropagation();
+      $('userDropdownContainer').classList.toggle('active');
+    });
+  }
+  document.addEventListener('click', () => {
+    const container = $('userDropdownContainer');
+    if (container) container.classList.remove('active');
+  });
 
   // Mobile drawer trigger
   $('menuBtn').addEventListener('click', () => {

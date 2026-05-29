@@ -2009,3 +2009,77 @@ tr:last-child td {
   color: var(--text-main);
 }
 
+/* User Profile Dropdown Menu */
+.user-dropdown-container {
+  position: relative;
+}
+
+.user-dropdown-container.active .dropdown-menu {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.user-dropdown-container.active .dropdown-arrow {
+  transform: rotate(180deg);
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 160px;
+  background: var(--bg-card-solid);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg), var(--shadow-accent-glow);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-8px);
+  transition: all var(--transition-base);
+  z-index: 100;
+}
+
+.dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+  transition: all var(--transition-fast);
+}
+
+.dropdown-item:hover {
+  background: hsla(0, 0%, 100%, 0.05);
+  color: var(--text-main);
+}
+
+.dropdown-item.text-danger {
+  color: var(--color-danger);
+}
+
+.dropdown-item.text-danger:hover {
+  background: var(--bg-danger-subtle);
+  color: hsl(var(--hue-danger), 95%, 70%);
+}
+
+.dropdown-arrow {
+  transition: transform var(--transition-fast);
+}
+
+
