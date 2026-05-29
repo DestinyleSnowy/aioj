@@ -1,0 +1,62 @@
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.bootstrap import ensure_admin, validate_runtime_configuration
+from app.migrations import run_migrations
+from app.routers.admin_users import router as admin_users_router
+from app.routers.auth import router as auth_router
+from app.routers.contest_admin import router as contest_admin_router
+from app.routers.contests import router as contests_router
+from app.routers.internal import router as internal_router
+from app.routers.problems import router as problems_router
+from app.routers.submissions import router as submissions_router
+from app.routers.system import router as system_router
+from app.services.system_settings import ensure_default_settings
+from app.settings import settings
+from app.storage import (
+    S3_BUCKET_LOGS,
+    S3_BUCKET_PROBLEMS,
+    S3_BUCKET_SUBMISSIONS,
+    ensure_bucket,
+)
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    validate_runtime_configuration()
+    if settings.run_migrations_on_startup:
+        run_migrations()
+    ensure_default_settings()
+    ensure_bucket(S3_BUCKET_PROBLEMS)
+    ensure_bucket(S3_BUCKET_SUBMISSIONS)
+    ensure_bucket(S3_BUCKET_LOGS)
+    if settings.bootstrap_admin_on_startup:
+        ensure_admin()
+    yield
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="AIOJ API", version="scorer-v1", lifespan=lifespan)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allowed_origins,
+        allow_credentials="*" not in settings.cors_allowed_origins,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    for router in (
+        system_router,
+        auth_router,
+        admin_users_router,
+        problems_router,
+        submissions_router,
+        internal_router,
+        contests_router,
+        contest_admin_router,
+    ):
+        app.include_router(router)
+
+    return app

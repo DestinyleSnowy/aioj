@@ -19,8 +19,14 @@ docker compose version
 echo "[deploy] building api..."
 docker compose build api
 
-echo "[deploy] starting services..."
-docker compose up -d --remove-orphans
+echo "[deploy] starting stateful dependencies..."
+docker compose up -d postgres redis minio
+
+echo "[deploy] running database migrations..."
+docker compose run --rm api alembic upgrade head
+
+echo "[deploy] starting application services..."
+docker compose up -d --remove-orphans api worker caddy
 
 echo "[deploy] waiting for api health..."
 for i in $(seq 1 45); do
@@ -37,9 +43,6 @@ for i in $(seq 1 45); do
   fi
   sleep 2
 done
-
-echo "[deploy] caddy check..."
-docker compose up -d caddy
 
 echo "[deploy] final status:"
 docker compose ps

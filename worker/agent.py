@@ -53,9 +53,13 @@ def safe_extract(zip_path: Path, dest: Path):
 def request_json(method, path, **kwargs):
     url = f"{API_BASE}{path}"
     last = None
+    headers = dict(kwargs.pop("headers", {}) or {})
+    internal_api_token = os.environ.get("INTERNAL_API_TOKEN", "")
+    if internal_api_token:
+        headers.setdefault("X-Internal-Token", internal_api_token)
     for i in range(5):
         try:
-            r = requests.request(method, url, timeout=20, **kwargs)
+            r = requests.request(method, url, timeout=20, headers=headers, **kwargs)
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -67,7 +71,7 @@ def request_json(method, path, **kwargs):
 
 
 def claim_job():
-    data = request_json("POST", "/api/dev/judge/claim")
+    data = request_json("POST", "/api/internal/judge/claim")
     return data.get("job")
 
 
@@ -79,7 +83,7 @@ def finish_job(job_id, status, runtime_ms=None, memory_peak_mb=None, error_messa
         "memory_peak_mb": memory_peak_mb,
         "error_message": error_message,
     }
-    return request_json("POST", "/api/dev/judge/finish", json=payload)
+    return request_json("POST", "/api/internal/judge/finish", json=payload)
 
 
 def download_object(s3, bucket, key, path: Path):

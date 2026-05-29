@@ -5,6 +5,10 @@ yxyx.space, www.yxyx.space {
         respond "forbidden" 403
     }
 
+    handle /api/dev/* {
+        respond "forbidden" 403
+    }
+
     handle /api/* {
         reverse_proxy api:8000
     }

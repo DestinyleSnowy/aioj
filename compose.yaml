@@ -9,6 +9,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
       - aioj-net
 
@@ -19,6 +24,11 @@ services:
     command: ["redis-server", "--requirepass", "${REDIS_PASSWORD}"]
     volumes:
       - ./data/redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a '${REDIS_PASSWORD}' ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     networks:
       - aioj-net
 
@@ -39,7 +49,9 @@ services:
       - aioj-net
 
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: aioj-api
     restart: unless-stopped
     environment:
@@ -55,21 +67,35 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXP_SECONDS: 604800
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://yxyx.space,https://www.yxyx.space,http://127.0.0.1,http://localhost,http://127.0.0.1:8000,http://localhost:8000}
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      BOOTSTRAP_ADMIN_ON_STARTUP: "true"
+      ALLOW_INSECURE_ADMIN_PASSWORD: "false"
       MAX_SOURCE_ZIP_MB: 20
       MAX_SOURCE_FILES: 50
       MAX_SOURCE_UNCOMPRESSED_MB: 50
       MAX_PROBLEM_ZIP_MB: 200
+      MAX_PROBLEM_FILES: 500
+      MAX_PROBLEM_UNCOMPRESSED_MB: 1024
       STALE_JOB_MINUTES: 15
       MAX_JOB_ATTEMPTS: 3
+      JUDGE_NODE_NAME: api-local-worker
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
-      - postgres
-      - redis
-      - minio
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
     networks:
       - aioj-net
 
@@ -78,7 +104,8 @@ services:
     container_name: aioj-caddy
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"

@@ -1,0 +1,243 @@
+"""Create the core application and contest schema.
+
+Revision ID: 20260529_0001
+Revises:
+Create Date: 2026-05-29 12:00:00
+"""
+
+from alembic import op
+
+
+# revision identifiers, used by Alembic.
+revision = "20260529_0001"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.execute(
+        """
+        create table if not exists users (
+          id bigserial primary key,
+          username text unique not null,
+          email text unique,
+          password_hash text not null,
+          role text not null default 'USER',
+          is_disabled boolean not null default false,
+          created_at timestamptz not null default now()
+        );
+
+        create table if not exists problems (
+          id bigserial primary key,
+          slug text unique not null,
+          title text not null,
+          statement_md text not null default '',
+          metric text not null default 'accuracy',
+          higher_is_better boolean not null default true,
+          time_limit_sec int not null default 60,
+          memory_limit_mb int not null default 2048,
+          cpu_count int not null default 2,
+          output_limit_mb int not null default 64,
+          status text not null default 'DRAFT',
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        );
+
+        create table if not exists problem_versions (
+          id bigserial primary key,
+          problem_id bigint not null references problems(id) on delete cascade,
+          version text not null,
+          statement_md text not null default '',
+          test_input_object_key text not null,
+          label_object_key text not null,
+          sample_submission_object_key text not null,
+          scorer_object_key text,
+          runner_image text not null default 'aioj-python-basic:latest',
+          run_command jsonb not null default '["python","/workspace/predict.py","--input","/input/test.csv","--output","/output/submission.csv"]',
+          created_at timestamptz not null default now(),
+          unique(problem_id, version)
+        );
+
+        create table if not exists contests (
+          id bigserial primary key,
+          slug text unique not null,
+          title text not null,
+          description_md text not null default '',
+          status text not null default 'DRAFT',
+          start_at timestamptz,
+          end_at timestamptz,
+          visibility text not null default 'PUBLIC',
+          registration_mode text not null default 'OPEN',
+          invite_code text,
+          hide_problems_before_start boolean not null default false,
+          allow_join_after_start boolean not null default true,
+          scoreboard_mode text not null default 'SCORE',
+          penalty_minutes integer not null default 20,
+          scoreboard_visible boolean not null default true,
+          questions_enabled boolean not null default true,
+          announcements_enabled boolean not null default true,
+          freeze_at timestamptz,
+          show_private_after_end boolean not null default false,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        );
+
+        create table if not exists submissions (
+          id bigserial primary key,
+          user_id bigint references users(id),
+          problem_id bigint not null references problems(id),
+          problem_version_id bigint not null references problem_versions(id),
+          contest_id bigint references contests(id) on delete set null,
+          status text not null default 'QUEUED',
+          source_object_key text not null,
+          output_object_key text,
+          log_object_key text,
+          public_score double precision,
+          private_score double precision,
+          metrics jsonb,
+          error_message text,
+          runtime_ms int,
+          memory_peak_mb int,
+          created_at timestamptz not null default now(),
+          judged_at timestamptz
+        );
+
+        create table if not exists contest_problems (
+          contest_id bigint not null references contests(id) on delete cascade,
+          problem_id bigint not null references problems(id) on delete cascade,
+          display_order integer not null default 0,
+          primary key (contest_id, problem_id)
+        );
+
+        create table if not exists contest_participants (
+          contest_id bigint not null references contests(id) on delete cascade,
+          user_id bigint not null references users(id) on delete cascade,
+          status text not null default 'ACCEPTED',
+          invite_code_used text,
+          note text,
+          joined_at timestamptz not null default now(),
+          approved_at timestamptz,
+          rejected_at timestamptz,
+          primary key (contest_id, user_id)
+        );
+
+        create table if not exists contest_announcements (
+          id bigserial primary key,
+          contest_id bigint not null references contests(id) on delete cascade,
+          title text not null,
+          body_md text not null default '',
+          is_published boolean not null default true,
+          created_at timestamptz not null default now(),
+          updated_at timestamptz not null default now()
+        );
+
+        create table if not exists contest_questions (
+          id bigserial primary key,
+          contest_id bigint not null references contests(id) on delete cascade,
+          user_id bigint references users(id) on delete set null,
+          title text not null,
+          body_md text not null default '',
+          answer_md text,
+          status text not null default 'OPEN',
+          is_public boolean not null default false,
+          created_at timestamptz not null default now(),
+          answered_at timestamptz
+        );
+
+        create table if not exists judge_nodes (
+          id bigserial primary key,
+          name text unique not null,
+          token_hash text not null,
+          tags text[] not null default '{}',
+          max_parallel int not null default 1,
+          status text not null default 'OFFLINE',
+          last_heartbeat_at timestamptz,
+          created_at timestamptz not null default now()
+        );
+
+        create table if not exists judge_jobs (
+          id bigserial primary key,
+          submission_id bigint not null references submissions(id) on delete cascade,
+          problem_id bigint not null references problems(id),
+          required_tags text[] not null default '{}',
+          status text not null default 'PENDING',
+          attempt int not null default 0,
+          claimed_by bigint references judge_nodes(id),
+          claimed_at timestamptz,
+          started_at timestamptz,
+          finished_at timestamptz,
+          run_spec jsonb not null default '{}',
+          created_at timestamptz not null default now()
+        );
+
+        create table if not exists leaderboard_entries (
+          id bigserial primary key,
+          problem_id bigint not null references problems(id) on delete cascade,
+          user_id bigint references users(id),
+          username text not null default 'anonymous',
+          best_submission_id bigint references submissions(id),
+          public_score double precision,
+          private_score double precision,
+          updated_at timestamptz not null default now()
+        );
+
+        create table if not exists system_settings (
+          key text primary key,
+          value text not null,
+          updated_at timestamptz not null default now()
+        );
+
+        update contest_participants
+        set status = 'ACCEPTED'
+        where status is null or status = '';
+
+        create index if not exists judge_jobs_status_idx on judge_jobs(status, id);
+        create index if not exists submissions_problem_idx on submissions(problem_id, created_at desc);
+        create index if not exists leaderboard_problem_idx on leaderboard_entries(problem_id, public_score desc);
+        create index if not exists idx_submissions_contest_id on submissions(contest_id);
+        create index if not exists idx_contest_problems_contest_id on contest_problems(contest_id);
+        create index if not exists idx_contest_participants_contest_id on contest_participants(contest_id);
+        create index if not exists idx_contest_participants_user_id on contest_participants(user_id);
+        create index if not exists idx_contest_participants_status on contest_participants(contest_id, status);
+        create index if not exists idx_contest_announcements_contest_id on contest_announcements(contest_id);
+        create index if not exists idx_contest_questions_contest_id on contest_questions(contest_id);
+        create index if not exists idx_contest_questions_user_id on contest_questions(user_id);
+        create index if not exists idx_submissions_contest_scoreboard on submissions(contest_id, status, user_id, problem_id);
+        create index if not exists idx_submissions_contest_full_v6 on submissions(contest_id, user_id, problem_id, status, created_at);
+        """
+    )
+
+
+def downgrade() -> None:
+    op.execute(
+        """
+        drop index if exists idx_submissions_contest_full_v6;
+        drop index if exists idx_submissions_contest_scoreboard;
+        drop index if exists idx_contest_questions_user_id;
+        drop index if exists idx_contest_questions_contest_id;
+        drop index if exists idx_contest_announcements_contest_id;
+        drop index if exists idx_contest_participants_status;
+        drop index if exists idx_contest_participants_user_id;
+        drop index if exists idx_contest_participants_contest_id;
+        drop index if exists idx_contest_problems_contest_id;
+        drop index if exists idx_submissions_contest_id;
+        drop index if exists leaderboard_problem_idx;
+        drop index if exists submissions_problem_idx;
+        drop index if exists judge_jobs_status_idx;
+
+        drop table if exists system_settings;
+        drop table if exists leaderboard_entries;
+        drop table if exists judge_jobs;
+        drop table if exists judge_nodes;
+        drop table if exists contest_questions;
+        drop table if exists contest_announcements;
+        drop table if exists contest_participants;
+        drop table if exists contest_problems;
+        drop table if exists submissions;
+        drop table if exists contests;
+        drop table if exists problem_versions;
+        drop table if exists problems;
+        drop table if exists users;
+        """
+    )
