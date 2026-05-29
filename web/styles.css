@@ -1960,3 +1960,52 @@ tr:last-child td {
 .qa-bubble-body:hover {
   transform: translateY(-1px);
 }
+
+/* User Profile Pill / Capsule in Header & Footer */
+.user-profile-capsule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 4px 14px 4px 4px;
+  background: hsla(0, 0%, 100%, 0.03);
+  border: var(--border-subtle);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.user-profile-capsule:hover {
+  background: hsla(0, 0%, 100%, 0.08);
+  border-color: hsla(var(--hue-accent), 85%, 63%, 0.3);
+  box-shadow: 0 0 15px hsla(var(--hue-accent), 85%, 63%, 0.1);
+  transform: translateY(-1px);
+}
+
+.user-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--grad-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 14px;
+  font-family: var(--font-display);
+  text-transform: uppercase;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.user-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  transition: color var(--transition-fast);
+}
+
+.user-profile-capsule:hover .user-name {
+  color: var(--text-main);
+}
+

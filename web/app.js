@@ -448,9 +448,6 @@ async function renderDashboard() {
       <div class="two-col" style="grid-template-columns: 1fr 340px; align-items: start; gap: var(--space-lg);">
         <!-- Main Column (Left) -->
         <div style="display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0;">
-          <div class="dashboard-hero" style="padding: var(--space-lg) var(--space-xl);">
-            <h2 class="dashboard-hero-title" style="margin: 0; font-size: 24px;">AIOJ 智能机器学习评测系统</h2>
-          </div>
 
           <div class="stats-row" style="margin-bottom: 0;">
             <div class="stat-card">
