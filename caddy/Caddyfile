@@ -1,0 +1,21 @@
+yxyx.space, www.yxyx.space {
+    encode gzip
+
+    handle /api/internal/* {
+        respond "forbidden" 403
+    }
+
+    handle /api/* {
+        reverse_proxy api:8000
+    }
+
+    handle /health {
+        reverse_proxy api:8000
+    }
+
+    handle {
+        root * /srv
+        try_files {path} /index.html
+        file_server
+    }
+}

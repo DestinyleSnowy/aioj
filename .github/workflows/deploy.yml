@@ -1,0 +1,79 @@
+name: Deploy AIOJ to VM
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: aioj-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      VM_HOST: ${{ secrets.VM_HOST }}
+      VM_USER: ${{ secrets.VM_USER }}
+      VM_PORT: ${{ secrets.VM_PORT }}
+      VM_PATH: ${{ secrets.VM_PATH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${VM_HOST}" || (echo "Missing secret VM_HOST" && exit 1)
+          test -n "${VM_USER}" || (echo "Missing secret VM_USER" && exit 1)
+          test -n "${VM_PORT}" || (echo "Missing secret VM_PORT" && exit 1)
+          test -n "${VM_PATH}" || (echo "Missing secret VM_PATH" && exit 1)
+          test -n "${{ secrets.VM_SSH_KEY }}" || (echo "Missing secret VM_SSH_KEY" && exit 1)
+
+      - name: Configure SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VM_SSH_KEY }}" > ~/.ssh/aioj_deploy_key
+          chmod 600 ~/.ssh/aioj_deploy_key
+          ssh-keyscan -p "${VM_PORT}" -H "${VM_HOST}" >> ~/.ssh/known_hosts
+
+      - name: Ensure remote path exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/aioj_deploy_key -p "${VM_PORT}" "${VM_USER}@${VM_HOST}" "mkdir -p '${VM_PATH}'"
+
+      - name: Sync files to VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -az --delete \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            --exclude 'backups/' \
+            --exclude 'runs/' \
+            --exclude 'data/' \
+            --exclude 'postgres-data/' \
+            --exclude 'minio-data/' \
+            --exclude 'storage/' \
+            --exclude 'uploads/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude '*.log' \
+            --exclude 'node_modules/' \
+            -e "ssh -i ~/.ssh/aioj_deploy_key -p ${VM_PORT}" \
+            ./ "${VM_USER}@${VM_HOST}:${VM_PATH}/"
+
+      - name: Run server deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/aioj_deploy_key -p "${VM_PORT}" "${VM_USER}@${VM_HOST}" "cd '${VM_PATH}' && bash scripts/server_deploy.sh"

@@ -1,0 +1,2148 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AIOJ</title>
+  <!-- History Router enabled -->
+  <style>
+    :root {
+      --bg: #f4f7fb;
+      --panel: #ffffff;
+      --panel-2: #f8fafc;
+      --text: #0f172a;
+      --muted: #64748b;
+      --line: #e2e8f0;
+      --primary: #2563eb;
+      --primary-2: #1d4ed8;
+      --success: #16a34a;
+      --warning: #ca8a04;
+      --danger: #dc2626;
+      --nav: #081225;
+      --nav-2: #0f1b33;
+      --shadow: 0 20px 50px rgba(15, 23, 42, 0.08);
+      --radius: 18px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      color: var(--text);
+      background: var(--bg);
+      font-family: var(--sans);
+    }
+
+    a { color: inherit; text-decoration: none; }
+    button, input, textarea, select { font: inherit; }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 276px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 22px 18px;
+      background: var(--nav);
+      color: #e5edf8;
+      display: flex;
+      flex-direction: column;
+      z-index: 20;
+    }
+
+    .brand {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      padding: 8px 8px 22px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      margin-bottom: 18px;
+    }
+
+    .brand-logo {
+      width: 42px;
+      height: 42px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, #22c55e, #2563eb);
+      color: white;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      box-shadow: 0 12px 28px rgba(37, 99, 235, 0.32);
+    }
+
+    .brand-title {
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.05;
+    }
+
+    .brand-subtitle {
+      color: #94a3b8;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .nav-section-title {
+      color: #64748b;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 18px 10px 8px;
+    }
+
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .nav-link {
+      border: 0;
+      width: 100%;
+      color: #cbd5e1;
+      background: transparent;
+      border-radius: 13px;
+      padding: 12px 14px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      cursor: pointer;
+      font-weight: 700;
+      transition: 0.16s ease;
+    }
+
+    .nav-link:hover {
+      background: rgba(255,255,255,0.06);
+      color: #fff;
+    }
+
+    .nav-link.active {
+      background: var(--primary);
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(37,99,235,0.32);
+    }
+
+    .nav-icon {
+      width: 22px;
+      text-align: center;
+      opacity: 0.9;
+    }
+
+    .sidebar-footer {
+      margin-top: auto;
+      padding: 16px 10px 6px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      color: #94a3b8;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      min-height: 82px;
+      padding: 18px 34px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(244,247,251,0.86);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid rgba(226,232,240,0.78);
+    }
+
+    .page-title {
+      font-size: 28px;
+      font-weight: 900;
+      letter-spacing: -0.04em;
+      margin: 0;
+      line-height: 1.1;
+    }
+
+    .page-subtitle {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .status-online {
+      color: var(--success);
+      font-weight: 900;
+      font-size: 13px;
+    }
+
+    .user-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 8px 22px rgba(15,23,42,0.04);
+      color: #334155;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .content {
+      padding: 28px 34px 52px;
+      width: 100%;
+      max-width: 1360px;
+    }
+
+    .grid { display: grid; gap: 18px; }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-main-side { grid-template-columns: minmax(0, 1fr) 360px; align-items: start; }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .card-header {
+      padding: 20px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+    }
+
+    .card-body { padding: 22px; }
+
+    .stat-card {
+      padding: 20px;
+      border-radius: var(--radius);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .stat-value {
+      margin-top: 10px;
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 950;
+      letter-spacing: -0.06em;
+    }
+
+    .button {
+      border: 0;
+      border-radius: 12px;
+      padding: 10px 14px;
+      background: var(--primary);
+      color: white;
+      font-weight: 900;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: 0.16s ease;
+      min-height: 40px;
+    }
+
+    .button:hover { background: var(--primary-2); transform: translateY(-1px); }
+    .button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .button.secondary { background: #475569; }
+    .button.secondary:hover { background: #334155; }
+    .button.ghost { background: #f1f5f9; color: #334155; border: 1px solid var(--line); }
+    .button.ghost:hover { background: #e2e8f0; }
+    .button.danger { background: var(--danger); }
+    .button.success { background: var(--success); }
+    .button.small { min-height: 32px; padding: 7px 10px; font-size: 12px; border-radius: 10px; }
+
+    .form-grid {
+      display: grid;
+      gap: 14px;
+    }
+
+    .form-row {
+      display: grid;
+      gap: 8px;
+    }
+
+    .form-row label {
+      color: #334155;
+      font-weight: 850;
+      font-size: 13px;
+    }
+
+    .input, input, textarea, select {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 13px;
+      padding: 11px 13px;
+      background: #fff;
+      color: var(--text);
+      outline: none;
+    }
+
+    textarea { min-height: 120px; resize: vertical; }
+
+    .input:focus, input:focus, textarea:focus, select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 4px rgba(37,99,235,0.12);
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .muted { color: var(--muted); }
+    .small-text { font-size: 12px; }
+    .strong { font-weight: 900; }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      font-weight: 900;
+      background: #dbeafe;
+      color: #1d4ed8;
+      white-space: nowrap;
+    }
+
+    .pill.gray { background: #eef2f7; color: #475569; }
+    .pill.green { background: #dcfce7; color: #166534; }
+    .pill.yellow { background: #fef3c7; color: #92400e; }
+    .pill.red { background: #fee2e2; color: #991b1b; }
+    .pill.purple { background: #ede9fe; color: #5b21b6; }
+
+    .notice, .success, .error, .warning {
+      border-radius: 14px;
+      padding: 14px 16px;
+      border: 1px solid;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    .notice { background: #eff6ff; border-color: #bfdbfe; color: #1e40af; }
+    .success { background: #ecfdf5; border-color: #bbf7d0; color: #166534; }
+    .error { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .warning { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+
+    .problem-card {
+      display: block;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      transition: 0.16s ease;
+    }
+
+    .problem-card:hover {
+      transform: translateY(-2px);
+      border-color: #bfdbfe;
+      box-shadow: 0 18px 40px rgba(37,99,235,0.1);
+    }
+
+    .problem-title {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+    }
+
+    .problem-slug {
+      margin-top: 5px;
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 13px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 720px;
+      background: white;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 12px 13px;
+      border-bottom: 1px solid var(--line);
+      vertical-align: top;
+      font-size: 14px;
+    }
+
+    th {
+      color: #64748b;
+      background: #f8fafc;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: 11px;
+      font-weight: 950;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .statement {
+      line-height: 1.72;
+      color: #172033;
+    }
+    .statement h1, .statement h2, .statement h3 {
+      letter-spacing: -0.04em;
+      line-height: 1.2;
+    }
+    .statement code {
+      font-family: var(--mono);
+      background: #eef2f7;
+      border: 1px solid #e2e8f0;
+      border-radius: 7px;
+      padding: 2px 6px;
+      font-size: 0.92em;
+    }
+    .codeblock, pre {
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 14px;
+      padding: 16px;
+      overflow: auto;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      background: rgba(15, 23, 42, 0.58);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .modal-backdrop.open { display: flex; }
+
+    .modal {
+      width: min(900px, 100%);
+      max-height: 92vh;
+      overflow: hidden;
+      background: white;
+      border-radius: 22px;
+      box-shadow: 0 30px 100px rgba(15,23,42,0.38);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .modal-header, .modal-footer {
+      padding: 18px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-footer {
+      border-bottom: 0;
+      border-top: 1px solid var(--line);
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      padding: 6px;
+      background: #f1f5f9;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      width: fit-content;
+    }
+
+    .tab {
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 900;
+      color: #64748b;
+    }
+
+    .tab.active {
+      background: #fff;
+      color: var(--primary);
+      box-shadow: 0 6px 14px rgba(15,23,42,0.08);
+    }
+
+    .mobile-menu { display: none; }
+
+    @media (max-width: 980px) {
+      .app-shell { grid-template-columns: 1fr; }
+      .sidebar {
+        position: fixed;
+        inset: 0 auto 0 0;
+        width: 276px;
+        transform: translateX(-100%);
+        transition: transform 0.18s ease;
+      }
+      .sidebar.open { transform: translateX(0); }
+      .mobile-menu { display: inline-flex; }
+      .topbar { padding: 16px 18px; }
+      .content { padding: 20px 18px 42px; }
+      .grid-2, .grid-3, .grid-main-side { grid-template-columns: 1fr; }
+      .page-title { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="/">
+        <div class="brand-logo">AI</div>
+        <div>
+          <div class="brand-title">AIOJ</div>
+          <div class="brand-subtitle">AI Olympiad Judge</div>
+        </div>
+      </a>
+
+      <div class="nav">
+        <a class="nav-link" data-route="/" href="/"><span class="nav-icon">⌂</span>概览</a>
+        <a class="nav-link" data-route="/problems" href="/problems"><span class="nav-icon">▦</span>题库</a>
+        <a class="nav-link" data-route="/contests" href="/contests"><span class="nav-icon">🏆</span>比赛</a>
+        <a class="nav-link" data-route="/submissions" href="/submissions"><span class="nav-icon">↥</span>提交</a>
+        <a class="nav-link" data-route="/account" href="/account"><span class="nav-icon">♟</span>账号设置</a>
+      </div>
+
+      <div id="adminNav">
+        <div class="nav-section-title">Admin</div>
+        <div class="nav">
+          <a class="nav-link" data-route="/admin/users" href="/admin/users"><span class="nav-icon">👥</span>用户管理</a>
+          <a class="nav-link" data-route="/problem-admin" href="/problem-admin"><span class="nav-icon">⚙</span>题目管理</a>
+          <a class="nav-link" data-route="/contest-admin" href="/contest-admin"><span class="nav-icon">⚙</span>比赛管理</a>
+        </div>
+      </div>
+
+      <div class="sidebar-footer" id="sidebarUser">
+        未登录<br />
+        <span class="muted">https://yxyx.space</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="row">
+          <button class="button ghost mobile-menu" id="menuBtn">☰</button>
+          <div>
+            <h1 class="page-title" id="pageTitle">AIOJ</h1>
+            <div class="page-subtitle" id="pageSubtitle">Loading...</div>
+          </div>
+        </div>
+        <div class="top-actions">
+          <span class="status-online" id="apiStatus">API checking</span>
+          <span class="user-pill" id="userPill">未登录</span>
+          <button class="button" id="authBtn">登录</button>
+          <button class="button danger" id="logoutBtn" style="display:none;">退出</button>
+        </div>
+      </header>
+
+      <section class="content" id="app"></section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modalRoot" onclick="modalBackdropClick(event)">
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <h2 class="card-title" id="modalTitle">Modal</h2>
+        <button class="button ghost small" onclick="closeModal()">关闭</button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer" id="modalFooter"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    const state = {
+      token: localStorage.getItem("aioj_token") || "",
+      user: null,
+      healthOk: false,
+      currentRoute: "",
+      countdownTimer: null,
+    };
+
+    function setPage(title, subtitle = "") {
+      $("pageTitle").textContent = title || "AIOJ";
+      $("pageSubtitle").textContent = subtitle || "";
+      document.title = title ? `${title} · AIOJ` : "AIOJ";
+    }
+
+    function authHeaders() {
+      return state.token ? { Authorization: `Bearer ${state.token}` } : {};
+    }
+
+    async function api(path, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      const opts = { ...options, headers };
+
+      if (!(opts.body instanceof FormData) && opts.body && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+      }
+
+      const res = await fetch(path, opts);
+      const contentType = res.headers.get("content-type") || "";
+      let payload;
+      if (contentType.includes("application/json")) {
+        payload = await res.json();
+      } else {
+        payload = await res.text();
+      }
+
+      if (!res.ok) {
+        const detail = typeof payload === "object" ? (payload.detail || payload.message || JSON.stringify(payload)) : payload;
+        throw new Error(detail || `${res.status} ${res.statusText}`);
+      }
+      return payload;
+    }
+
+    async function tryApi(paths, options = {}) {
+      let lastErr;
+      for (const p of paths) {
+        try { return await api(p, options); } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error("No API candidates");
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function formatDate(value) {
+      if (!value) return "";
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) return String(value);
+      return d.toLocaleString();
+    }
+
+    function renderMarkdown(md) {
+      let text = escapeHtml(md || "");
+      text = text.replace(/```([\s\S]*?)```/g, (_, code) => `<pre>${code.trim()}</pre>`);
+      text = text.replace(/^### (.*)$/gm, "<h3>$1</h3>");
+      text = text.replace(/^## (.*)$/gm, "<h2>$1</h2>");
+      text = text.replace(/^# (.*)$/gm, "<h1>$1</h1>");
+      text = text.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+      text = text.replace(/`([^`]+)`/g, "<code>$1</code>");
+      text = text.replace(/\n{2,}/g, "</p><p>");
+      text = text.replace(/\n/g, "<br>");
+      return `<p>${text}</p>`;
+    }
+
+    function emptyBox(text) {
+      return `<div class="notice" style="text-align:center;color:#64748b;background:#f8fafc;border-style:dashed;">${escapeHtml(text || "暂无数据")}</div>`;
+    }
+
+    function errorBox(err) {
+      const message = err && err.message ? err.message : String(err || "Unknown error");
+      return `<div class="error">${escapeHtml(message)}</div>`;
+    }
+
+    function statusPill(status) {
+      const s = String(status || "").toUpperCase();
+      const cls =
+        s === "ACCEPTED" || s === "PUBLIC" || s === "RUNNING" ? "green" :
+        s.includes("FAIL") || s === "REJECTED" || s === "ENDED" ? "red" :
+        s === "PENDING" || s === "UPCOMING" || s === "DRAFT" ? "yellow" : "gray";
+      return `<span class="pill ${cls}">${escapeHtml(s || "UNKNOWN")}</span>`;
+    }
+
+    function contestStateLabel(state) {
+      return ({ UPCOMING: "未开始", RUNNING: "进行中", ENDED: "已结束", DRAFT: "草稿" })[state] || state || "未知";
+    }
+
+    function contestStatePill(state) {
+      const s = String(state || "").toUpperCase();
+      const cls = s === "RUNNING" ? "green" : s === "ENDED" ? "red" : s === "UPCOMING" ? "yellow" : "gray";
+      return `<span class="pill ${cls}">${escapeHtml(contestStateLabel(s))}</span>`;
+    }
+
+    function metricText(problem) {
+      return `${problem.time_limit_sec || 60}s · ${problem.memory_limit_mb || 2048}MB · ${problem.cpu_count || 2} CPU`;
+    }
+
+    function openModal({ title, body, footer = "" }) {
+      $("modalTitle").textContent = title || "";
+      $("modalBody").innerHTML = body || "";
+      $("modalFooter").innerHTML = footer || `<button class="button ghost" onclick="closeModal()">关闭</button>`;
+      $("modalRoot").classList.add("open");
+    }
+
+    function closeModal() {
+      $("modalRoot").classList.remove("open");
+      $("modalBody").innerHTML = "";
+      $("modalFooter").innerHTML = "";
+    }
+
+    function modalBackdropClick(event) {
+      if (event.target && event.target.id === "modalRoot") closeModal();
+    }
+
+    function clearPageState() {
+      if (state.countdownTimer) {
+        clearInterval(state.countdownTimer);
+        state.countdownTimer = null;
+      }
+      $("sidebar").classList.remove("open");
+    }
+
+    function updateNav() {
+      const path = location.pathname || "/";
+      document.querySelectorAll(".nav-link").forEach((a) => {
+        const route = a.dataset.route || "/";
+        const active = route === "/" ? path === "/" : path.startsWith(route);
+        a.classList.toggle("active", active);
+      });
+
+      const isAdmin = state.user && state.user.role === "ADMIN";
+      $("adminNav").style.display = isAdmin ? "" : "none";
+
+      $("userPill").textContent = state.user
+        ? `当前用户：${state.user.username || state.user.email || "user"}${isAdmin ? " · ADMIN" : ""}`
+        : "未登录";
+
+      $("authBtn").style.display = state.user ? "none" : "";
+      $("logoutBtn").style.display = state.user ? "" : "none";
+
+      $("sidebarUser").innerHTML = state.user
+        ? `已登录<br><strong>${escapeHtml(state.user.username || state.user.email || "user")}</strong>${isAdmin ? " (ADMIN)" : ""}<br><span class="muted">https://yxyx.space</span>`
+        : `未登录<br><span class="muted">https://yxyx.space</span>`;
+    }
+
+
+    async function checkHealth() {
+      try {
+        await api("/health");
+        state.healthOk = true;
+        $("apiStatus").textContent = "API online";
+      } catch (e) {
+        state.healthOk = false;
+        $("apiStatus").textContent = "API offline";
+        $("apiStatus").style.color = "var(--danger)";
+      }
+    }
+
+    async function loadMe() {
+      if (!state.token) {
+        state.user = null;
+        updateNav();
+        return;
+      }
+      try {
+        const data = await api("/api/auth/me", { headers: authHeaders() });
+        state.user = data.user || data;
+      } catch (e) {
+        state.token = "";
+        localStorage.removeItem("aioj_token");
+        state.user = null;
+      }
+      updateNav();
+    }
+
+    function openAuthModal() {
+      openModal({
+        title: "登录 / 注册",
+        body: `
+          <div class="tabs">
+            <div class="tab active" id="loginTab" onclick="switchAuthTab('login')">登录</div>
+            <div class="tab" id="registerTab" onclick="switchAuthTab('register')">注册</div>
+          </div>
+
+          <div id="loginPane" class="form-grid" style="margin-top:18px;">
+            <div class="form-row">
+              <label>用户名或邮箱</label>
+              <input id="loginUser" placeholder="admin" autocomplete="username">
+            </div>
+            <div class="form-row">
+              <label>密码</label>
+              <input id="loginPass" type="password" autocomplete="current-password">
+            </div>
+            <div id="authMessage"></div>
+          </div>
+
+          <div id="registerPane" class="form-grid" style="margin-top:18px;display:none;">
+            <div class="form-row">
+              <label>用户名</label>
+              <input id="regUser" placeholder="username">
+            </div>
+            <div class="form-row">
+              <label>邮箱</label>
+              <input id="regEmail" placeholder="email@example.com">
+            </div>
+            <div class="form-row">
+              <label>密码</label>
+              <input id="regPass" type="password" autocomplete="new-password">
+            </div>
+            <div id="registerMessage"></div>
+          </div>
+        `,
+        footer: `
+          <button class="button ghost" onclick="closeModal()">取消</button>
+          <button class="button" id="authSubmitBtn" onclick="submitLogin()">登录</button>
+        `
+      });
+    }
+
+    function switchAuthTab(tab) {
+      const login = tab === "login";
+      $("loginTab").classList.toggle("active", login);
+      $("registerTab").classList.toggle("active", !login);
+      $("loginPane").style.display = login ? "" : "none";
+      $("registerPane").style.display = login ? "none" : "";
+      $("authSubmitBtn").textContent = login ? "登录" : "注册";
+      $("authSubmitBtn").onclick = login ? submitLogin : submitRegister;
+    }
+
+    async function submitLogin() {
+      const username_or_email = $("loginUser").value.trim();
+      const password = $("loginPass").value;
+      $("authMessage").innerHTML = "";
+      try {
+        const data = await api("/api/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ username_or_email, password })
+        });
+        state.token = data.token || data.access_token || "";
+        if (!state.token) throw new Error("登录响应缺少 token");
+        localStorage.setItem("aioj_token", state.token);
+        state.user = data.user || null;
+        await loadMe();
+        closeModal();
+        await route();
+      } catch (e) {
+        $("authMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    async function submitRegister() {
+      const username = $("regUser").value.trim();
+      const email = $("regEmail").value.trim();
+      const password = $("regPass").value;
+      $("registerMessage").innerHTML = "";
+      try {
+        const data = await api("/api/auth/register", {
+          method: "POST",
+          body: JSON.stringify({ username, email, password })
+        });
+        if (data.token || data.access_token) {
+          state.token = data.token || data.access_token;
+          localStorage.setItem("aioj_token", state.token);
+          state.user = data.user || null;
+          await loadMe();
+          closeModal();
+          await route();
+        } else {
+          $("registerMessage").innerHTML = `<div class="success">注册成功，请切换到登录。</div>`;
+          switchAuthTab("login");
+          $("loginUser").value = username || email;
+        }
+      } catch (e) {
+        $("registerMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    function logout() {
+      state.token = "";
+      state.user = null;
+      localStorage.removeItem("aioj_token");
+      updateNav();
+      route();
+    }
+
+    async function renderDashboard() {
+      setPage("概览", "AIOJ 系统状态与入口");
+      updateNav();
+
+      $("app").innerHTML = `
+        <div class="grid grid-3" id="statsGrid">
+          <div class="stat-card"><div class="stat-label">题目</div><div class="stat-value">...</div></div>
+          <div class="stat-card"><div class="stat-label">比赛</div><div class="stat-value">...</div></div>
+          <div class="stat-card"><div class="stat-label">提交</div><div class="stat-value">...</div></div>
+        </div>
+        <div class="grid grid-2" style="margin-top:18px;">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">最近题目</h2><a class="button ghost small" href="/problems">全部题目</a></div>
+            <div class="card-body" id="dashboardProblems">${emptyBox("加载中...")}</div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">比赛</h2><a class="button ghost small" href="/contests">全部比赛</a></div>
+            <div class="card-body" id="dashboardContests">${emptyBox("加载中...")}</div>
+          </div>
+        </div>
+      `;
+
+      const [problems, contests, submissions] = await Promise.all([
+        api("/api/problems").catch(() => ({ items: [] })),
+        api("/api/contests", { headers: authHeaders() }).catch(() => ({ items: [] })),
+        state.user ? api("/api/submissions", { headers: authHeaders() }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+      ]);
+
+      $("statsGrid").innerHTML = `
+        <div class="stat-card"><div class="stat-label">公开题目</div><div class="stat-value">${problems.items?.length || 0}</div></div>
+        <div class="stat-card"><div class="stat-label">比赛</div><div class="stat-value">${contests.items?.length || 0}</div></div>
+        <div class="stat-card"><div class="stat-label">我的提交</div><div class="stat-value">${submissions.items?.length || 0}</div></div>
+      `;
+
+      $("dashboardProblems").innerHTML = (problems.items || []).slice(0, 4).map(problemMiniCard).join("") || emptyBox("暂无题目");
+      $("dashboardContests").innerHTML = (contests.items || []).slice(0, 4).map(contestMiniCard).join("") || emptyBox("暂无比赛");
+    }
+
+    function problemMiniCard(p) {
+      return `
+        <a class="problem-card" style="margin-bottom:12px;" href="/problems/${encodeURIComponent(p.slug)}">
+          <div class="row" style="justify-content:space-between;">
+            <h3 class="problem-title">${escapeHtml(p.title || p.slug)}</h3>
+            <span class="pill">${escapeHtml(p.metric || "")}</span>
+          </div>
+          <div class="problem-slug">${escapeHtml(p.slug)}</div>
+          <div class="muted small-text">${metricText(p)}</div>
+        </a>
+      `;
+    }
+
+    function contestMiniCard(c) {
+      return `
+        <a class="problem-card" style="margin-bottom:12px;" href="/contests/${encodeURIComponent(c.slug)}">
+          <div class="row" style="justify-content:space-between;">
+            <h3 class="problem-title">${escapeHtml(c.title || c.slug)}</h3>
+            ${contestStatePill(c.state || c.status)}
+          </div>
+          <div class="problem-slug">${escapeHtml(c.slug)}</div>
+          <div class="muted small-text">${escapeHtml(formatDate(c.start_at) || "不限")} - ${escapeHtml(formatDate(c.end_at) || "不限")} · ${c.problem_count || 0} 题</div>
+        </a>
+      `;
+    }
+
+    async function renderProblems() {
+      setPage("题库", "选择题目，阅读题面，提交 source.zip");
+      updateNav();
+      $("app").innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <div><h2 class="card-title">公开题目列表</h2><div class="muted">普通练习题，不带比赛上下文</div></div>
+            <button class="button ghost small" onclick="renderProblems()">刷新</button>
+          </div>
+          <div class="card-body" id="problemsBox">${emptyBox("加载中...")}</div>
+        </div>
+      `;
+      try {
+        const data = await api("/api/problems");
+        const items = data.items || [];
+        $("problemsBox").innerHTML = items.length ? `<div class="grid grid-2">${items.map(problemMiniCard).join("")}</div>` : emptyBox("暂无公开题目");
+      } catch (e) {
+        $("problemsBox").innerHTML = errorBox(e);
+      }
+    }
+
+    async function loadProblem(slug) {
+      return await api(`/api/problems/${encodeURIComponent(slug)}`);
+    }
+
+    async function renderProblemDetail(slug, contestSlug = null) {
+      setPage("题目详情", slug);
+      updateNav();
+
+      $("app").innerHTML = emptyBox("加载中...");
+      try {
+        const problem = await loadProblem(slug);
+        setPage(problem.title || slug, contestSlug ? `${slug} · ${contestSlug}` : slug);
+
+        const contestBanner = contestSlug ? `
+          <div class="notice">
+            当前处于比赛 <strong>${escapeHtml(contestSlug)}</strong>，提交会计入该比赛。
+            <a class="strong" href="/contests/${encodeURIComponent(contestSlug)}">返回比赛</a>
+          </div>
+        ` : "";
+
+        $("app").innerHTML = `
+          <div class="grid grid-main-side">
+            <div class="grid">
+              ${contestBanner}
+              <div class="card">
+                <div class="card-header">
+                  <div>
+                    <h2 class="card-title">${escapeHtml(problem.title || slug)}</h2>
+                    <div class="muted">${escapeHtml(problem.slug || slug)}</div>
+                  </div>
+                  <span class="pill">${escapeHtml(problem.metric || "")}</span>
+                </div>
+                <div class="card-body statement">${renderMarkdown(problem.statement_md || problem.description_md || "暂无题面")}</div>
+              </div>
+
+              <div class="card">
+                <div class="card-header">
+                  <h2 class="card-title">${contestSlug ? "当前比赛提交" : "当前题目提交"}</h2>
+                  <button class="button ghost small" onclick="loadProblemSubmissions('${escapeHtml(slug)}', '${escapeHtml(contestSlug || "")}')">刷新</button>
+                </div>
+                <div class="card-body" id="problemSubmissionsBox">${state.user ? emptyBox("加载中...") : emptyBox("登录后查看提交")}</div>
+              </div>
+            </div>
+
+            <div class="grid">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">提交答案</h2></div>
+                <div class="card-body">
+                  <div class="form-grid">
+                    <div class="notice">上传 <strong>source.zip</strong>，根目录通常需要包含 <code>predict.py</code>。</div>
+                    <input type="file" id="submitFile" accept=".zip">
+                    <button class="button" onclick="submitSolution('${escapeHtml(slug)}', '${escapeHtml(contestSlug || "")}')">上传提交</button>
+                    <button class="button ghost" onclick="downloadSample('${escapeHtml(slug)}')">下载 sample_submission.csv</button>
+                    <div id="submitMessage"></div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">评测配置</h2></div>
+                <div class="card-body">
+                  <div class="table-wrap">
+                    <table style="min-width:0;">
+                      <tr><th>Metric</th><td>${escapeHtml(problem.metric || "")}</td></tr>
+                      <tr><th>Direction</th><td>${problem.higher_is_better === false ? "lower is better" : "higher is better"}</td></tr>
+                      <tr><th>Time</th><td>${problem.time_limit_sec || 60}s</td></tr>
+                      <tr><th>Memory</th><td>${problem.memory_limit_mb || 2048}MB</td></tr>
+                      <tr><th>CPU</th><td>${problem.cpu_count || 2}</td></tr>
+                      <tr><th>Runner</th><td>${escapeHtml(problem.runner_image || "aioj-python-basic:latest")}</td></tr>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+
+        if (state.user) await loadProblemSubmissions(slug, contestSlug || "");
+      } catch (e) {
+        $("app").innerHTML = errorBox(e);
+      }
+    }
+
+    function downloadSample(slug) {
+      window.open(`/api/problems/${encodeURIComponent(slug)}/sample-submission`, "_blank");
+    }
+
+    async function submitSolution(slug, contestSlug = "") {
+      const msg = $("submitMessage");
+      msg.innerHTML = "";
+      const file = $("submitFile").files[0];
+      if (!file) {
+        msg.innerHTML = `<div class="error">请选择 source.zip</div>`;
+        return;
+      }
+      if (!state.user) {
+        openAuthModal();
+        return;
+      }
+
+      const form = new FormData();
+      form.append("file", file);
+      if (contestSlug) form.append("contest_slug", contestSlug);
+
+      try {
+        msg.innerHTML = `<div class="notice">正在上传...</div>`;
+        const data = await api(`/api/problems/${encodeURIComponent(slug)}/submit`, {
+          method: "POST",
+          headers: authHeaders(),
+          body: form
+        });
+        const id = data.submission_id || data.id || data.submission?.id;
+        msg.innerHTML = `<div class="success">提交成功${id ? `：#${id}` : ""}</div>`;
+        if (id) navigate(`/submissions/${id}`);
+      } catch (e) {
+        msg.innerHTML = errorBox(e);
+      }
+    }
+
+    async function loadProblemSubmissions(slug, contestSlug = "") {
+      const box = $("problemSubmissionsBox");
+      if (!box || !state.user) return;
+      box.innerHTML = emptyBox("加载中...");
+      try {
+        let data;
+        if (contestSlug) {
+          data = await api(`/api/contests/${encodeURIComponent(contestSlug)}/submissions`, { headers: authHeaders() });
+        } else {
+          data = await tryApi([
+            `/api/problems/${encodeURIComponent(slug)}/submissions`,
+            `/api/submissions?problem_slug=${encodeURIComponent(slug)}`
+          ], { headers: authHeaders() });
+        }
+        box.innerHTML = submissionsTable(data.items || []);
+      } catch (e) {
+        box.innerHTML = errorBox(e);
+      }
+    }
+
+    function submissionsTable(items) {
+      if (!items || !items.length) return emptyBox("暂无提交");
+      return `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ID</th><th>题目</th><th>状态</th><th>Public</th><th>Private</th><th>Runtime</th><th>时间</th><th>操作</th></tr></thead>
+            <tbody>
+              ${items.map(s => `
+                <tr>
+                  <td>#${s.id}</td>
+                  <td>${escapeHtml(s.problem_slug || s.problem_title || "")}</td>
+                  <td>${statusPill(s.status)}</td>
+                  <td>${s.public_score ?? ""}</td>
+                  <td>${s.private_score ?? ""}</td>
+                  <td>${s.runtime_ms ?? ""}${s.runtime_ms ? " ms" : ""}</td>
+                  <td>${escapeHtml(formatDate(s.created_at || s.judged_at))}</td>
+                  <td><a class="button ghost small" href="/submissions/${s.id}">详情</a></td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>`;
+    }
+
+    async function renderContests() {
+      setPage("比赛", "参加比赛，查看赛题、答疑与排行榜");
+      updateNav();
+
+      $("app").innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <div><h2 class="card-title">比赛列表</h2><div class="muted">公开比赛和你可见的比赛</div></div>
+            <button class="button ghost small" onclick="renderContests()">刷新</button>
+          </div>
+          <div class="card-body" id="contestsBox">${emptyBox("加载中...")}</div>
+        </div>
+      `;
+
+      try {
+        const data = await api("/api/contests", { headers: authHeaders() });
+        const items = data.items || [];
+        $("contestsBox").innerHTML = items.length ? `<div class="grid grid-2">${items.map(contestMiniCard).join("")}</div>` : emptyBox("暂无比赛");
+      } catch (e) {
+        $("contestsBox").innerHTML = errorBox(e);
+      }
+    }
+
+    async function renderContestDetail(slug) {
+      clearPageState();
+      setPage("比赛详情", slug);
+      updateNav();
+      $("app").innerHTML = emptyBox("加载中...");
+
+      try {
+        const contest = await api(`/api/contests/${encodeURIComponent(slug)}`, { headers: authHeaders() });
+        const [access, stats, announcements, questions, subs, problemStats] = await Promise.all([
+          api(`/api/contests/${encodeURIComponent(slug)}/access`, { headers: authHeaders() }).catch(() => ({})),
+          api(`/api/contests/${encodeURIComponent(slug)}/stats`).catch(() => ({})),
+          api(`/api/contests/${encodeURIComponent(slug)}/announcements`).catch(() => ({ items: [] })),
+          api(`/api/contests/${encodeURIComponent(slug)}/questions`, { headers: authHeaders() }).catch(() => ({ items: [] })),
+          state.user ? api(`/api/contests/${encodeURIComponent(slug)}/submissions`, { headers: authHeaders() }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
+          api(`/api/contests/${encodeURIComponent(slug)}/problem-stats`).catch(() => ({ items: [] })),
+        ]);
+
+        setPage(contest.title || slug, `${slug} · ${contestStateLabel(contest.state || contest.status)}`);
+        const accessStatus = contestStatusText(access.participant_status);
+        const problemStatMap = {};
+        (problemStats.items || []).forEach(x => problemStatMap[x.slug] = x);
+
+        $("app").innerHTML = `
+          <div class="grid">
+            <div class="card">
+              <div class="card-header">
+                <div>
+                  <h2 class="card-title">${escapeHtml(contest.title || slug)}</h2>
+                  <div class="muted">${escapeHtml(slug)} · ${escapeHtml(access.visibility || "PUBLIC")} · ${escapeHtml(access.registration_mode || "OPEN")} · ${escapeHtml(access.scoreboard_mode || "SCORE")}</div>
+                </div>
+                ${contestStatePill(contest.state || contest.status)}
+              </div>
+              <div class="card-body">
+                <div class="row" style="margin-bottom:14px;">
+                  <span class="pill gray">开始：${escapeHtml(formatDate(contest.start_at) || "不限")}</span>
+                  <span class="pill gray">结束：${escapeHtml(formatDate(contest.end_at) || "不限")}</span>
+                  <span class="pill gray">${(contest.problems || []).length || contest.problem_count || 0} 题</span>
+                  <span class="pill gray">${stats.participant_count ?? access.participant_counts?.accepted_count ?? 0} 人通过</span>
+                  <span class="pill gray">${access.participant_counts?.pending_count ?? 0} 人待审</span>
+                  <span class="pill gray">${stats.submission_count ?? 0} 次提交</span>
+                  <span class="pill gray">我的状态：${escapeHtml(accessStatus)}</span>
+                </div>
+                <div id="contestCountdown" style="margin-bottom:14px;"></div>
+                <div class="statement">${renderMarkdown(contest.description_md || "暂无比赛说明")}</div>
+              </div>
+            </div>
+
+            <div class="grid grid-2">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">参赛状态</h2></div>
+                <div class="card-body">${contestAccessHtml(slug, access)}</div>
+              </div>
+              <div class="card">
+                <div class="card-header">
+                  <h2 class="card-title">比赛排行榜</h2>
+                  <button class="button ghost small" onclick="loadContestScoreboard('${escapeHtml(slug)}')">刷新</button>
+                </div>
+                <div class="card-body" id="contestScoreboard">${emptyBox("加载中...")}</div>
+              </div>
+            </div>
+
+            ${access.questions_enabled === false ? "" : `
+              <div class="card">
+                <div class="card-header">
+                  <h2 class="card-title">赛中答疑</h2>
+                  ${access.can_ask ? `<button class="button small" onclick="openAskQuestion('${escapeHtml(slug)}')">提问</button>` : ""}
+                </div>
+                <div class="card-body" id="contestQuestions">${questionsHtml(slug, questions.items || [])}</div>
+              </div>
+            `}
+
+            ${access.announcements_enabled === false ? "" : `
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">公告</h2></div>
+                <div class="card-body">${announcementsHtml(announcements.items || [])}</div>
+              </div>
+            `}
+
+            <div class="card">
+              <div class="card-header"><h2 class="card-title">比赛题目</h2></div>
+              <div class="card-body">${contestProblemsHtml(slug, contest.problems || [], access, problemStatMap)}</div>
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h2 class="card-title">我的赛内提交</h2>
+                <button class="button ghost small" onclick="renderContestDetail('${escapeHtml(slug)}')">刷新</button>
+              </div>
+              <div class="card-body">${state.user ? submissionsTable(subs.items || []) : emptyBox("登录后查看你的赛内提交")}</div>
+            </div>
+          </div>
+        `;
+
+        renderContestCountdown(contest);
+        state.countdownTimer = setInterval(() => renderContestCountdown(contest), 1000);
+        await loadContestScoreboard(slug);
+      } catch (e) {
+        $("app").innerHTML = errorBox(e);
+      }
+    }
+
+    function contestStatusText(status) {
+      return ({ PENDING: "待审核", ACCEPTED: "已通过", REJECTED: "已拒绝" })[status] || status || "未报名";
+    }
+
+    function contestAccessHtml(slug, access) {
+      if (!state.user) {
+        return `<div class="form-grid"><div class="notice">登录后可以报名参赛。</div><button class="button" onclick="openAuthModal()">登录 / 注册</button></div>`;
+      }
+      if (access.participant_status === "ACCEPTED") {
+        return `<div class="form-grid"><div class="success">你已报名参赛，状态：已通过。</div><button class="button secondary" onclick="leaveContest('${escapeHtml(slug)}')">退出比赛</button></div>`;
+      }
+      if (access.participant_status === "PENDING") {
+        return `<div class="notice">你的报名正在等待管理员审核。</div>`;
+      }
+      if (access.participant_status === "REJECTED") {
+        return `<div class="form-grid"><div class="error">你的报名已被拒绝。</div>${access.can_register ? `<button class="button" onclick="joinContest('${escapeHtml(slug)}')">重新报名</button>` : ""}</div>`;
+      }
+      if (!access.can_register) {
+        return `<div class="notice">当前不可报名。报名方式：${escapeHtml(access.registration_mode || "OPEN")}</div>`;
+      }
+      return `<div class="form-grid"><div class="notice">报名方式：${escapeHtml(access.registration_mode || "OPEN")}。报名通过后可以赛内提交和提问。</div><button class="button" onclick="joinContest('${escapeHtml(slug)}')">报名参赛</button></div>`;
+    }
+
+    async function joinContest(slug) {
+      if (!state.user) return openAuthModal();
+      let invite_code = "";
+      const access = await api(`/api/contests/${encodeURIComponent(slug)}/access`, { headers: authHeaders() }).catch(() => ({}));
+      if (access.registration_mode === "INVITE") {
+        openModal({
+          title: "邀请码报名",
+          body: `<div class="form-row"><label>邀请码</label><input id="inviteCode" placeholder="请输入邀请码"></div><div id="joinMessage" style="margin-top:12px;"></div>`,
+          footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitContestRegister('${escapeHtml(slug)}')">报名</button>`
+        });
+        return;
+      }
+      await submitContestRegister(slug, invite_code);
+    }
+
+    async function submitContestRegister(slug, inviteCodeValue = null) {
+      const invite_code = inviteCodeValue === null && $("inviteCode") ? $("inviteCode").value.trim() : (inviteCodeValue || "");
+      try {
+        const res = await api(`/api/contests/${encodeURIComponent(slug)}/register`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ invite_code })
+        });
+        closeModal();
+        if (res.participant_status === "PENDING") alert("报名已提交，等待管理员审核。");
+        await renderContestDetail(slug);
+      } catch (e) {
+        if ($("joinMessage")) $("joinMessage").innerHTML = errorBox(e);
+        else alert(e.message);
+      }
+    }
+
+    async function leaveContest(slug) {
+      if (!confirm("确认退出比赛？")) return;
+      await api(`/api/contests/${encodeURIComponent(slug)}/leave`, { method: "POST", headers: authHeaders() });
+      await renderContestDetail(slug);
+    }
+
+    function renderContestCountdown(c) {
+      const box = $("contestCountdown");
+      if (!box) return;
+      const now = Date.now();
+      const start = c.start_at ? new Date(c.start_at).getTime() : null;
+      const end = c.end_at ? new Date(c.end_at).getTime() : null;
+      const stateText = c.state || c.status;
+      if (stateText === "UPCOMING" && start) {
+        box.innerHTML = `<div class="notice"><strong>距离开始：</strong>${durationText(start - now)}</div>`;
+      } else if (stateText === "RUNNING" && end) {
+        box.innerHTML = `<div class="success"><strong>距离结束：</strong>${durationText(end - now)}</div>`;
+      } else if (stateText === "ENDED") {
+        box.innerHTML = `<div class="error"><strong>比赛已结束</strong></div>`;
+      } else {
+        box.innerHTML = `<div class="notice">${escapeHtml(contestStateLabel(stateText))}</div>`;
+      }
+    }
+
+    function durationText(ms) {
+      if (ms <= 0) return "现在";
+      const sec = Math.floor(ms / 1000);
+      const d = Math.floor(sec / 86400);
+      const h = Math.floor((sec % 86400) / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = sec % 60;
+      if (d) return `${d}天 ${h}小时 ${m}分`;
+      if (h) return `${h}小时 ${m}分 ${s}秒`;
+      if (m) return `${m}分 ${s}秒`;
+      return `${s}秒`;
+    }
+
+    function contestProblemsHtml(contestSlug, problems, access, statsMap) {
+      if (!access.can_view_problems) return emptyBox(access.hide_problems_before_start ? "题目将在比赛开始或报名通过后显示" : "报名通过后显示题目");
+      if (!problems.length) return emptyBox("暂无题目");
+      return `
+        <div class="grid grid-2">
+          ${problems.map(p => {
+            const ps = statsMap[p.slug] || {};
+            return `
+              <a class="problem-card" href="/contests/${encodeURIComponent(contestSlug)}/problems/${encodeURIComponent(p.slug)}">
+                <div class="row" style="justify-content:space-between;">
+                  <h3 class="problem-title">${escapeHtml(p.title || p.slug)}</h3>
+                  <span class="pill">${escapeHtml(p.metric || "")}</span>
+                </div>
+                <div class="problem-slug">${escapeHtml(p.slug)}</div>
+                <div class="muted small-text">${metricText(p)} · ${ps.solved_users ?? 0} 人通过 · ${ps.submissions ?? 0} 次提交</div>
+              </a>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    function announcementsHtml(items) {
+      if (!items.length) return emptyBox("暂无公告");
+      return `<div class="grid">${items.map(a => `
+        <div class="notice">
+          <strong>${escapeHtml(a.title)}</strong>
+          <div class="muted small-text">${escapeHtml(formatDate(a.created_at))}</div>
+          <div class="statement" style="margin-top:10px;">${renderMarkdown(a.body_md || "")}</div>
+        </div>
+      `).join("")}</div>`;
+    }
+
+    function questionsHtml(slug, items) {
+      if (!items.length) return emptyBox("暂无答疑");
+      const isAdmin = state.user && state.user.role === "ADMIN";
+      return `<div class="grid">${items.map(q => `
+        <div class="notice">
+          <div class="row" style="justify-content:space-between;align-items:flex-start;">
+            <div>
+              <strong>#${q.id} ${escapeHtml(q.title)}</strong>
+              <div class="muted small-text">${escapeHtml(q.username || "anonymous")} · ${escapeHtml(formatDate(q.created_at))} · ${q.is_public ? "公开" : "私有"} · ${escapeHtml(q.status || "")}</div>
+            </div>
+            ${isAdmin ? `<div class="row"><button class="button small" onclick="openAnswerQuestion('${escapeHtml(slug)}', ${q.id})">回复</button><button class="button secondary small" onclick="closeQuestion('${escapeHtml(slug)}', ${q.id})">关闭</button></div>` : ""}
+          </div>
+          ${q.body_md ? `<div class="statement" style="margin-top:10px;">${renderMarkdown(q.body_md)}</div>` : ""}
+          ${q.answer_md ? `<div class="success" style="margin-top:10px;"><strong>回复</strong><div class="statement">${renderMarkdown(q.answer_md)}</div></div>` : `<div class="muted" style="margin-top:10px;">等待回复</div>`}
+        </div>
+      `).join("")}</div>`;
+    }
+
+    function openAskQuestion(slug) {
+      openModal({
+        title: "赛中提问",
+        body: `
+          <div class="form-grid">
+            <div class="form-row"><label>标题</label><input id="questionTitle" placeholder="例如：输入格式是否保证有 id？"></div>
+            <div class="form-row"><label>内容</label><textarea id="questionBody" placeholder="详细描述你的问题"></textarea></div>
+            <div id="questionMessage"></div>
+          </div>
+        `,
+        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitQuestion('${escapeHtml(slug)}')">提交问题</button>`
+      });
+    }
+
+    async function submitQuestion(slug) {
+      try {
+        await api(`/api/contests/${encodeURIComponent(slug)}/questions`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ title: $("questionTitle").value.trim(), body_md: $("questionBody").value.trim() })
+        });
+        closeModal();
+        await renderContestDetail(slug);
+      } catch (e) {
+        $("questionMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    function openAnswerQuestion(slug, id) {
+      openModal({
+        title: `回复问题 #${id}`,
+        body: `
+          <div class="form-grid">
+            <div class="form-row"><label>回复内容</label><textarea id="answerBody"></textarea></div>
+            <label class="row"><input type="checkbox" id="answerPublic" checked style="width:auto;"> 公开给所有参赛者</label>
+            <div id="answerMessage"></div>
+          </div>
+        `,
+        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitAnswer('${escapeHtml(slug)}', ${id})">保存回复</button>`
+      });
+    }
+
+    async function submitAnswer(slug, id) {
+      try {
+        await api(`/api/admin/contests/${encodeURIComponent(slug)}/questions/${id}/answer`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ answer_md: $("answerBody").value.trim(), is_public: $("answerPublic").checked })
+        });
+        closeModal();
+        await renderContestDetail(slug);
+      } catch (e) {
+        $("answerMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    async function closeQuestion(slug, id) {
+      if (!confirm("确认关闭这个问题？")) return;
+      await api(`/api/admin/contests/${encodeURIComponent(slug)}/questions/${id}/close`, { method: "POST", headers: authHeaders() });
+      await renderContestDetail(slug);
+    }
+
+    async function loadContestScoreboard(slug) {
+      const box = $("contestScoreboard");
+      if (!box) return;
+      box.innerHTML = emptyBox("加载中...");
+      try {
+        const data = await tryApi([
+          `/api/contests/${encodeURIComponent(slug)}/scoreboard-advanced`,
+          `/api/contests/${encodeURIComponent(slug)}/scoreboard`,
+          `/api/contests/${encodeURIComponent(slug)}/leaderboard`
+        ], { headers: authHeaders() });
+
+        const items = data.items || [];
+        if (!items.length) {
+          box.innerHTML = emptyBox("暂无排行榜数据");
+          return;
+        }
+
+        const mode = data.mode || "SCORE";
+        if (mode === "ACM") {
+          box.innerHTML = `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Rank</th><th>User</th><th>Solved</th><th>Penalty</th><th>Problems</th></tr></thead>
+                <tbody>${items.map(x => `<tr><td><strong>${x.rank}</strong></td><td>${escapeHtml(x.username)}</td><td>${x.solved}</td><td>${x.penalty ?? 0}</td><td class="muted">${escapeHtml(scoreProblemsText(x, mode))}</td></tr>`).join("")}</tbody>
+              </table>
+            </div>`;
+        } else {
+          box.innerHTML = `
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Rank</th><th>User</th><th>Solved</th><th>Score</th><th>Public</th><th>Private</th><th>Problems</th></tr></thead>
+                <tbody>${items.map(x => `<tr><td><strong>${x.rank}</strong></td><td>${escapeHtml(x.username)}</td><td>${x.solved ?? x.submission_count ?? ""}</td><td>${x.total_score ?? x.public_score ?? ""}</td><td>${x.total_public_score ?? x.public_score ?? ""}</td><td>${data.show_private ? (x.total_private_score ?? x.private_score ?? "") : "赛后可见"}</td><td class="muted">${escapeHtml(scoreProblemsText(x, mode))}</td></tr>`).join("")}</tbody>
+              </table>
+            </div>`;
+        }
+      } catch (e) {
+        box.innerHTML = errorBox(e);
+      }
+    }
+
+    function scoreProblemsText(x, mode) {
+      if (!x.problems || !x.problems.length) return "";
+      if (mode === "ACM") return x.problems.map(p => `${p.problem_slug}:${p.status || ""}${p.penalty != null ? "/" + p.penalty : ""}`).join(" · ");
+      return x.problems.map(p => `${p.problem_slug}:${p.visible_score ?? ""}`).join(" · ");
+    }
+
+    async function renderSubmissions() {
+      setPage("提交", "查看提交历史与日志");
+      updateNav();
+      $("app").innerHTML = `
+        <div class="card">
+          <div class="card-header">
+            <div><h2 class="card-title">提交历史</h2><div class="muted">${state.user?.role === "ADMIN" ? "管理员可查看更多提交" : "你的提交记录"}</div></div>
+            <button class="button ghost small" onclick="renderSubmissions()">刷新</button>
+          </div>
+          <div class="card-body" id="submissionsBox">${state.user ? emptyBox("加载中...") : emptyBox("登录后查看提交")}</div>
+        </div>
+      `;
+      if (!state.user) return;
+      try {
+        const data = await api("/api/submissions", { headers: authHeaders() });
+        $("submissionsBox").innerHTML = submissionsTable(data.items || []);
+      } catch (e) {
+        $("submissionsBox").innerHTML = errorBox(e);
+      }
+    }
+
+    async function renderSubmissionDetail(id) {
+      setPage(`提交 #${id}`, "查看结果、指标与运行日志");
+      updateNav();
+      $("app").innerHTML = emptyBox("加载中...");
+      try {
+        const detail = await api(`/api/submissions/${encodeURIComponent(id)}`, { headers: authHeaders() }).catch(() => null);
+        const logData = await api(`/api/submissions/${encodeURIComponent(id)}/log`, { headers: authHeaders() }).catch(() => null);
+        const sub = detail?.submission || detail || logData?.submission || { id };
+
+        $("app").innerHTML = `
+          <div class="grid grid-main-side">
+            <div class="grid">
+              <div class="card">
+                <div class="card-header">
+                  <h2 class="card-title">提交概览</h2>
+                  ${statusPill(sub.status)}
+                </div>
+                <div class="card-body">
+                  <div class="table-wrap">
+                    <table style="min-width:0;">
+                      ${[
+                        ["ID", `#${sub.id || id}`],
+                        ["Problem", sub.problem_slug || sub.problem_title || ""],
+                        ["User", sub.username || sub.user_id || ""],
+                        ["Status", sub.status || ""],
+                        ["Public", sub.public_score ?? ""],
+                        ["Private", sub.private_score ?? ""],
+                        ["Runtime", sub.runtime_ms ? `${sub.runtime_ms} ms` : ""],
+                        ["Memory", sub.memory_peak_mb ? `${sub.memory_peak_mb} MB` : ""],
+                        ["Created", formatDate(sub.created_at)],
+                        ["Judged", formatDate(sub.judged_at)],
+                        ["Error", sub.error_message || ""],
+                      ].map(([k,v]) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`).join("")}
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">Metrics</h2></div>
+                <div class="card-body"><pre>${escapeHtml(JSON.stringify(sub.metrics || detail?.metrics || {}, null, 2))}</pre></div>
+              </div>
+
+              <div class="card">
+                <div class="card-header">
+                  <h2 class="card-title">运行日志</h2>
+                  <button class="button ghost small" onclick="renderSubmissionDetail('${escapeHtml(id)}')">刷新</button>
+                </div>
+                <div class="card-body"><pre>${escapeHtml(logData?.log || detail?.log || "暂无日志")}</pre></div>
+              </div>
+            </div>
+
+            <div class="grid">
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">操作</h2></div>
+                <div class="card-body form-grid">
+                  <a class="button" href="/api/submissions/${encodeURIComponent(id)}/output" target="_blank">下载 output/submission.csv</a>
+                  <a class="button secondary" href="/api/submissions/${encodeURIComponent(id)}/log" target="_blank">查看原始日志</a>
+                  <a class="button ghost" href="/submissions">全部提交</a>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-header"><h2 class="card-title">对象路径</h2></div>
+                <div class="card-body small-text">
+                  <div><strong>source:</strong> ${escapeHtml(sub.source_object_key || "")}</div>
+                  <div><strong>output:</strong> ${escapeHtml(sub.output_object_key || "")}</div>
+                  <div><strong>log:</strong> ${escapeHtml(sub.log_object_key || "")}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      } catch (e) {
+        $("app").innerHTML = errorBox(e);
+      }
+    }
+
+    async function renderAccount() {
+      setPage("账号设置", "修改密码与查看登录信息");
+      updateNav();
+
+      $("app").innerHTML = `
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">当前账号</h2></div>
+            <div class="card-body">
+              ${state.user ? `
+                <div class="table-wrap">
+                  <table style="min-width:0;">
+                    <tr><th>Username</th><td>${escapeHtml(state.user.username || "")}</td></tr>
+                    <tr><th>Email</th><td>${escapeHtml(state.user.email || "")}</td></tr>
+                    <tr><th>Role</th><td>${escapeHtml(state.user.role || "")}</td></tr>
+                  </table>
+                </div>
+              ` : emptyBox("未登录")}
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">修改密码</h2></div>
+            <div class="card-body">
+              ${state.user ? `
+                <div class="form-grid">
+                  <div class="form-row"><label>当前密码</label><input id="oldPassword" type="password"></div>
+                  <div class="form-row"><label>新密码</label><input id="newPassword" type="password"></div>
+                  <button class="button" onclick="changePassword()">保存新密码</button>
+                  <div id="passwordMessage"></div>
+                </div>
+              ` : emptyBox("登录后修改密码")}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function changePassword() {
+      const msg = $("passwordMessage");
+      try {
+        await tryApi([
+          "/api/auth/change-password",
+          "/api/account/change-password"
+        ], {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ old_password: $("oldPassword").value, new_password: $("newPassword").value })
+        });
+        msg.innerHTML = `<div class="success">密码已修改。</div>`;
+      } catch (e) {
+        msg.innerHTML = errorBox(e);
+      }
+    }
+
+    async function renderUsers() {
+      setPage("用户管理", "管理员查看和管理用户");
+      updateNav();
+      if (!requireAdmin()) return;
+      $("app").innerHTML = `<div class="card"><div class="card-header"><h2 class="card-title">用户列表</h2><button class="button ghost small" onclick="renderUsers()">刷新</button></div><div class="card-body" id="usersBox">${emptyBox("加载中...")}</div></div>`;
+      try {
+        const data = await api("/api/admin/users", { headers: authHeaders() });
+        const items = data.items || data.users || [];
+        $("usersBox").innerHTML = items.length ? `
+          <div class="table-wrap"><table><thead><tr><th>ID</th><th>Username</th><th>Email</th><th>Role</th><th>Created</th></tr></thead>
+          <tbody>${items.map(u => `<tr><td>${u.id}</td><td>${escapeHtml(u.username)}</td><td>${escapeHtml(u.email || "")}</td><td>${statusPill(u.role)}</td><td>${escapeHtml(formatDate(u.created_at))}</td></tr>`).join("")}</tbody></table></div>
+        ` : emptyBox("暂无用户");
+      } catch (e) {
+        $("usersBox").innerHTML = errorBox(e);
+      }
+    }
+
+    async function renderProblemAdmin() {
+      setPage("题目管理", "导入题包、发布或下线题目");
+      updateNav();
+      if (!requireAdmin()) return;
+      $("app").innerHTML = `
+        <div class="grid">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">导入题目包</h2></div>
+            <div class="card-body">
+              <div class="form-grid">
+                <div class="notice">上传 problem.zip，推荐结构：problem.yaml、statement.md、private/test.csv、private/labels.csv、public/sample_submission.csv。</div>
+                <input type="file" id="problemPackage" accept=".zip">
+                <button class="button" onclick="importProblemPackage()">导入题目包</button>
+                <div id="problemImportMessage"></div>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">题目列表</h2><button class="button ghost small" onclick="renderProblemAdmin()">刷新</button></div>
+            <div class="card-body" id="problemAdminList">${emptyBox("加载中...")}</div>
+          </div>
+        </div>
+      `;
+      await loadProblemAdminList();
+    }
+
+    async function importProblemPackage() {
+      const msg = $("problemImportMessage");
+      const f = $("problemPackage").files[0];
+      if (!f) return msg.innerHTML = `<div class="error">请选择 zip 文件</div>`;
+      const form = new FormData();
+      form.append("file", f);
+      try {
+        msg.innerHTML = `<div class="notice">正在导入...</div>`;
+        await tryApi(["/api/admin/problems/import", "/api/admin/problem-packages/import"], {
+          method: "POST",
+          headers: authHeaders(),
+          body: form
+        });
+        msg.innerHTML = `<div class="success">导入成功。</div>`;
+        await loadProblemAdminList();
+      } catch (e) {
+        msg.innerHTML = errorBox(e);
+      }
+    }
+
+    async function loadProblemAdminList() {
+      const box = $("problemAdminList");
+      try {
+        const data = await tryApi(["/api/admin/problems", "/api/problems"], { headers: authHeaders() });
+        const items = data.items || [];
+        box.innerHTML = items.length ? `
+          <div class="table-wrap"><table><thead><tr><th>Slug</th><th>Title</th><th>Metric</th><th>Status</th><th>Versions</th><th>Action</th></tr></thead>
+          <tbody>${items.map(p => `<tr><td>${escapeHtml(p.slug)}</td><td>${escapeHtml(p.title)}</td><td>${escapeHtml(p.metric || "")}</td><td>${statusPill(p.status)}</td><td>${p.version_count || p.versions || ""}</td><td><a class="button ghost small" href="/problems/${encodeURIComponent(p.slug)}">查看</a></td></tr>`).join("")}</tbody></table></div>
+        ` : emptyBox("暂无题目");
+      } catch (e) {
+        box.innerHTML = errorBox(e);
+      }
+    }
+
+    async function renderContestAdmin() {
+      setPage("比赛管理", "创建比赛、报名审核、公告、榜单设置");
+      updateNav();
+      if (!requireAdmin()) return;
+      $("app").innerHTML = `
+        <div class="grid">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">比赛列表</h2><button class="button" onclick="openContestCreate()">新建比赛</button></div>
+            <div class="card-body" id="contestAdminList">${emptyBox("加载中...")}</div>
+          </div>
+        </div>
+      `;
+      await loadContestAdminList();
+    }
+
+    async function loadContestAdminList() {
+      const box = $("contestAdminList");
+      try {
+        const data = await tryApi(["/api/admin/contests", "/api/contests"], { headers: authHeaders() });
+        const items = data.items || [];
+        box.innerHTML = items.length ? `
+          <div class="table-wrap"><table><thead><tr><th>Slug</th><th>Title</th><th>State</th><th>Problems</th><th>Start</th><th>End</th><th>Action</th></tr></thead>
+          <tbody>${items.map(c => `
+            <tr>
+              <td>${escapeHtml(c.slug)}</td>
+              <td>${escapeHtml(c.title)}</td>
+              <td>${contestStatePill(c.state || c.status)}</td>
+              <td>${c.problem_count || (c.problems || []).length || 0}</td>
+              <td>${escapeHtml(formatDate(c.start_at))}</td>
+              <td>${escapeHtml(formatDate(c.end_at))}</td>
+              <td>
+                <div class="row">
+                  <a class="button ghost small" href="/contests/${encodeURIComponent(c.slug)}">查看</a>
+                  <button class="button small" onclick="openContestSettings('${escapeHtml(c.slug)}')">高级</button>
+                  <button class="button secondary small" onclick="openRegistrations('${escapeHtml(c.slug)}')">报名</button>
+                  <button class="button secondary small" onclick="openAnnouncement('${escapeHtml(c.slug)}')">公告</button>
+                  <button class="button ghost small" onclick="exportContestRegistrations('${escapeHtml(c.slug)}')">导出报名</button>
+                  <button class="button ghost small" onclick="exportContestScoreboard('${escapeHtml(c.slug)}')">导出榜单</button>
+                </div>
+              </td>
+            </tr>
+          `).join("")}</tbody></table></div>
+        ` : emptyBox("暂无比赛");
+      } catch (e) {
+        box.innerHTML = errorBox(e);
+      }
+    }
+
+    function openContestCreate() {
+      openModal({
+        title: "新建比赛",
+        body: contestFormHtml({}),
+        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="saveContestCreate()">创建</button>`
+      });
+    }
+
+    function contestFormHtml(c) {
+      return `
+        <div class="form-grid">
+          <div class="grid grid-2">
+            <div class="form-row"><label>Slug</label><input id="contestSlugInput" value="${escapeHtml(c.slug || "")}" placeholder="demo-contest"></div>
+            <div class="form-row"><label>Title</label><input id="contestTitleInput" value="${escapeHtml(c.title || "")}" placeholder="Demo Contest"></div>
+          </div>
+          <div class="grid grid-2">
+            <div class="form-row"><label>开始时间</label><input id="contestStartInput" type="datetime-local"></div>
+            <div class="form-row"><label>结束时间</label><input id="contestEndInput" type="datetime-local"></div>
+          </div>
+          <div class="form-row"><label>题目 Slug，用逗号或换行分隔</label><textarea id="contestProblemsInput">${escapeHtml((c.problems || []).map(p => p.slug).join("\\n"))}</textarea></div>
+          <div class="form-row"><label>说明 Markdown</label><textarea id="contestDescInput">${escapeHtml(c.description_md || "")}</textarea></div>
+          <div id="contestFormMessage"></div>
+        </div>
+      `;
+    }
+
+    async function saveContestCreate() {
+      const start = $("contestStartInput").value ? new Date($("contestStartInput").value).toISOString() : null;
+      const end = $("contestEndInput").value ? new Date($("contestEndInput").value).toISOString() : null;
+      const problem_slugs = $("contestProblemsInput").value.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
+      const payload = {
+        slug: $("contestSlugInput").value.trim(),
+        title: $("contestTitleInput").value.trim(),
+        description_md: $("contestDescInput").value,
+        start_at: start,
+        end_at: end,
+        problem_slugs,
+      };
+      try {
+        await api("/api/admin/contests", { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        closeModal();
+        await renderContestAdmin();
+      } catch (e) {
+        $("contestFormMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    async function openContestSettings(slug) {
+      try {
+        const data = await api(`/api/admin/contests/${encodeURIComponent(slug)}/full-settings`, { headers: authHeaders() });
+        const c = data.contest || {};
+        openModal({
+          title: `高级设置 · ${slug}`,
+          body: `
+            <div class="form-grid">
+              <div class="grid grid-3">
+                <div class="form-row"><label>可见性</label><select id="setVisibility">${["PUBLIC","PRIVATE","UNLISTED"].map(v => `<option ${c.visibility===v?"selected":""}>${v}</option>`).join("")}</select></div>
+                <div class="form-row"><label>报名方式</label><select id="setRegMode">${["OPEN","INVITE","APPROVAL","CLOSED"].map(v => `<option ${c.registration_mode===v?"selected":""}>${v}</option>`).join("")}</select></div>
+                <div class="form-row"><label>榜单模式</label><select id="setScoreMode">${["SCORE","ACM"].map(v => `<option ${c.scoreboard_mode===v?"selected":""}>${v}</option>`).join("")}</select></div>
+              </div>
+              <div class="grid grid-2">
+                <div class="form-row"><label>邀请码</label><input id="setInvite" value="${escapeHtml(c.invite_code || "")}"></div>
+                <div class="form-row"><label>ACM 罚时分钟</label><input id="setPenalty" type="number" value="${escapeHtml(c.penalty_minutes || 20)}"></div>
+              </div>
+              <div class="form-row"><label>封榜时间 ISO，可留空</label><input id="setFreeze" value="${escapeHtml(c.freeze_at || "")}"></div>
+              <label class="row"><input type="checkbox" id="setHideProblems" ${c.hide_problems_before_start ? "checked" : ""} style="width:auto;"> 开始前隐藏题目</label>
+              <label class="row"><input type="checkbox" id="setAllowJoin" ${c.allow_join_after_start !== false ? "checked" : ""} style="width:auto;"> 开赛后允许报名</label>
+              <label class="row"><input type="checkbox" id="setScoreVisible" ${c.scoreboard_visible !== false ? "checked" : ""} style="width:auto;"> 显示榜单</label>
+              <label class="row"><input type="checkbox" id="setQuestions" ${c.questions_enabled !== false ? "checked" : ""} style="width:auto;"> 开启答疑</label>
+              <label class="row"><input type="checkbox" id="setAnnouncements" ${c.announcements_enabled !== false ? "checked" : ""} style="width:auto;"> 开启公告</label>
+              <label class="row"><input type="checkbox" id="setPrivateAfterEnd" ${c.show_private_after_end ? "checked" : ""} style="width:auto;"> 赛后显示 private/final 分数</label>
+              <div id="settingsMessage"></div>
+            </div>
+          `,
+          footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="saveContestSettings('${escapeHtml(slug)}')">保存设置</button>`
+        });
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function saveContestSettings(slug) {
+      const payload = {
+        visibility: $("setVisibility").value,
+        registration_mode: $("setRegMode").value,
+        scoreboard_mode: $("setScoreMode").value,
+        invite_code: $("setInvite").value.trim(),
+        penalty_minutes: Number($("setPenalty").value || 20),
+        freeze_at: $("setFreeze").value.trim() || null,
+        hide_problems_before_start: $("setHideProblems").checked,
+        allow_join_after_start: $("setAllowJoin").checked,
+        scoreboard_visible: $("setScoreVisible").checked,
+        questions_enabled: $("setQuestions").checked,
+        announcements_enabled: $("setAnnouncements").checked,
+        show_private_after_end: $("setPrivateAfterEnd").checked,
+      };
+      try {
+        await api(`/api/admin/contests/${encodeURIComponent(slug)}/full-settings`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        closeModal();
+        await renderContestAdmin();
+      } catch (e) {
+        $("settingsMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    async function openRegistrations(slug) {
+      try {
+        const data = await api(`/api/admin/contests/${encodeURIComponent(slug)}/registrations`, { headers: authHeaders() });
+        const items = data.items || [];
+        openModal({
+          title: `报名管理 · ${slug}`,
+          body: `
+            <div class="form-grid">
+              <div class="form-row"><label>批量添加用户名/邮箱，每行一个</label><textarea id="bulkUsers"></textarea></div>
+              <div class="row"><button class="button small" onclick="bulkAddRegistrations('${escapeHtml(slug)}')">批量添加并通过</button></div>
+              <div id="registrationsMessage"></div>
+              ${items.length ? `
+                <div class="table-wrap">
+                  <table>
+                    <thead><tr><th>User</th><th>Email</th><th>Status</th><th>Joined</th><th>Action</th></tr></thead>
+                    <tbody>${items.map(r => `
+                      <tr>
+                        <td>#${r.user_id} ${escapeHtml(r.username)}</td>
+                        <td>${escapeHtml(r.email || "")}</td>
+                        <td>${statusPill(r.status)}</td>
+                        <td>${escapeHtml(formatDate(r.joined_at))}</td>
+                        <td><div class="row">
+                          <button class="button success small" onclick="setRegistrationStatus('${escapeHtml(slug)}', ${r.user_id}, 'ACCEPTED')">通过</button>
+                          <button class="button secondary small" onclick="setRegistrationStatus('${escapeHtml(slug)}', ${r.user_id}, 'PENDING')">待审</button>
+                          <button class="button danger small" onclick="setRegistrationStatus('${escapeHtml(slug)}', ${r.user_id}, 'REJECTED')">拒绝</button>
+                        </div></td>
+                      </tr>
+                    `).join("")}</tbody>
+                  </table>
+                </div>
+              ` : emptyBox("暂无报名")}
+            </div>
+          `,
+          footer: `<button class="button ghost" onclick="closeModal()">关闭</button><button class="button ghost" onclick="exportContestRegistrations('${escapeHtml(slug)}')">导出 CSV</button>`
+        });
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    async function bulkAddRegistrations(slug) {
+      try {
+        await api(`/api/admin/contests/${encodeURIComponent(slug)}/registrations/bulk-add`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ users: $("bulkUsers").value, status: "ACCEPTED" })
+        });
+        $("registrationsMessage").innerHTML = `<div class="success">已批量添加。</div>`;
+        setTimeout(() => openRegistrations(slug), 500);
+      } catch (e) {
+        $("registrationsMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    async function setRegistrationStatus(slug, userId, status) {
+      try {
+        await api(`/api/admin/contests/${encodeURIComponent(slug)}/registrations/${userId}/status`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ status })
+        });
+        await openRegistrations(slug);
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function openAnnouncement(slug) {
+      openModal({
+        title: `发布公告 · ${slug}`,
+        body: `
+          <div class="form-grid">
+            <div class="form-row"><label>标题</label><input id="announcementTitle"></div>
+            <div class="form-row"><label>内容 Markdown</label><textarea id="announcementBody"></textarea></div>
+            <div id="announcementMessage"></div>
+          </div>
+        `,
+        footer: `<button class="button ghost" onclick="closeModal()">取消</button><button class="button" onclick="submitAnnouncement('${escapeHtml(slug)}')">发布</button>`
+      });
+    }
+
+    async function submitAnnouncement(slug) {
+      try {
+        await api(`/api/admin/contests/${encodeURIComponent(slug)}/announcements`, {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ title: $("announcementTitle").value.trim(), body_md: $("announcementBody").value, is_published: true })
+        });
+        closeModal();
+        await renderContestAdmin();
+      } catch (e) {
+        $("announcementMessage").innerHTML = errorBox(e);
+      }
+    }
+
+    function exportContestRegistrations(slug) {
+      window.open(`/api/admin/contests/${encodeURIComponent(slug)}/registrations.csv`, "_blank");
+    }
+
+    function exportContestScoreboard(slug) {
+      window.open(`/api/admin/contests/${encodeURIComponent(slug)}/scoreboard-advanced.csv`, "_blank");
+    }
+
+    function requireAdmin() {
+      if (!state.user) {
+        $("app").innerHTML = `<div class="card"><div class="card-body">${emptyBox("请先登录管理员账号")}</div></div>`;
+        return false;
+      }
+      if (state.user.role !== "ADMIN") {
+        $("app").innerHTML = `<div class="card"><div class="card-body"><div class="error">需要管理员权限。</div></div></div>`;
+        return false;
+      }
+      return true;
+    }
+
+
+    function navigate(path) {
+      if (!path) path = "/";
+      const url = new URL(path, location.origin);
+      const next = url.pathname + url.search + url.hash;
+      const current = location.pathname + location.search + location.hash;
+      if (next === current) {
+        route();
+        return;
+      }
+      history.pushState(null, "", next);
+      route();
+    }
+
+    function handleSpaLinkClick(event) {
+      const a = event.target.closest && event.target.closest("a");
+      if (!a) return;
+      if (a.target && a.target !== "_self") return;
+      if (a.hasAttribute("download")) return;
+
+      const href = a.getAttribute("href") || "";
+      if (!href || href.startsWith("mailto:") || href.startsWith("tel:")) return;
+
+      const url = new URL(a.href, location.origin);
+      if (url.origin !== location.origin) return;
+      if (url.pathname.startsWith("/api/") || url.pathname === "/health") return;
+
+      // Backward compatibility for any old hash links that survived.
+      if (url.hash && url.hash.startsWith("#/")) {
+        event.preventDefault();
+        navigate(url.hash.slice(1));
+        return;
+      }
+
+      event.preventDefault();
+      navigate(url.pathname + url.search + url.hash);
+    }
+
+    async function route() {
+      clearPageState();
+      updateNav();
+
+      // Backward compatibility: /#/problems -> /problems
+      if (location.hash && location.hash.startsWith("#/")) {
+        const clean = location.hash.slice(1) || "/";
+        history.replaceState(null, "", clean);
+      }
+
+      const path = (location.pathname || "/").replace(/\/+$/, "") || "/";
+      const parts = path.replace(/^\/+/, "").split("/").filter(Boolean).map(decodeURIComponent);
+
+      try {
+        if (!parts.length) return await renderDashboard();
+        if (parts[0] === "problems" && !parts[1]) return await renderProblems();
+        if (parts[0] === "problems" && parts[1]) return await renderProblemDetail(parts[1]);
+        if (parts[0] === "contests" && parts[1] && parts[2] === "problems" && parts[3]) return await renderProblemDetail(parts[3], parts[1]);
+        if (parts[0] === "contests" && !parts[1]) return await renderContests();
+        if (parts[0] === "contests" && parts[1]) return await renderContestDetail(parts[1]);
+        if (parts[0] === "submissions" && parts[1]) return await renderSubmissionDetail(parts[1]);
+        if (parts[0] === "submissions") return await renderSubmissions();
+        if (parts[0] === "account") return await renderAccount();
+        if (parts[0] === "admin" && parts[1] === "users") return await renderUsers();
+        if (parts[0] === "users") return await renderUsers();
+        if (parts[0] === "problem-admin") return await renderProblemAdmin();
+        if (parts[0] === "contest-admin") return await renderContestAdmin();
+
+        setPage("404", "页面不存在");
+        $("app").innerHTML = `<div class="card"><div class="card-body">${emptyBox("页面不存在")}</div></div>`;
+      } catch (e) {
+        console.error(e);
+        $("app").innerHTML = `<div class="card"><div class="card-body">${errorBox(e)}</div></div>`;
+      }
+    }
+
+
+    async function init() {
+      $("authBtn").onclick = openAuthModal;
+      $("logoutBtn").onclick = logout;
+      $("menuBtn").onclick = () => $("sidebar").classList.toggle("open");
+
+      window.addEventListener("popstate", route);
+      document.addEventListener("click", handleSpaLinkClick);
+      window.addEventListener("error", (e) => console.error("[AIOJ]", e.error || e.message));
+      window.addEventListener("unhandledrejection", (e) => console.error("[AIOJ]", e.reason));
+
+      await Promise.all([checkHealth(), loadMe()]);
+      await route();
+    }
+
+    Object.assign(window, {
+      navigate, handleSpaLinkClick,
+      openAuthModal, switchAuthTab, submitLogin, submitRegister, logout,
+      renderProblems, renderProblemDetail, submitSolution, downloadSample, loadProblemSubmissions,
+      renderContests, renderContestDetail, joinContest, submitContestRegister, leaveContest,
+      loadContestScoreboard, openAskQuestion, submitQuestion, openAnswerQuestion, submitAnswer, closeQuestion,
+      renderSubmissions, renderSubmissionDetail, renderAccount, changePassword,
+      renderUsers, renderProblemAdmin, importProblemPackage, renderContestAdmin, openContestCreate,
+      saveContestCreate, openContestSettings, saveContestSettings, openRegistrations, bulkAddRegistrations,
+      setRegistrationStatus, openAnnouncement, submitAnnouncement, exportContestRegistrations, exportContestScoreboard,
+      closeModal, modalBackdropClick
+    });
+
+    init();
+  </script>
+</body>
+</html>
