@@ -10,6 +10,7 @@ from app.routers.auth import router as auth_router
 from app.routers.contest_admin import router as contest_admin_router
 from app.routers.contests import router as contests_router
 from app.routers.internal import router as internal_router
+from app.routers.judge_admin import router as judge_admin_router
 from app.routers.problems import router as problems_router
 from app.routers.submissions import router as submissions_router
 from app.routers.system import router as system_router
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
         system_router,
         auth_router,
         admin_users_router,
+        judge_admin_router,
         problems_router,
         submissions_router,
         internal_router,

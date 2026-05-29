@@ -1,4 +1,6 @@
+import io
 import json
+import zipfile
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -40,7 +42,9 @@ def _get_submission_detail(submission_id: int, user=None):
 @router.post("/api/problems/{slug}/submissions")
 async def create_submission(
     slug: str,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    code: str | None = Form(None),
+    is_test_run: bool = Form(False),
     contest_slug: str | None = Form(None),
     user=Depends(get_optional_user),
 ):
@@ -95,11 +99,18 @@ async def create_submission(
             contest_id = contest["id"]
 
     slug = safe_slug(slug)
-    if not file.filename.endswith(".zip"):
-        raise HTTPException(status_code=400, detail="Please upload source.zip")
-
-    data = await file.read()
-    validate_submission_archive(data)
+    if code is not None:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("predict.py", code)
+        data = zip_buffer.getvalue()
+    else:
+        if not file:
+            raise HTTPException(status_code=400, detail="Either file or code is required")
+        if not file.filename.endswith(".zip"):
+            raise HTTPException(status_code=400, detail="Please upload source.zip")
+        data = await file.read()
+        validate_submission_archive(data)
 
     with engine.begin() as conn:
         pv = latest_problem_version(conn, slug, public_only=True)
@@ -110,6 +121,8 @@ async def create_submission(
         output_key = "pending/output/submission.csv"
         log_key = "pending/logs/run.log"
 
+        init_status = "TEST_QUEUED" if is_test_run else "QUEUED"
+
         submission = conn.execute(
             text(
                 """
@@ -118,7 +131,7 @@ async def create_submission(
                     source_object_key, output_object_key, log_object_key
                 )
                 values (
-                    :user_id, :problem_id, :problem_version_id, 'QUEUED',
+                    :user_id, :problem_id, :problem_version_id, :status,
                     :source_object_key, :output_object_key, :log_object_key
                 )
                 returning id
@@ -128,6 +141,7 @@ async def create_submission(
                 "user_id": user["id"] if user else None,
                 "problem_id": pv["problem_id"],
                 "problem_version_id": pv["problem_version_id"],
+                "status": init_status,
                 "source_object_key": source_key,
                 "output_object_key": output_key,
                 "log_object_key": log_key,
@@ -179,6 +193,7 @@ async def create_submission(
             "log_object_key": log_key,
             "test_input_bucket": S3_BUCKET_PROBLEMS,
             "test_input_object_key": pv["test_input_object_key"],
+            "is_test_run": is_test_run,
         }
 
         job = conn.execute(
@@ -202,7 +217,7 @@ async def create_submission(
                 {"contest_id": contest_id, "submission_id": submission_id},
             )
 
-    return {"ok": True, "submission_id": submission_id, "judge_job_id": job["id"], "status": "QUEUED"}
+    return {"ok": True, "submission_id": submission_id, "judge_job_id": job["id"], "status": init_status}
 
 
 @router.get("/api/submissions/{submission_id}")
@@ -227,6 +242,8 @@ def list_problem_submissions(slug: str, user=Depends(get_optional_user)):
         else:
             where = "s.problem_id = :problem_id and s.user_id is null"
             params = {"problem_id": problem["id"]}
+
+        where = f"({where}) and s.status not like 'TEST_%'"
 
         rows = conn.execute(
             text(
@@ -260,7 +277,7 @@ def my_submissions(user=Depends(require_user)):
                 from submissions s
                 join problems p on p.id = s.problem_id
                 join users u on u.id = s.user_id
-                where s.user_id = :user_id
+                where s.user_id = :user_id and s.status not like 'TEST_%'
                 order by s.created_at desc, s.id desc
                 limit 100
                 """
@@ -282,6 +299,7 @@ def admin_recent_submissions(user=Depends(require_admin)):
                 from submissions s
                 join problems p on p.id = s.problem_id
                 left join users u on u.id = s.user_id
+                where s.status not like 'TEST_%'
                 order by s.created_at desc, s.id desc
                 limit 100
                 """

@@ -241,11 +241,26 @@ def evaluate_submission(conn, submission_id: int) -> None:
         result = default_accuracy_score(prediction_csv, label_csv)
         result["metrics"].setdefault("scorer", "default_accuracy")
 
+    # Check if this is a test run
+    job_row = conn.execute(
+        text("select run_spec from judge_jobs where submission_id = :submission_id"),
+        {"submission_id": submission_id},
+    ).mappings().first()
+
+    is_test_run = False
+    if job_row and job_row["run_spec"]:
+        spec = job_row["run_spec"]
+        if isinstance(spec, str):
+            spec = json.loads(spec)
+        is_test_run = spec.get("is_test_run", False)
+
+    status = "TEST_ACCEPTED" if is_test_run else "ACCEPTED"
+
     conn.execute(
         text(
             """
             update submissions
-            set status = 'ACCEPTED',
+            set status = :status,
                 public_score = :public_score,
                 private_score = :private_score,
                 metrics = cast(:metrics as jsonb),
@@ -256,10 +271,12 @@ def evaluate_submission(conn, submission_id: int) -> None:
         ),
         {
             "id": submission_id,
+            "status": status,
             "public_score": result["public_score"],
             "private_score": result["private_score"],
             "metrics": json.dumps(result["metrics"]),
         },
     )
 
-    rebuild_leaderboard(conn, row["problem_id"])
+    if not is_test_run:
+        rebuild_leaderboard(conn, row["problem_id"])

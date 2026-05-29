@@ -3,7 +3,8 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.security import require_internal_token
-from app.services.evaluation import evaluate_submission
+from app.services.evaluation import evaluate_submission, rebuild_leaderboard
+from app.services.judge_admin import evaluation_failed_submission_status, failed_submission_status, normalize_run_spec
 from app.settings import settings
 
 router = APIRouter()
@@ -87,6 +88,30 @@ def internal_judge_finish(payload: dict, _: None = Depends(require_internal_toke
             raise HTTPException(status_code=404, detail="Job not found")
 
         submission_id = job["submission_id"]
+        spec = normalize_run_spec(job["run_spec"])
+        is_test_run = spec.get("is_test_run", False)
+        submission = conn.execute(
+            text(
+                """
+                select id, problem_id, status
+                from submissions
+                where id = :submission_id
+                for update
+                """
+            ),
+            {"submission_id": submission_id},
+        ).mappings().first()
+        if not submission:
+            raise HTTPException(status_code=404, detail="Submission not found")
+
+        if job["status"] != "CLAIMED":
+            return {
+                "ok": True,
+                "ignored": True,
+                "job_id": job_id,
+                "submission_id": submission_id,
+                "status": job["status"],
+            }
 
         if run_status == "RUN_FINISHED":
             conn.execute(
@@ -121,11 +146,15 @@ def internal_judge_finish(payload: dict, _: None = Depends(require_internal_toke
             try:
                 evaluate_submission(conn, submission_id)
             except Exception as exc:
+                err_status = evaluation_failed_submission_status(spec)
                 conn.execute(
                     text(
                         """
                         update submissions
-                        set status = 'EVALUATION_FAILED',
+                        set status = :status,
+                            public_score = null,
+                            private_score = null,
+                            metrics = null,
                             error_message = :error_message,
                             runtime_ms = coalesce(:runtime_ms, runtime_ms),
                             memory_peak_mb = coalesce(:memory_peak_mb, memory_peak_mb),
@@ -134,20 +163,24 @@ def internal_judge_finish(payload: dict, _: None = Depends(require_internal_toke
                         """
                     ),
                     {
+                        "status": err_status,
                         "submission_id": submission_id,
                         "error_message": str(exc),
                         "runtime_ms": runtime_ms,
                         "memory_peak_mb": memory_peak_mb,
                     },
                 )
+                if not is_test_run:
+                    rebuild_leaderboard(conn, submission["problem_id"])
                 return {
                     "ok": True,
                     "submission_id": submission_id,
-                    "status": "EVALUATION_FAILED",
+                    "status": err_status,
                     "error_message": str(exc),
                 }
 
-            return {"ok": True, "submission_id": submission_id, "status": "ACCEPTED"}
+            final_status = "TEST_ACCEPTED" if is_test_run else "ACCEPTED"
+            return {"ok": True, "submission_id": submission_id, "status": final_status}
 
         conn.execute(
             text(
@@ -160,11 +193,15 @@ def internal_judge_finish(payload: dict, _: None = Depends(require_internal_toke
             ),
             {"id": job_id},
         )
+        fail_status = failed_submission_status(spec)
         conn.execute(
             text(
                 """
                 update submissions
-                set status = 'RUN_FAILED',
+                set status = :status,
+                    public_score = null,
+                    private_score = null,
+                    metrics = null,
                     error_message = :error_message,
                     runtime_ms = :runtime_ms,
                     memory_peak_mb = :memory_peak_mb,
@@ -173,13 +210,16 @@ def internal_judge_finish(payload: dict, _: None = Depends(require_internal_toke
                 """
             ),
             {
+                "status": fail_status,
                 "submission_id": submission_id,
                 "error_message": error_message or "Run failed",
                 "runtime_ms": runtime_ms,
                 "memory_peak_mb": memory_peak_mb,
             },
         )
-        return {"ok": True, "submission_id": submission_id, "status": "RUN_FAILED"}
+        if not is_test_run:
+            rebuild_leaderboard(conn, submission["problem_id"])
+        return {"ok": True, "submission_id": submission_id, "status": fail_status}
 
 
 @router.post("/api/internal/evaluate/{submission_id}")

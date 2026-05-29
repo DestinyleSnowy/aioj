@@ -803,6 +803,7 @@ async function renderProblemDetail(slug, contestSlug = null) {
           <!-- Workspace Navigation Tabs -->
           <div class="tabs" id="problemTabs">
             <button class="tab active" onclick="switchProblemTab('statement')">题目详情与规范</button>
+            <button class="tab" id="editorTabHeader" onclick="switchProblemTab('editor')">在线代码编辑器 💻</button>
             <button class="tab" onclick="switchProblemTab('submissions')">我的提交记录 (${subs.length})</button>
             <button class="tab" onclick="switchProblemTab('leaderboard')">在线排行榜</button>
           </div>
@@ -813,6 +814,68 @@ async function renderProblemDetail(slug, contestSlug = null) {
               <div class="card-body">
                 ${renderMd(problem.statement_md)}
               </div>
+            </div>
+          </div>
+
+          <!-- Editor Tab -->
+          <div class="tab-panel" id="tab-editor">
+            <div class="card glass" style="margin-bottom: var(--space-md);">
+              <div class="card-body" style="padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-sm);">
+                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--border-subtle); padding-bottom: var(--space-sm); margin-bottom: var(--space-xs);">
+                  <div style="display: flex; align-items: center; gap: 8px;">
+                    <span style="font-size: 18px;">💻</span>
+                    <h3 style="font-size: 15px; font-weight: 700; margin: 0; color: var(--text-main);">在线代码工作区 — predict.py</h3>
+                  </div>
+                  <div style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">
+                    运行环境: Python 3 & ML Libraries
+                  </div>
+                </div>
+                <p style="font-size: 12.5px; color: var(--text-secondary); margin-bottom: var(--space-xs); line-height: 1.5;">
+                  在下方编写预测算法。模型容器沙箱在运行您的代码时，会将测试集加载到 <code class="code-inline">/input/test.csv</code>，请将预测生成的 CSV 结果导出至 <code class="code-inline">/output/submission.csv</code>。
+                </p>
+                
+                <!-- Code Editor Container -->
+                <div class="editor-container-wrapper" style="position: relative; border-radius: var(--radius-md); overflow: hidden; border: var(--border-light); box-shadow: var(--shadow-sm);">
+                  <div class="editor-header" style="background: hsla(0, 0%, 100%, 0.03); border-bottom: var(--border-subtle); padding: 8px 16px; display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                      <span class="dot-red" style="width: 10px; height: 10px; background: var(--color-danger); border-radius: 50%; display: inline-block;"></span>
+                      <span class="dot-yellow" style="width: 10px; height: 10px; background: var(--color-warning); border-radius: 50%; display: inline-block;"></span>
+                      <span class="dot-green" style="width: 10px; height: 10px; background: var(--color-success); border-radius: 50%; display: inline-block;"></span>
+                      <span style="font-size: 12px; font-family: var(--font-mono); color: var(--text-secondary); margin-left: 6px; font-weight: 500;">predict.py</span>
+                    </div>
+                    <button class="btn btn-ghost btn-sm" onclick="resetEditorCode('${esc(slug)}')" style="font-size: 11px; padding: 4px 10px; gap: 4px;">
+                      <span>🔄</span> 重置模板
+                    </button>
+                  </div>
+                  <textarea id="codeEditor" spellcheck="false" placeholder="在此编写 Python 代码..." style="width: 100%; height: 380px; background: hsl(var(--hue-primary), 24%, 3%); color: hsl(120, 60%, 75%); font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13.5px; padding: 16px; border: none; outline: none; resize: vertical; line-height: 1.6; white-space: pre; word-wrap: normal; overflow-x: auto; tab-size: 4; -moz-tab-size: 4;"></textarea>
+                </div>
+                
+                <!-- Action Row -->
+                <div style="display: flex; gap: var(--space-md); margin-top: var(--space-xs);">
+                  <button class="btn btn-secondary" onclick="runSandboxTest('${esc(slug)}')" id="btnRunTest" style="flex: 1; justify-content: center; gap: 8px; font-weight: 600;">
+                    🧪 运行测试 (Test Run)
+                  </button>
+                  <button class="btn btn-primary" onclick="submitEditorCode('${esc(slug)}', ${contestSlug ? `'${esc(contestSlug)}'` : 'null'})" id="btnSubmitCode" style="flex: 1; justify-content: center; gap: 8px; font-weight: 600;">
+                    🚀 正式提交 (Submit Solution)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Terminal output -->
+            <div class="card" style="background: hsl(var(--hue-primary), 32%, 2%); border: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.15); box-shadow: var(--shadow-sm); padding: 0; overflow: hidden; margin-bottom: var(--space-lg);" id="terminalCard">
+              <div style="background: hsla(0, 0%, 100%, 0.02); border-bottom: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.1); padding: 8px 16px; display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 13px;">📟</span>
+                  <span style="font-family: var(--font-display); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary);">沙箱终端 Console Output</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="status-dot" id="terminalStatusDot" style="width: 8px; height: 8px; background: var(--text-muted); border-radius: 50%; display: inline-block;"></span>
+                  <span style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted);" id="terminalStatusText">READY</span>
+                  <button class="btn btn-ghost btn-sm" onclick="$('terminalOutput').textContent = '';" style="font-size: 10px; padding: 2px 6px; margin-left: 8px; opacity: 0.6;">清空</button>
+                </div>
+              </div>
+              <pre id="terminalOutput" style="margin: 0; padding: var(--space-md); max-height: 250px; min-height: 120px; overflow-y: auto; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 12.5px; color: hsl(200, 10%, 80%); line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: hsl(var(--hue-primary), 32%, 1.5%); scroll-behavior: smooth;"></pre>
             </div>
           </div>
 
@@ -947,6 +1010,30 @@ async function renderProblemDetail(slug, contestSlug = null) {
     loadProblemLeaderboard(slug);
     // Init Drag and Drop upload area triggers
     initDragAndDrop();
+
+    // Setup online code editor
+    const textarea = $('codeEditor');
+    if (textarea) {
+      const savedCode = localStorage.getItem(`aioj_code_${slug}`) || CODE_TEMPLATE;
+      textarea.value = savedCode;
+      
+      // Save code on edit
+      textarea.addEventListener('input', (e) => {
+        localStorage.setItem(`aioj_code_${slug}`, e.target.value);
+      });
+
+      // Tab indent listener
+      textarea.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const start = this.selectionStart;
+          const end = this.selectionEnd;
+          this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
+          this.selectionStart = this.selectionEnd = start + 4;
+          localStorage.setItem(`aioj_code_${slug}`, this.value);
+        }
+      });
+    }
   } catch (err) {
     app.innerHTML = errorBox(err);
   }
@@ -2304,6 +2391,247 @@ async function resetUserPassword(userId) {
   }
 }
 
+function formatAgeFromNow(value) {
+  if (!value) return '—';
+  const diffMs = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(diffMs)) return '—';
+  const totalSec = Math.max(0, Math.floor(diffMs / 1000));
+  if (totalSec < 60) return `${totalSec}s 前`;
+  if (totalSec < 3600) return `${Math.floor(totalSec / 60)}m 前`;
+  if (totalSec < 86400) return `${Math.floor(totalSec / 3600)}h 前`;
+  return `${Math.floor(totalSec / 86400)}d 前`;
+}
+
+function truncateMiddle(text, limit = 72) {
+  const value = String(text || '');
+  if (value.length <= limit) return value;
+  return `${value.slice(0, limit - 1)}…`;
+}
+
+async function renderJudgeAdmin() {
+  setPage('评测运维');
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在汇总评测节点与任务队列...</span>
+    </div>
+  `;
+  try {
+    const data = await api('/api/admin/judge/overview', { headers: authHeaders() });
+    const summary = data.summary || {};
+    const nodes = data.nodes || [];
+    const jobs = data.recent_jobs || [];
+    const timing = data.timing || {};
+    const heartbeatHint = Math.max(1, Math.round((timing.node_heartbeat_ttl_seconds || 90) / 60));
+    const staleHint = Math.max(1, Math.round((timing.job_stale_after_seconds || 900) / 60));
+
+    app.innerHTML = `
+      <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
+        <div>
+          <h3 class="section-title" style="margin-bottom: 4px;">Judge Admin / 评测调度运维台</h3>
+          <div class="text-muted" style="font-size: 12px;">
+            节点心跳超过 ${heartbeatHint} 分钟视为离线，CLAIMED 超过 ${staleHint} 分钟视为卡住任务。
+          </div>
+        </div>
+        <button class="btn btn-secondary" onclick="renderJudgeAdmin()">刷新面板</button>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-value">${summary.pending_jobs || 0}</div>
+          <div class="stat-label">待调度任务</div>
+        </div>
+        <div class="stat-card" style="border-color: var(--color-primary);">
+          <div class="stat-value" style="color: var(--color-primary);">${summary.claimed_jobs || 0}</div>
+          <div class="stat-label">执行中任务</div>
+        </div>
+        <div class="stat-card" style="border-color: ${(summary.stale_jobs || 0) > 0 ? 'var(--color-danger)' : 'var(--border-light)'};">
+          <div class="stat-value" style="color: ${(summary.stale_jobs || 0) > 0 ? 'var(--color-danger)' : 'var(--text-main)'};">${summary.stale_jobs || 0}</div>
+          <div class="stat-label">卡住任务</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${summary.online_nodes || 0}/${summary.total_nodes || 0}</div>
+          <div class="stat-label">在线节点</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${summary.running_submissions || 0}</div>
+          <div class="stat-label">运行中提交</div>
+        </div>
+        <div class="stat-card" style="border-color: var(--color-warning);">
+          <div class="stat-value" style="color: var(--color-warning);">${summary.failed_jobs_24h || 0}</div>
+          <div class="stat-label">24h 失败任务</div>
+        </div>
+      </div>
+
+      <div class="two-col" style="grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: start; gap: var(--space-lg);">
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">节点状态</h3>
+          </div>
+          ${nodes.length === 0 ? emptyBox('尚未有评测节点向内部接口报到') : `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>节点</th>
+                    <th>状态</th>
+                    <th>活动任务</th>
+                    <th>最近心跳</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${nodes.map((node) => `
+                    <tr>
+                      <td>
+                        <strong style="font-family: var(--font-mono);">${esc(node.name)}</strong>
+                        <div class="text-muted" style="font-size: 11px;">并发上限 ${esc(node.max_parallel || 1)}</div>
+                      </td>
+                      <td>${node.is_online ? '<span class="pill green">ONLINE</span>' : '<span class="pill red">STALE</span>'}</td>
+                      <td>${esc(node.active_jobs || 0)}</td>
+                      <td>
+                        <div>${formatDate(node.last_heartbeat_at)}</div>
+                        <div class="text-muted" style="font-size: 11px;">${formatAgeFromNow(node.last_heartbeat_at)}</div>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+
+        <div class="card ${summary.stale_jobs ? 'highlight' : ''}">
+          <div class="card-header">
+            <h3 class="card-title">最近任务</h3>
+          </div>
+          ${jobs.length === 0 ? emptyBox('当前还没有评测任务记录') : `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Job</th>
+                    <th>提交 / 题目</th>
+                    <th>执行状态</th>
+                    <th>节点</th>
+                    <th>诊断</th>
+                    <th style="text-align: right;">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${jobs.map((job) => `
+                    <tr>
+                      <td>
+                        <div><strong>#${job.id}</strong></div>
+                        <div class="text-muted" style="font-size: 11px;">attempt ${esc(job.attempt || 0)}${job.is_test_run ? ' · TEST' : ''}</div>
+                      </td>
+                      <td>
+                        <div>
+                          <a href="/submissions/${job.submission_id}" data-link><strong>Submission #${job.submission_id}</strong></a>
+                          ${job.contest_id ? '<span class="pill gray" style="margin-left: 6px;">CONTEST</span>' : ''}
+                        </div>
+                        <div style="font-family: var(--font-mono); font-size: 12px;">${esc(job.problem_slug || `problem-${job.problem_id}`)}</div>
+                        <div class="text-muted" style="font-size: 11px;">${esc(job.username || 'anonymous')}</div>
+                      </td>
+                      <td>
+                        <div>${statusPill(job.status)}</div>
+                        <div style="margin-top: 6px;">${statusPill(job.submission_status)}</div>
+                        ${job.is_stale ? '<div class="text-danger" style="font-size: 11px; margin-top: 6px;">CLAIMED 过久</div>' : ''}
+                      </td>
+                      <td>
+                        <div>${esc(job.node_name || '—')}</div>
+                        <div class="text-muted" style="font-size: 11px;">${formatAgeFromNow(job.claimed_at || job.created_at)}</div>
+                      </td>
+                      <td style="min-width: 240px;">
+                        <div class="text-muted" style="font-size: 11px; margin-bottom: 4px;">
+                          创建 ${formatDate(job.created_at)}
+                        </div>
+                        ${job.finished_at ? `
+                          <div class="text-muted" style="font-size: 11px; margin-bottom: 4px;">
+                            完成 ${formatDate(job.finished_at)}
+                          </div>
+                        ` : ''}
+                        <div style="font-size: 12px; line-height: 1.4;">
+                          ${job.error_message ? esc(truncateMiddle(job.error_message, 88)) : '—'}
+                        </div>
+                        ${(job.public_score != null || job.private_score != null) ? `
+                          <div class="text-muted" style="font-size: 11px; margin-top: 6px;">
+                            public ${scoreDisplay(job.public_score)} / private ${scoreDisplay(job.private_score)}
+                          </div>
+                        ` : ''}
+                      </td>
+                      <td>
+                        <div class="row gap-xs" style="justify-content: flex-end; flex-wrap: wrap;">
+                          <button class="btn btn-secondary btn-sm" onclick="rejudgeSubmission(${job.submission_id})">重判提交</button>
+                          ${job.status === 'FAILED' ? `<button class="btn btn-secondary btn-sm" onclick="retryJudgeJob(${job.id})">重试任务</button>` : ''}
+                          ${(job.status === 'CLAIMED' || job.status === 'PENDING') ? `<button class="btn btn-danger btn-sm" onclick="markJudgeJobFailed(${job.id})">标记失败</button>` : ''}
+                        </div>
+                      </td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      </div>
+    `;
+
+    setTimeout(() => {
+      if (location.pathname === '/judge-admin') {
+        renderJudgeAdmin();
+      }
+    }, 10000);
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function retryJudgeJob(jobId) {
+  if (!confirm(`确认重试评测任务 #${jobId} 吗？`)) return;
+  try {
+    await api(`/api/admin/judge/jobs/${jobId}/retry`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    toast(`任务 #${jobId} 已重新入队`, 'success');
+    renderJudgeAdmin();
+  } catch (err) {
+    toast(`重试任务失败: ${err.message}`, 'error');
+  }
+}
+
+async function rejudgeSubmission(submissionId) {
+  if (!confirm(`确认重新评测提交 #${submissionId} 吗？原有结果会被新结果覆盖。`)) return;
+  try {
+    await api(`/api/admin/judge/submissions/${submissionId}/rejudge`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    toast(`提交 #${submissionId} 已重新入队`, 'success');
+    renderJudgeAdmin();
+  } catch (err) {
+    toast(`重判提交失败: ${err.message}`, 'error');
+  }
+}
+
+async function markJudgeJobFailed(jobId) {
+  const reason = window.prompt('请输入标记失败原因（会写入提交错误信息）：', 'Marked failed by admin');
+  if (reason === null) return;
+  try {
+    await api(`/api/admin/judge/jobs/${jobId}/mark-failed`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason.trim() || 'Marked failed by admin' }),
+    });
+    toast(`任务 #${jobId} 已标记失败`, 'success');
+    renderJudgeAdmin();
+  } catch (err) {
+    toast(`标记任务失败: ${err.message}`, 'error');
+  }
+}
+
 // Admin: Problem Repository Manager
 async function renderProblemAdmin() {
   setPage('题目管理');
@@ -2820,6 +3148,7 @@ function route() {
   if (path === '/submissions') return renderSubmissions();
   if (path === '/account') return renderAccount();
   if (path === '/admin/users' || path === '/users') return renderUsers();
+  if (path === '/judge-admin') return renderJudgeAdmin();
   if (path === '/problem-admin') return renderProblemAdmin();
   if (path === '/contest-admin') return renderContestAdmin();
 
@@ -2902,6 +3231,273 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMe().then(() => route());
 });
 
+// ─── Web IDE & Sandbox Test Run Handlers ─────────────────────────────────────
+const CODE_TEMPLATE = `import pandas as pd
+import numpy as np
+import time
+
+def predict():
+    print("[AIOJ Web IDE] 开始执行预测代码...")
+    print("正在加载测试数据...")
+    try:
+        test_df = pd.read_csv('/input/test.csv')
+    except Exception as e:
+        print(f"ERROR: 无法加载输入测试集: {e}")
+        return
+
+    print(f"成功加载数据集，样本数: {len(test_df)}")
+    print("特征提取与模型前向传播中...")
+    time.sleep(1) # 模拟推理耗时
+
+    # ─────────────────────────────────────────────────────────
+    # 📝 在此编写您的算法/模型预测逻辑。
+    # 默认 Baseline 生成全零预测作为演示。
+    # ─────────────────────────────────────────────────────────
+    predictions = np.zeros(len(test_df))
+
+    # 组装符合规范的提交格式
+    submission = pd.DataFrame({
+        'id': test_df['id'],
+        'prediction': predictions
+    })
+
+    print("预测导出至 /output/submission.csv ...")
+    submission.to_csv('/output/submission.csv', index=False)
+    print("模型沙箱预测执行完毕！")
+
+if __name__ == '__main__':
+    predict()
+`;
+
+function appendTerminal(text) {
+  const terminal = $('terminalOutput');
+  if (!terminal) return;
+  terminal.textContent += text + '\n';
+  terminal.scrollTop = terminal.scrollHeight;
+}
+
+function resetEditorCode(slug) {
+  if (confirm('确认将编辑器代码重置为默认机器学习模板吗？您当前未保存的代码将会丢失。')) {
+    const textarea = $('codeEditor');
+    if (textarea) {
+      textarea.value = CODE_TEMPLATE;
+      localStorage.setItem(`aioj_code_${slug}`, CODE_TEMPLATE);
+    }
+  }
+}
+
+async function runSandboxTest(slug) {
+  const code = $('codeEditor').value.trim();
+  if (!code) {
+    showToast('请输入代码！', 'danger');
+    return;
+  }
+  
+  const terminal = $('terminalOutput');
+  const dot = $('terminalStatusDot');
+  const txt = $('terminalStatusText');
+  const btn = $('btnRunTest');
+  
+  terminal.textContent = '>>> 初始化沙箱评测环境...\n';
+  dot.style.background = 'var(--color-warning)';
+  txt.textContent = 'QUEUED';
+  txt.style.color = 'var(--color-warning)';
+  btn.disabled = true;
+  
+  appendTerminal('>>> 正在打包 predict.py 并发送测试运行请求...');
+  
+  try {
+    const formData = new FormData();
+    formData.append('code', code);
+    formData.append('is_test_run', 'true');
+    
+    const res = await api(`/api/problems/${slug}/submissions`, {
+      method: 'POST',
+      body: formData,
+      headers: authHeaders(),
+    });
+    
+    const submissionId = res.submission_id;
+    appendTerminal(`>>> 评测任务创建成功。任务 ID: #${submissionId}`);
+    appendTerminal('>>> 正在等待可用沙箱节点 claimed...');
+    
+    pollTestRun(submissionId, slug);
+  } catch (err) {
+    appendTerminal(`\n[ERROR] 提交测试失败: ${err.message || err}`);
+    dot.style.background = 'var(--color-danger)';
+    txt.textContent = 'FAILED';
+    txt.style.color = 'var(--color-danger)';
+    btn.disabled = false;
+  }
+}
+
+async function pollTestRun(submissionId, slug) {
+  const terminal = $('terminalOutput');
+  const dot = $('terminalStatusDot');
+  const txt = $('terminalStatusText');
+  const btn = $('btnRunTest');
+  
+  let attempts = 0;
+  const maxAttempts = 120; // 3 minutes total
+  const interval = 1500; // 1.5 seconds
+  
+  const timer = setInterval(async () => {
+    attempts++;
+    if (attempts > maxAttempts) {
+      clearInterval(timer);
+      appendTerminal('\n[TIMEOUT] 评测超时，系统强制中止。');
+      dot.style.background = 'var(--color-danger)';
+      txt.textContent = 'TIMEOUT';
+      txt.style.color = 'var(--color-danger)';
+      btn.disabled = false;
+      return;
+    }
+    
+    try {
+      const sub = await api(`/api/submissions/${submissionId}`, { headers: authHeaders() });
+      const status = sub.status;
+      
+      if (status === 'RUNNING') {
+        dot.style.background = 'var(--color-primary)';
+        txt.textContent = 'RUNNING';
+        txt.style.color = 'var(--color-primary)';
+      } else if (status === 'TEST_QUEUED') {
+        dot.style.background = 'var(--color-warning)';
+        txt.textContent = 'QUEUED';
+        txt.style.color = 'var(--color-warning)';
+      }
+      
+      if (['TEST_ACCEPTED', 'TEST_FAILED', 'TEST_EVALUATION_FAILED', 'RUN_FAILED', 'EVALUATION_FAILED', 'ACCEPTED'].includes(status)) {
+        clearInterval(timer);
+        btn.disabled = false;
+        
+        appendTerminal(`\n>>> 评测运行结束。最终状态: [${status}]`);
+        appendTerminal('>>> 正在拉取沙箱运行日志...\n');
+        
+        try {
+          const logRes = await api(`/api/submissions/${submissionId}/log`, { headers: authHeaders() });
+          appendTerminal('==================== DOCKER SANDBOX LOGS ====================');
+          appendTerminal(logRes.log || '（无日志输出）');
+          appendTerminal('==============================================================');
+        } catch (logErr) {
+          appendTerminal(`>>> [ERROR] 无法拉取运行日志: ${logErr.message}`);
+        }
+        
+        if (status === 'TEST_ACCEPTED' || status === 'ACCEPTED') {
+          dot.style.background = 'var(--color-success)';
+          txt.textContent = 'SUCCESS';
+          txt.style.color = 'var(--color-success)';
+          
+          appendTerminal('\n🎉 评测指标评定完成 (Evaluation Metrics):');
+          appendTerminal(`- 公开测试集得分 (Public Score):  ${sub.public_score != null ? sub.public_score.toFixed(6) : 'N/A'}`);
+          appendTerminal(`- 私有测试集得分 (Private Score): ${sub.private_score != null ? sub.private_score.toFixed(6) : 'N/A'}`);
+          appendTerminal(`- 运行容器耗时 (Runtime):        ${sub.runtime_ms != null ? sub.runtime_ms + ' ms' : 'N/A'}`);
+          appendTerminal(`- 峰值内存占用 (Peak Memory):    ${sub.memory_peak_mb != null ? sub.memory_peak_mb + ' MB' : 'N/A'}`);
+          appendTerminal('\n>>> 测试运行圆满成功！您可以点击【正式提交】提报此版本至排行榜。');
+        } else {
+          dot.style.background = 'var(--color-danger)';
+          txt.textContent = 'FAILED';
+          txt.style.color = 'var(--color-danger)';
+          
+          appendTerminal(`\n❌ 沙箱运行失败 (Sandbox Failed):`);
+          appendTerminal(`- 错误类型/原因: ${sub.error_message || '未知错误 (运行非正常退出)'}`);
+          appendTerminal(`- 容器耗时: ${sub.runtime_ms != null ? sub.runtime_ms + ' ms' : 'N/A'}`);
+          appendTerminal('\n>>> 请根据上方 DOCKER SANDBOX LOGS 中的报错进行诊断和修改。');
+        }
+      }
+    } catch (err) {
+      console.error('Error polling submission:', err);
+    }
+  }, interval);
+}
+
+async function submitEditorCode(slug, contestSlug) {
+  const code = $('codeEditor').value.trim();
+  if (!code) {
+    showToast('请输入代码！', 'danger');
+    return;
+  }
+  
+  if (!confirm('您确定要将当前编辑器中的代码进行正式提交吗？此提交将正式计入排行榜。')) {
+    return;
+  }
+  
+  const btn = $('btnSubmitCode');
+  btn.disabled = true;
+  btn.textContent = '提交中...';
+  
+  try {
+    const formData = new FormData();
+    formData.append('code', code);
+    if (contestSlug) {
+      formData.append('contest_slug', contestSlug);
+    }
+    
+    const res = await api(`/api/problems/${slug}/submissions`, {
+      method: 'POST',
+      body: formData,
+      headers: authHeaders(),
+    });
+    
+    showToast('代码提交成功！容器沙箱已启动评测。', 'success');
+    
+    // Reload submissions and navigate to submissions tab
+    const [problem, subsData] = await Promise.all([
+      api(`/api/problems/${slug}`),
+      loadProblemSubmissions(slug, contestSlug),
+    ]);
+    const subs = subsData.items || [];
+    
+    const tabHeaders = document.querySelectorAll('#problemTabs .tab');
+    if (tabHeaders.length >= 3) {
+      tabHeaders[2].textContent = `我的提交记录 (${subs.length})`;
+    }
+    
+    const subsPanel = $('tab-submissions');
+    if (subsPanel) {
+      subsPanel.innerHTML = `
+        <div class="card">
+          ${subs.length === 0 ? emptyBox('本题目暂无您的提交记录') : `
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>提交用户</th>
+                    <th>评测结果</th>
+                    <th>公开分数</th>
+                    <th>耗时</th>
+                    <th>提交时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${subs.map(s => `
+                    <tr class="clickable-row" onclick="navigate('/submissions/${s.id}')">
+                      <td>#${s.id}</td>
+                      <td><strong>${esc(s.username || '—')}</strong></td>
+                      <td>${statusPill(s.status)}</td>
+                      <td class="text-accent">${scoreDisplay(s.public_score)}</td>
+                      <td>${s.runtime_ms != null ? s.runtime_ms + 'ms' : '—'}</td>
+                      <td style="font-size: 12px; color: var(--text-muted);">${formatDate(s.created_at)}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `}
+        </div>
+      `;
+    }
+    
+    switchProblemTab('submissions');
+  } catch (err) {
+    showToast(`提交失败: ${err.message}`, 'danger');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🚀 正式提交 (Submit Solution)';
+  }
+}
+
 // ─── Window exports for handlers ──────────────────────────────────────────
 Object.assign(window, {
   navigate, showAuthModal, switchAuthTab, submitAuth, logout,
@@ -2910,11 +3506,13 @@ Object.assign(window, {
   showAskQuestionModal, submitQuestion,
   showAnswerQuestionModal, submitAnswer, closeQuestion,
   changePassword, showResetPasswordModal, resetUserPassword,
+  renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
   toggleUserRole, toggleUserDisabled,
   importProblem, setProblemStatus,
   showCreateContestModal, createContest,
   showContestSettingsModal, saveContestSettings,
   showRegistrationModal, setRegStatus, bulkAddUsers,
   showAnnouncementModal, publishAnnouncement,
-  closeModal, copyTerminalText, toggleTheme
+  closeModal, copyTerminalText, toggleTheme,
+  resetEditorCode, runSandboxTest, submitEditorCode
 });
