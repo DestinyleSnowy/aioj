@@ -19,6 +19,11 @@ docker compose version
 echo "[deploy] building api..."
 docker compose build api
 
+if [ -f "judge-images/python-basic/Dockerfile" ]; then
+  echo "[deploy] building default judge image..."
+  docker build -t aioj-python-basic:latest judge-images/python-basic
+fi
+
 echo "[deploy] starting stateful dependencies..."
 docker compose up -d postgres redis minio
 
@@ -26,7 +31,15 @@ echo "[deploy] running database migrations..."
 docker compose run --rm api alembic upgrade head
 
 echo "[deploy] starting application services..."
-docker compose up -d --remove-orphans api worker caddy
+docker compose up -d --remove-orphans api caddy
+
+echo "[deploy] restarting judge agent if installed..."
+if sudo -n systemctl cat aioj-judge-agent >/dev/null 2>&1; then
+  sudo -n systemctl restart aioj-judge-agent
+  echo "[deploy] judge agent restarted"
+else
+  echo "[deploy] judge agent service not available or requires interactive sudo; skipped"
+fi
 
 echo "[deploy] waiting for api health..."
 for i in $(seq 1 45); do
