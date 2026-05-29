@@ -425,104 +425,163 @@ async function renderDashboard() {
     const runningContests = contests.filter(c => c.state === 'RUNNING' || c.status === 'RUNNING');
     const upcomingContests = contests.filter(c => c.state === 'UPCOMING' || c.status === 'UPCOMING');
 
+    // Calculate solved problems stats
+    const solvedSlugs = new Set(
+      submissions
+        .filter(s => s.status === 'ACCEPTED' || s.status === 'RUN_FINISHED')
+        .map(s => s.problem_slug || s.problem_title)
+        .filter(Boolean)
+    );
+    const solvedCount = solvedSlugs.size;
+    const totalCount = problems.length;
+    const solvedPercent = totalCount > 0 ? Math.round((solvedCount / totalCount) * 100) : 0;
+    
+    // SVG stroke dash calculate
+    const radius = 30;
+    const circumference = 2 * Math.PI * radius;
+    const strokeDashoffset = circumference - (solvedPercent / 100) * circumference;
+
     app.innerHTML = `
-      <div class="dashboard-hero">
-        <h2 class="dashboard-hero-title">AIOJ 智能机器学习评测系统</h2>
-        <p class="dashboard-hero-subtitle">面向 AI 和深度学习算法竞赛的在线自动化评测中心，支持多卡多进程安全沙箱环境、多重评测指标自动优化和实时高性能排行榜。</p>
-      </div>
+      <div class="two-col" style="grid-template-columns: 1fr 340px; align-items: start; gap: var(--space-lg);">
+        <!-- Main Column (Left) -->
+        <div style="display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0;">
+          <div class="dashboard-hero">
+            <h2 class="dashboard-hero-title">AIOJ 智能机器学习评测系统</h2>
+            <p class="dashboard-hero-subtitle">面向 AI 和深度学习算法竞赛的在线自动化评测中心，支持多卡多进程安全沙箱环境、多重评测指标自动优化和实时高性能排行榜。</p>
+          </div>
 
-      <div class="stats-row">
-        <div class="stat-card">
-          <div class="stat-value">${problems.length}</div>
-          <div class="stat-label">题库总量</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${contests.length}</div>
-          <div class="stat-label">历史比赛</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${runningContests.length}</div>
-          <div class="stat-label">当前进行中</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${submissions.length}</div>
-          <div class="stat-label">我的提交</div>
-        </div>
-      </div>
-
-      ${runningContests.length > 0 ? `
-        <div class="card highlight mb-lg">
-          <div class="card-header">
-            <h3 class="card-title">
-              <span class="pulsing-dot"></span> 🔥 正在进行的比赛
-            </h3>
-          </div>
-          <div class="contest-grid">
-            ${runningContests.map(c => contestCard(c)).join('')}
-          </div>
-        </div>
-      ` : ''}
-
-      ${upcomingContests.length > 0 ? `
-        <div class="card mb-lg">
-          <div class="card-header">
-            <h3 class="card-title">📅 即将开始的比赛</h3>
-          </div>
-          <div class="contest-grid">
-            ${upcomingContests.map(c => contestCard(c)).join('')}
-          </div>
-        </div>
-      ` : ''}
-
-      <div class="two-col mt-lg">
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">推荐练习题目</h3>
-            <a href="/problems" class="btn btn-ghost btn-sm" data-link>题库主页 →</a>
-          </div>
-          ${problems.length === 0 ? emptyBox('暂无可用题目') : `
-            <div class="card-grid compact">
-              ${problems.slice(0, 6).map(p => `
-                <a href="/problems/${esc(p.slug)}" class="mini-card" data-link>
-                  <div class="mini-card-title">${esc(p.title)}</div>
-                  <div class="mini-card-meta">${esc(p.slug)} · ${esc(p.metric || 'accuracy')}</div>
-                </a>
-              `).join('')}
+          <div class="stats-row" style="margin-bottom: 0;">
+            <div class="stat-card">
+              <div class="stat-value">${problems.length}</div>
+              <div class="stat-label">题库总量</div>
             </div>
-          `}
-        </div>
-        
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">我的最近提交记录</h3>
-            <a href="/submissions" class="btn btn-ghost btn-sm" data-link>全部提交 →</a>
-          </div>
-          ${submissions.length === 0 ? emptyBox('近期无提交记录') : `
-            <div class="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>编号</th>
-                    <th>题目标识</th>
-                    <th>评测状态</th>
-                    <th>公开分数</th>
-                    <th>提交时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${submissions.slice(0, 8).map(s => `
-                    <tr class="clickable-row" onclick="navigate('/submissions/${s.id}')">
-                      <td>#${s.id}</td>
-                      <td style="font-family: var(--font-mono); font-size: 12px;">${esc(s.problem_slug || s.problem_title || '')}</td>
-                      <td>${statusPill(s.status)}</td>
-                      <td class="text-accent">${scoreDisplay(s.public_score)}</td>
-                      <td style="font-size: 12px; color: var(--text-muted);">${formatDate(s.created_at)}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
+            <div class="stat-card">
+              <div class="stat-value">${contests.length}</div>
+              <div class="stat-label">历史比赛</div>
             </div>
-          `}
+            <div class="stat-card">
+              <div class="stat-value">${runningContests.length}</div>
+              <div class="stat-label">进行中比赛</div>
+            </div>
+            <div class="stat-card" style="border-color: var(--color-success);">
+              <div class="stat-value" style="color: var(--color-success);">${solvedCount}</div>
+              <div class="stat-label">已通关题数</div>
+            </div>
+          </div>
+
+          ${runningContests.length > 0 ? `
+            <div class="card highlight">
+              <div class="card-header" style="margin-bottom: var(--space-md);">
+                <h3 class="card-title">
+                  <span class="pulsing-dot"></span> 🔥 正在进行的比赛
+                </h3>
+              </div>
+              <div class="contest-grid">
+                ${runningContests.map(c => contestCard(c)).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          ${upcomingContests.length > 0 ? `
+            <div class="card">
+              <div class="card-header" style="margin-bottom: var(--space-md);">
+                <h3 class="card-title">📅 即将开始的比赛</h3>
+              </div>
+              <div class="contest-grid">
+                ${upcomingContests.map(c => contestCard(c)).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          <div class="card">
+            <div class="card-header" style="margin-bottom: var(--space-md);">
+              <h3 class="card-title">推荐挑战题目</h3>
+              <a href="/problems" class="btn btn-ghost btn-sm" data-link>题库主页 →</a>
+            </div>
+            ${problems.length === 0 ? emptyBox('暂无可用题目') : `
+              <div class="card-grid compact">
+                ${problems.slice(0, 6).map(p => `
+                  <a href="/problems/${esc(p.slug)}" class="mini-card" data-link>
+                    <div class="mini-card-title">${esc(p.title)}</div>
+                    <div class="mini-card-meta" style="display:flex; justify-content:space-between; margin-top:6px; font-size:11px;">
+                      <span>${esc(p.slug)}</span>
+                      <span class="text-primary" style="font-weight:600;">挑战 →</span>
+                    </div>
+                  </a>
+                `).join('')}
+              </div>
+            `}
+          </div>
+        </div>
+
+        <!-- Sidebar Column (Right) -->
+        <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+          <!-- User Profile & Stats ring -->
+          <div class="card">
+            <h3 class="card-title" style="margin-bottom: var(--space-sm);">我的参赛进度</h3>
+            ${state.user ? `
+              <div style="display: flex; align-items: center; gap: var(--space-md); margin-top: 10px;">
+                <div style="position: relative; width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                  <svg width="72" height="72">
+                    <circle stroke="var(--border-light)" stroke-width="5" fill="transparent" r="${radius}" cx="36" cy="36"/>
+                    <circle stroke="var(--color-primary)" stroke-width="5" stroke-dasharray="${circumference}" stroke-dashoffset="${strokeDashoffset}" stroke-linecap="round" fill="transparent" r="${radius}" cx="36" cy="36" style="transform: rotate(-90deg); transform-origin: 36px 36px; transition: stroke-dashoffset 0.5s ease-in-out;"/>
+                  </svg>
+                  <span style="position: absolute; font-size: 13px; font-weight: 700; font-family: var(--font-mono); color: var(--text-main);">${solvedPercent}%</span>
+                </div>
+                <div>
+                  <div style="font-weight: 700; color: var(--text-main); font-size: 15px;">${esc(state.user.username)}</div>
+                  <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;">已通关 ${solvedCount} / ${totalCount} 题</div>
+                </div>
+              </div>
+            ` : `
+              <div style="padding: 10px 0; text-align: center;">
+                <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px;">登录以查看并同步您的学习和参赛进度</p>
+                <button class="btn btn-primary btn-sm full-width" onclick="showAuthModal()">立即登录</button>
+              </div>
+            `}
+          </div>
+
+          <!-- Distributed evaluation node stats -->
+          <div class="card">
+            <h3 class="card-title" style="margin-bottom: 12px;">评测集群状态</h3>
+            <div style="display:flex; flex-direction: column; gap: 8px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; padding: 8px 12px; border-radius: var(--radius-sm); background: hsla(0,0%,100%,0.02); border: var(--border-subtle); font-size:12px;">
+                <span style="color:var(--text-secondary); font-weight:500;">API Server Gateway</span>
+                <span class="pill green" style="padding: 2px 8px; font-size: 10px; border-radius: 4px;">🟢 运行中</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; padding: 8px 12px; border-radius: var(--radius-sm); background: hsla(0,0%,100%,0.02); border: var(--border-subtle); font-size:12px;">
+                <span style="color:var(--text-secondary); font-weight:500;">api-local-worker</span>
+                <span class="pill green" style="padding: 2px 8px; font-size: 10px; border-radius: 4px;">🟢 运行中</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; padding: 8px 12px; border-radius: var(--radius-sm); background: hsla(0,0%,100%,0.02); border: var(--border-subtle); font-size:12px;">
+                <span style="color:var(--text-secondary); font-weight:500;">Docker Sandbox</span>
+                <span class="pill blue" style="padding: 2px 8px; font-size: 10px; border-radius: 4px;">🛡️ 隔离保护</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Recent my submissions list -->
+          <div class="card">
+            <div class="card-header" style="margin-bottom: var(--space-md);">
+              <h3 class="card-title">最近评测诊断</h3>
+            </div>
+            ${submissions.length === 0 ? emptyBox('暂无评测历史记录') : `
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                ${submissions.slice(0, 4).map(s => `
+                  <div class="clickable-row" onclick="navigate('/submissions/${s.id}')" style="padding: 10px; border-radius: var(--radius-sm); background: hsla(0,0%,100%,0.015); border: var(--border-subtle); display:flex; justify-content:space-between; align-items:center;">
+                    <div style="min-width: 0; flex: 1; padding-right: 10px;">
+                      <div style="font-weight:600; font-size:12.5px; color:var(--text-main); text-overflow:ellipsis; overflow:hidden; white-space:nowrap;">${esc(s.problem_slug || s.problem_title)}</div>
+                      <div style="font-size:11px; color:var(--text-muted); margin-top:2px;">#${s.id} · ${formatDate(s.created_at)}</div>
+                    </div>
+                    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex-shrink: 0;">
+                      ${statusPill(s.status)}
+                      <span style="font-family: var(--font-mono); font-size:11.5px; font-weight:700; color:var(--color-primary);">${scoreDisplay(s.public_score)}</span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            `}
+          </div>
         </div>
       </div>
     `;
@@ -676,37 +735,80 @@ async function renderProblemDetail(slug, contestSlug = null) {
         </div>
 
         <!-- Sidebar Actions & Specs -->
-        <div class="problem-side">
-          <div class="card highlight">
-            <h3 class="card-title" style="margin-bottom: 12px;">提交评测方案</h3>
-            
-            <div class="file-upload" id="uploadArea">
-              <input type="file" id="submitFile" accept=".zip" onchange="handleFileSelect(this)" />
-              <div class="file-upload-label">
-                <span class="file-upload-icon">📁</span>
-                <span id="uploadFileName" style="font-weight: 600; color: var(--text-main);">拖入或选择 .zip 解答包</span>
-                <span style="font-size: 11px; color: var(--text-muted);">ZIP 压缩包容量限制 20MB</span>
-              </div>
-            </div>
-            
-            <button class="btn btn-primary full-width mt-md" onclick="submitSolution('${esc(slug)}', ${contestSlug ? `'${esc(contestSlug)}'` : 'null'})">
-              开始自动化评测
-            </button>
-            
-            <a href="/api/problems/${esc(slug)}/sample-submission" target="_blank" class="btn btn-secondary btn-sm full-width mt-sm">
-              📥 下载示例提报文件 (.zip)
+        <div class="problem-side" style="display: flex; flex-direction: column; gap: var(--space-md);">
+          <!-- Step 1: Download Sample -->
+          <div class="card" style="margin-bottom: 0;">
+            <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px; color: var(--text-secondary);">1. 研发阶段：下载解答包范例</h3>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">下载评测要求的目录规范与数据接口，用于本地编写预测算法。</p>
+            <a href="/api/problems/${esc(slug)}/sample-submission" target="_blank" class="btn btn-secondary btn-sm full-width">
+              📥 下载示例提包 (.zip)
             </a>
           </div>
 
+          <!-- Step 2: Upload Solution -->
+          <div class="card highlight" style="margin-bottom: 0;">
+            <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px;">2. 评测阶段：提报 ZIP 解答包</h3>
+            
+            <div class="file-upload" id="uploadArea" style="padding: 16px 10px; min-height: unset; margin-bottom: 12px;">
+              <input type="file" id="submitFile" accept=".zip" onchange="handleFileSelect(this)" />
+              <div class="file-upload-label" style="gap: 4px;">
+                <span class="file-upload-icon" style="font-size: 18px;">📁</span>
+                <span id="uploadFileName" style="font-weight: 600; color: var(--text-main); font-size: 12px;">选择或拖入解答压缩包</span>
+                <span style="font-size: 10.5px; color: var(--text-muted);">容量在 20MB 以内</span>
+              </div>
+            </div>
+            
+            <button class="btn btn-primary full-width" onclick="submitSolution('${esc(slug)}', ${contestSlug ? `'${esc(contestSlug)}'` : 'null'})">
+              🚀 启动容器沙箱评测
+            </button>
+          </div>
+
+          <!-- Specs details -->
           <div class="card">
-            <h3 class="card-title" style="margin-bottom: var(--space-sm);">题目限制参数</h3>
+            <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px; color: var(--text-secondary);">本题系统环境规格</h3>
             <div class="config-list">
-              <div class="config-item"><span class="config-label">度量指标</span><span>${esc(problem.metric || 'accuracy')}</span></div>
-              <div class="config-item"><span class="config-label">优化方向</span><span>${problem.higher_is_better ? '分数越高越好 ↑' : '分数越低越好 ↓'}</span></div>
-              <div class="config-item"><span class="config-label">时长限制</span><span>${problem.time_limit_sec || 60} 秒</span></div>
-              <div class="config-item"><span class="config-label">运行内存</span><span>${problem.memory_limit_mb || 2048} MB</span></div>
-              <div class="config-item"><span class="config-label">计算核数</span><span>${problem.cpu_count || 2} 核 CPU</span></div>
-              <div class="config-item"><span class="config-label">输出包限制</span><span>${problem.output_limit_mb || 64} MB</span></div>
+              <div class="config-item">
+                <span class="config-label" style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none" style="color: var(--color-primary); flex-shrink: 0;"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>
+                  度量指标
+                </span>
+                <span style="font-weight: 700; font-family: var(--font-mono); font-size: 12px; color: var(--text-main);">${esc(problem.metric || 'accuracy')}</span>
+              </div>
+              <div class="config-item">
+                <span class="config-label" style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none" style="color: var(--color-primary); ${problem.higher_is_better ? '' : 'transform: rotate(180deg);'} flex-shrink: 0;"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                  优化方向
+                </span>
+                <span style="font-size: 12.5px;">${problem.higher_is_better ? '分数越高越好 ↑' : '分数越低越好 ↓'}</span>
+              </div>
+              <div class="config-item">
+                <span class="config-label" style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none" style="color: var(--color-primary); flex-shrink: 0;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+                  运行限时
+                </span>
+                <span style="font-weight: 600; font-family: var(--font-mono);">${problem.time_limit_sec || 60} 秒</span>
+              </div>
+              <div class="config-item">
+                <span class="config-label" style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none" style="color: var(--color-primary); flex-shrink: 0;"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path></svg>
+                  运行内存
+                </span>
+                <span style="font-weight: 600; font-family: var(--font-mono);">${problem.memory_limit_mb || 2048} MB</span>
+              </div>
+              <div class="config-item">
+                <span class="config-label" style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none" style="color: var(--color-primary); flex-shrink: 0;"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="15" x2="23" y2="15"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="15" x2="4" y2="15"></line></svg>
+                  分配核数
+                </span>
+                <span style="font-weight: 600; font-family: var(--font-mono);">${problem.cpu_count || 2} 核 CPU</span>
+              </div>
+              <div class="config-item">
+                <span class="config-label" style="display: flex; align-items: center; gap: 8px;">
+                  <svg viewBox="0 0 24 24" width="13" height="13" stroke="currentColor" stroke-width="2.2" fill="none" style="color: var(--color-primary); flex-shrink: 0;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                  输出限制
+                </span>
+                <span style="font-weight: 600; font-family: var(--font-mono);">${problem.output_limit_mb || 64} MB</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1305,26 +1407,33 @@ function renderScoreScoreboard(items, data) {
       <table>
         <thead>
           <tr>
-            <th>排名</th><th>选手名称</th><th>通过数</th><th>公开总分</th>
-            ${showPrivate ? '<th>最终得分</th>' : ''}
-            ${(items[0]?.problems || []).map(p => `<th style="text-align: center;">${esc(p.slug || p.title || '')}</th>`).join('')}
+            <th style="width: 70px; text-align: center;">排名</th>
+            <th>选手名称</th>
+            <th style="width: 100px;">通过题数</th>
+            <th style="width: 120px;">公开总分</th>
+            ${showPrivate ? '<th style="width: 120px;">最终得分</th>' : ''}
+            ${(items[0]?.problems || []).map(p => `<th style="text-align: center; min-width: 90px;">${esc(p.slug || p.title || '')}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
-          ${items.map(r => `
-            <tr>
-              <td><strong>${r.rank || ''}</strong></td>
-              <td><strong>${esc(r.username)}</strong></td>
-              <td>${r.solved || 0}</td>
-              <td class="text-accent">${scoreDisplay(r.total_public_score)}</td>
-              ${showPrivate ? `<td style="font-weight: 600; color: var(--color-success);">${scoreDisplay(r.total_private_score)}</td>` : ''}
-              ${(r.problems || []).map(p => `
-                <td class="${p.solved ? 'cell-solved' : p.attempts > 0 ? 'cell-attempted' : ''}" style="text-align: center;">
-                  ${p.visible_score != null ? scoreDisplay(p.visible_score) : (p.solved ? '✓' : p.attempts > 0 ? `−${p.attempts}` : '')}
-                </td>
-              `).join('')}
-            </tr>
-          `).join('')}
+          ${items.map(r => {
+            const rankVal = parseInt(r.rank);
+            const rankDisplay = rankVal === 1 ? '🥇' : rankVal === 2 ? '🥈' : rankVal === 3 ? '🥉' : `<strong>${r.rank || ''}</strong>`;
+            return `
+              <tr>
+                <td style="text-align: center; font-size: 15px;">${rankDisplay}</td>
+                <td><strong>${esc(r.username)}</strong></td>
+                <td><span class="pill gray" style="padding: 2px 8px; font-family: var(--font-mono);">${r.solved || 0}</span></td>
+                <td class="text-accent" style="font-family: var(--font-mono); font-weight: 700;">${scoreDisplay(r.total_public_score)}</td>
+                ${showPrivate ? `<td style="font-weight: 700; color: var(--color-success); font-family: var(--font-mono);">${scoreDisplay(r.total_private_score)}</td>` : ''}
+                ${(r.problems || []).map(p => `
+                  <td class="${p.solved ? 'cell-solved' : p.attempts > 0 ? 'cell-attempted' : ''}" style="text-align: center; font-family: var(--font-mono);">
+                    ${p.visible_score != null ? scoreDisplay(p.visible_score) : (p.solved ? '✓' : p.attempts > 0 ? `−${p.attempts}` : '—')}
+                  </td>
+                `).join('')}
+              </tr>
+            `;
+          }).join('')}
         </tbody>
       </table>
     </div>
@@ -1338,24 +1447,31 @@ function renderAcmScoreboard(items, data) {
       <table>
         <thead>
           <tr>
-            <th>排名</th><th>选手名称</th><th>通过数</th><th>累计罚时</th>
-            ${(items[0]?.problems || []).map(p => `<th style="text-align: center;">${esc(p.slug || p.title || '')}</th>`).join('')}
+            <th style="width: 70px; text-align: center;">排名</th>
+            <th>选手名称</th>
+            <th style="width: 100px;">通过题数</th>
+            <th style="width: 120px;">累计罚时</th>
+            ${(items[0]?.problems || []).map(p => `<th style="text-align: center; min-width: 90px;">${esc(p.slug || p.title || '')}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
-          ${items.map(r => `
-            <tr>
-              <td><strong>${r.rank || ''}</strong></td>
-              <td><strong>${esc(r.username)}</strong></td>
-              <td>${r.solved || 0}</td>
-              <td class="text-accent">${r.penalty || 0}</td>
-              ${(r.problems || []).map(p => `
-                <td class="${p.solved ? 'cell-solved' : p.attempts > 0 ? 'cell-attempted' : ''}" style="text-align: center;">
-                  ${p.solved ? `✓ (${p.penalty || 0})` : p.attempts > 0 ? `−${p.attempts}` : ''}
-                </td>
-              `).join('')}
-            </tr>
-          `).join('')}
+          ${items.map(r => {
+            const rankVal = parseInt(r.rank);
+            const rankDisplay = rankVal === 1 ? '🥇' : rankVal === 2 ? '🥈' : rankVal === 3 ? '🥉' : `<strong>${r.rank || ''}</strong>`;
+            return `
+              <tr>
+                <td style="text-align: center; font-size: 15px;">${rankDisplay}</td>
+                <td><strong>${esc(r.username)}</strong></td>
+                <td><span class="pill gray" style="padding: 2px 8px; font-family: var(--font-mono);">${r.solved || 0}</span></td>
+                <td class="text-accent" style="font-family: var(--font-mono); font-weight: 700;">${r.penalty || 0}</td>
+                ${(r.problems || []).map(p => `
+                  <td class="${p.solved ? 'cell-solved' : p.attempts > 0 ? 'cell-attempted' : ''}" style="text-align: center; font-family: var(--font-mono);">
+                    ${p.solved ? `✓ (${p.penalty || 0})` : p.attempts > 0 ? `−${p.attempts}` : '—'}
+                  </td>
+                `).join('')}
+              </tr>
+            `;
+          }).join('')}
         </tbody>
       </table>
     </div>
