@@ -12,7 +12,7 @@
   --hue-warning: 38;    /* Amber */
   --hue-danger: 350;    /* Rose/Red */
   
-  /* Core Colors */
+  /* Dark Theme Variables (default) */
   --bg-app: hsl(var(--hue-primary), 32%, 5%);
   --bg-sidebar: hsla(var(--hue-primary), 28%, 8%, 0.65);
   --bg-topbar: hsla(var(--hue-primary), 32%, 5%, 0.75);
@@ -74,6 +74,63 @@
   --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 hsla(0, 0%, 100%, 0.05);
   --shadow-accent-glow: 0 0 24px hsla(var(--hue-accent), 85%, 63%, 0.25);
   --shadow-success-glow: 0 0 24px hsla(var(--hue-success), 84%, 45%, 0.2);
+
+  /* Mesh Background variables */
+  --bg-mesh-1: hsla(var(--hue-accent), 80%, 45%, 0.05);
+  --bg-mesh-2: hsla(var(--hue-primary), 90%, 55%, 0.04);
+  --bg-mesh-3: hsla(var(--hue-accent), 75%, 65%, 0.03);
+}
+
+/* Light Theme Variables Override */
+html[data-theme="light"] {
+  --bg-app: hsl(var(--hue-primary), 25%, 97%);
+  --bg-sidebar: hsla(var(--hue-primary), 20%, 93%, 0.85);
+  --bg-topbar: hsla(var(--hue-primary), 25%, 97%, 0.8);
+  --bg-card: hsla(var(--hue-primary), 15%, 100%, 0.75);
+  --bg-card-solid: hsl(var(--hue-primary), 15%, 100%);
+  --bg-card-hover: hsla(var(--hue-primary), 15%, 94%, 0.85);
+  --bg-input: hsla(var(--hue-primary), 15%, 90%, 0.5);
+  --bg-input-focus: hsla(var(--hue-primary), 15%, 100%, 0.9);
+  --bg-elevated: hsl(var(--hue-primary), 15%, 92%);
+  
+  --border-subtle: 1px solid hsla(var(--hue-primary), 20%, 10%, 0.05);
+  --border-light: 1px solid hsla(var(--hue-primary), 20%, 10%, 0.08);
+  --border-glow: 1px solid hsla(var(--hue-accent), 70%, 55%, 0.15);
+  
+  --text-main: hsl(var(--hue-primary), 30%, 15%);
+  --text-secondary: hsl(var(--hue-primary), 15%, 35%);
+  --text-muted: hsl(var(--hue-primary), 10%, 52%);
+  --text-inverse: hsl(0, 0%, 100%);
+  
+  --color-primary: hsl(var(--hue-primary), 85%, 52%);
+  --color-accent: hsl(var(--hue-accent), 80%, 55%);
+  --color-success: hsl(var(--hue-success), 80%, 35%);
+  --color-warning: hsl(var(--hue-warning), 85%, 45%);
+  --color-danger: hsl(var(--hue-danger), 80%, 48%);
+  --color-info: hsl(200, 85%, 45%);
+  
+  --bg-accent-subtle: hsla(var(--hue-accent), 80%, 55%, 0.06);
+  --bg-success-subtle: hsla(var(--hue-success), 80%, 35%, 0.06);
+  --bg-warning-subtle: hsla(var(--hue-warning), 85%, 45%, 0.06);
+  --bg-danger-subtle: hsla(var(--hue-danger), 80%, 48%, 0.06);
+  --bg-info-subtle: hsla(200, 85%, 45%, 0.06);
+
+  --grad-main: linear-gradient(135deg, hsl(var(--hue-primary), 80%, 50%), var(--color-accent));
+  --grad-surface: linear-gradient(180deg, hsla(var(--hue-primary), 15%, 100%, 0.6), hsla(var(--hue-primary), 15%, 96%, 0.6));
+  --grad-success: linear-gradient(135deg, hsl(var(--hue-success), 80%, 35%), hsl(175, 80%, 40%));
+  --grad-danger: linear-gradient(135deg, hsl(var(--hue-danger), 80%, 45%), hsl(15, 80%, 50%));
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 6px 18px rgba(0, 0, 0, 0.06), inset 0 1px 0 hsla(0, 0%, 100%, 0.5);
+  --shadow-lg: 0 12px 30px rgba(0, 0, 0, 0.08), inset 0 1px 0 hsla(0, 0%, 100%, 0.8);
+  --shadow-accent-glow: 0 0 20px hsla(var(--hue-accent), 80%, 55%, 0.12);
+  --shadow-success-glow: 0 0 20px hsla(var(--hue-success), 80%, 35%, 0.1);
+
+  --bg-mesh-1: hsla(var(--hue-accent), 70%, 60%, 0.03);
+  --bg-mesh-2: hsla(var(--hue-primary), 80%, 65%, 0.02);
+  --bg-mesh-3: hsla(var(--hue-accent), 65%, 70%, 0.015);
+}
+  --shadow-success-glow: 0 0 24px hsla(var(--hue-success), 84%, 45%, 0.2);
   
   /* Typography Config */
   --font-display: 'Outfit', 'Inter', -apple-system, sans-serif;
@@ -119,9 +176,9 @@ body {
   background-color: var(--bg-app);
   /* Mesh Background Gradients */
   background-image: 
-    radial-gradient(circle at 10% 20%, hsla(var(--hue-accent), 80%, 45%, 0.05) 0%, transparent 40%),
-    radial-gradient(circle at 90% 80%, hsla(var(--hue-primary), 90%, 55%, 0.04) 0%, transparent 45%),
-    radial-gradient(circle at 50% 0%, hsla(var(--hue-accent), 75%, 65%, 0.03) 0%, transparent 50%);
+    radial-gradient(circle at 10% 20%, var(--bg-mesh-1) 0%, transparent 40%),
+    radial-gradient(circle at 90% 80%, var(--bg-mesh-2) 0%, transparent 45%),
+    radial-gradient(circle at 50% 0%, var(--bg-mesh-3) 0%, transparent 50%);
   background-attachment: fixed;
   min-height: 100vh;
   overflow-x: hidden;
@@ -386,7 +443,46 @@ p {
 .top-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-lg);
+  gap: var(--space-md);
+}
+
+/* Theme Toggle Trigger Button */
+.theme-toggle-btn {
+  background: hsla(0, 0%, 100%, 0.04);
+  border: var(--border-light);
+  color: var(--text-secondary);
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.theme-toggle-btn:hover {
+  background: hsla(0, 0%, 100%, 0.08);
+  color: var(--text-main);
+  transform: translateY(-1px);
+}
+
+/* Dark theme icon configuration */
+html:not([data-theme="light"]) .theme-toggle-btn .moon-icon {
+  display: none;
+}
+html:not([data-theme="light"]) .theme-toggle-btn .sun-icon {
+  display: block;
+  color: var(--color-warning);
+}
+
+/* Light theme icon configuration */
+html[data-theme="light"] .theme-toggle-btn .sun-icon {
+  display: none;
+}
+html[data-theme="light"] .theme-toggle-btn .moon-icon {
+  display: block;
+  color: var(--color-accent);
 }
 
 /* Connection Health Indicator */

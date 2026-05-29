@@ -3,6 +3,23 @@
    Premium redesigned interface with modular layouts and rich micro-interactions
    ═══════════════════════════════════════════════════════════════════════════ */
 
+// ─── Theme Management ───────────────────────────────────────────────────────
+function initTheme() {
+  const savedTheme = localStorage.getItem('aioj_theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+}
+
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme') || 'dark';
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', newTheme);
+  localStorage.setItem('aioj_theme', newTheme);
+  toast(`已切换至${newTheme === 'dark' ? '深色' : '浅色'}模式`, 'info');
+}
+
+// Run theme init immediately to prevent page flash
+initTheme();
+
 // ─── Utilities ──────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
@@ -2397,5 +2414,5 @@ Object.assign(window, {
   showContestSettingsModal, saveContestSettings,
   showRegistrationModal, setRegStatus, bulkAddUsers,
   showAnnouncementModal, publishAnnouncement,
-  closeModal, copyTerminalText
+  closeModal, copyTerminalText, toggleTheme
 });
