@@ -210,39 +210,133 @@ def run_job(job):
             time_limit_sec = int(limits.get("time_limit_sec", 60))
             output_limit_mb = int(limits.get("output_limit_mb", 64))
 
-            cmd = [
-                "docker",
-                "run",
-                "--rm",
-                "--network",
-                "none",
-                "--cpus",
-                cpu_count,
-                "--memory",
-                f"{memory_limit_mb}m",
-                "--pids-limit",
-                "256",
-                "-v",
-                f"{workspace}:/workspace:ro",
-                "-v",
-                f"{input_dir}:/input:ro",
-                "-v",
-                f"{output_dir}:/output",
-                runner_image,
-                *run_command,
-            ]
+            # Check if docker is available
+            has_docker = False
+            try:
+                d_check = subprocess.run(["docker", "ps"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                has_docker = (d_check.returncode == 0)
+            except Exception:
+                pass
 
-            write("running docker sandbox...")
-            write("command: " + " ".join(cmd))
+            if has_docker:
+                cmd = [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    "none",
+                    "--cpus",
+                    cpu_count,
+                    "--memory",
+                    f"{memory_limit_mb}m",
+                    "--pids-limit",
+                    "256",
+                    "-v",
+                    f"{workspace}:/workspace:ro",
+                    "-v",
+                    f"{input_dir}:/input:ro",
+                    "-v",
+                    f"{output_dir}:/output",
+                    runner_image,
+                    *run_command,
+                ]
 
-            start = time.time()
-            proc = subprocess.run(
-                cmd,
-                text=True,
-                capture_output=True,
-                timeout=time_limit_sec + 10,
-            )
-            runtime_ms = int((time.time() - start) * 1000)
+                write("running docker sandbox...")
+                write("command: " + " ".join(cmd))
+
+                start = time.time()
+                proc = subprocess.run(
+                    cmd,
+                    text=True,
+                    capture_output=True,
+                    timeout=time_limit_sec + 10,
+                )
+                runtime_ms = int((time.time() - start) * 1000)
+            else:
+                write("WARNING: Docker daemon not running or not found. Falling back to local process runner.")
+                
+                is_windows = (os.name == "nt")
+                ws_link = Path("/workspace")
+                in_link = Path("/input")
+                out_link = Path("/output")
+                
+                if is_windows:
+                    drive = workspace.anchor
+                    ws_link = Path(drive) / "workspace"
+                    in_link = Path(drive) / "input"
+                    out_link = Path(drive) / "output"
+                
+                # Setup links
+                for link, target in [(ws_link, workspace), (in_link, input_dir), (out_link, output_dir)]:
+                    if link.exists() or (not is_windows and link.is_symlink()):
+                        try:
+                            if is_windows:
+                                subprocess.run(["cmd", "/c", "rmdir", str(link)], check=False)
+                            else:
+                                if link.is_dir() and not link.is_symlink():
+                                    shutil.rmtree(link)
+                                else:
+                                    link.unlink()
+                        except Exception:
+                            pass
+                    try:
+                        if is_windows:
+                            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True)
+                        else:
+                            link.symlink_to(target, target_is_directory=True)
+                    except Exception as e:
+                        write(f"WARNING: Could not link {link} to {target}: {e}")
+
+                local_cmd = []
+                for arg in run_command:
+                    if arg.startswith("/workspace/"):
+                        local_cmd.append(str(workspace / arg[len("/workspace/"):]))
+                    elif arg == "/workspace":
+                        local_cmd.append(str(workspace))
+                    elif arg.startswith("/input/"):
+                        local_cmd.append(str(input_dir / arg[len("/input/"):]))
+                    elif arg == "/input":
+                        local_cmd.append(str(input_dir))
+                    elif arg.startswith("/output/"):
+                        local_cmd.append(str(output_dir / arg[len("/output/"):]))
+                    elif arg == "/output":
+                        local_cmd.append(str(output_dir))
+                    else:
+                        local_cmd.append(arg)
+
+                if local_cmd and local_cmd[0] in ("python", "python3"):
+                    local_cmd[0] = sys.executable
+
+                write("running local sandbox...")
+                write("command: " + " ".join(local_cmd))
+
+                start = time.time()
+                try:
+                    proc = subprocess.run(
+                        local_cmd,
+                        text=True,
+                        capture_output=True,
+                        timeout=time_limit_sec + 10,
+                        cwd=str(workspace)
+                    )
+                finally:
+                    # Clean up links
+                    for link in [ws_link, in_link, out_link]:
+                        if link.exists() or (not is_windows and link.is_symlink()):
+                            try:
+                                if is_windows:
+                                    subprocess.run(["cmd", "/c", "rmdir", str(link)], check=False)
+                                else:
+                                    if link.is_symlink():
+                                        link.unlink()
+                                    elif link.is_dir():
+                                        shutil.rmtree(link)
+                                    else:
+                                        link.unlink()
+                            except Exception:
+                                pass
+                
+                runtime_ms = int((time.time() - start) * 1000)
 
             write("----- stdout -----")
             log.write(proc.stdout or "")

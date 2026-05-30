@@ -1624,6 +1624,344 @@ tr:last-child td {
   margin-bottom: 4px;
 }
 
+/* ─── 13.5. IDE Code Editor ──────────────────────────────────────────────── */
+.ide-container {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.18);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4), inset 0 1px 0 hsla(0,0%,100%,0.03);
+  background: hsl(var(--hue-primary), 28%, 3%);
+}
+
+.ide-toolbar {
+  background: hsla(0, 0%, 100%, 0.025);
+  border-bottom: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.1);
+  padding: 6px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ide-toolbar-left,
+.ide-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ide-mode-switcher {
+  display: flex;
+  background: hsla(0,0%,100%,0.05);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.ide-mode-btn {
+  padding: 4px 12px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.ide-mode-btn:hover {
+  color: var(--text-secondary);
+  background: hsla(0,0%,100%,0.05);
+}
+
+.ide-mode-btn.active {
+  background: hsla(var(--hue-accent), 70%, 55%, 0.2);
+  color: hsl(var(--hue-accent), 85%, 75%);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+
+.ide-file-label {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ide-file-label .dot-indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-success);
+  display: inline-block;
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.ide-editor-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.ide-line-numbers {
+  min-width: 44px;
+  padding: 14px 0;
+  background: hsla(0,0%,0%,0.2);
+  border-right: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.08);
+  text-align: right;
+  user-select: none;
+  overflow: hidden;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.65;
+  color: hsla(0,0%,100%,0.18);
+  flex-shrink: 0;
+}
+
+.ide-line-numbers .ln {
+  padding-right: 12px;
+  display: block;
+}
+
+.ide-textarea {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  max-height: 75vh;
+  background: transparent;
+  color: hsl(120, 50%, 78%);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 13px;
+  padding: 14px 16px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  line-height: 1.65;
+  white-space: pre;
+  word-wrap: normal;
+  overflow-x: auto;
+  overflow-y: auto;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  caret-color: hsl(var(--hue-accent), 85%, 65%);
+}
+
+.ide-textarea::placeholder {
+  color: hsla(0,0%,100%,0.15);
+}
+
+.ide-textarea::selection {
+  background: hsla(var(--hue-accent), 70%, 55%, 0.3);
+}
+
+/* Notebook cell mode */
+.ide-cells-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 75vh;
+  min-height: 520px;
+}
+
+.nb-cell {
+  border: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.nb-cell:focus-within {
+  border-color: hsla(var(--hue-accent), 70%, 65%, 0.35);
+  box-shadow: 0 0 0 2px hsla(var(--hue-accent), 70%, 65%, 0.08);
+}
+
+.nb-cell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: hsla(0,0%,100%,0.025);
+  border-bottom: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.06);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.nb-cell-header .cell-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nb-cell-header .cell-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.nb-cell-header .cell-actions button {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  transition: all 0.15s ease;
+}
+
+.nb-cell-header .cell-actions button:hover {
+  background: hsla(0,0%,100%,0.08);
+  color: var(--text-main);
+}
+
+.nb-cell textarea {
+  width: 100%;
+  min-height: 80px;
+  background: transparent;
+  color: hsl(120, 50%, 78%);
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 13px;
+  padding: 10px 14px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  line-height: 1.65;
+  white-space: pre;
+  word-wrap: normal;
+  overflow-x: auto;
+  tab-size: 4;
+  -moz-tab-size: 4;
+  caret-color: hsl(var(--hue-accent), 85%, 65%);
+}
+
+.nb-cell textarea::placeholder {
+  color: hsla(0,0%,100%,0.12);
+}
+
+.nb-add-cell-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px;
+  border: 1px dashed hsla(var(--hue-accent), 70%, 65%, 0.15);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-top: 4px;
+}
+
+.nb-add-cell-btn:hover {
+  border-color: hsla(var(--hue-accent), 70%, 65%, 0.35);
+  color: var(--text-secondary);
+  background: hsla(0,0%,100%,0.02);
+}
+
+/* IDE action bar */
+.ide-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  background: hsla(0,0%,100%,0.02);
+  border-top: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.08);
+}
+
+.ide-actions .btn {
+  flex: 1;
+  justify-content: center;
+  font-weight: 600;
+}
+
+/* IDE terminal pane */
+.ide-terminal {
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.12);
+  box-shadow: 0 2px 12px rgba(0,0,0,0.3);
+  background: hsl(var(--hue-primary), 32%, 1.5%);
+}
+
+.ide-terminal-header {
+  background: hsla(0,0%,100%,0.02);
+  border-bottom: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.08);
+  padding: 6px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ide-terminal-header .term-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-display);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.ide-terminal-header .term-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ide-terminal-output {
+  margin: 0;
+  padding: 12px 16px;
+  max-height: 320px;
+  min-height: 100px;
+  overflow-y: auto;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+  font-size: 12px;
+  color: hsl(200, 10%, 80%);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+  scroll-behavior: smooth;
+}
+
+.ide-terminal-output .term-info { color: hsl(200, 60%, 70%); }
+.ide-terminal-output .term-success { color: hsl(140, 60%, 65%); }
+.ide-terminal-output .term-error { color: hsl(0, 70%, 70%); }
+.ide-terminal-output .term-warn { color: hsl(40, 80%, 65%); }
+.ide-terminal-output .term-dim { color: hsla(0,0%,100%,0.3); }
+
+@keyframes queue-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+.queue-anim {
+  animation: queue-pulse 1.5s ease-in-out infinite;
+}
+
 /* ─── 14. Monospace stdout Terminal Log ──────────────────────────────────── */
 .log-output {
   display: block;

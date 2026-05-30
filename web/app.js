@@ -851,66 +851,58 @@ async function renderProblemDetail(slug, contestSlug = null) {
 
           <!-- Editor Tab -->
           <div class="tab-panel" id="tab-editor">
-            <div class="card glass" style="margin-bottom: var(--space-md);">
-              <div class="card-body" style="padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-sm);">
-                <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: var(--border-subtle); padding-bottom: var(--space-sm); margin-bottom: var(--space-xs);">
-                  <div style="display: flex; align-items: center; gap: 8px;">
-                    <span style="font-size: 18px;">💻</span>
-                    <h3 style="font-size: 15px; font-weight: 700; margin: 0; color: var(--text-main);">在线代码工作区 — predict.py</h3>
+            <div class="ide-container" style="margin-bottom: var(--space-md);">
+              <!-- IDE Toolbar -->
+              <div class="ide-toolbar">
+                <div class="ide-toolbar-left">
+                  <div class="ide-mode-switcher">
+                    <button class="ide-mode-btn active" id="modeScript" onclick="switchEditorMode('script', '${esc(slug)}')">📄 Python 脚本</button>
+                    <button class="ide-mode-btn" id="modeNotebook" onclick="switchEditorMode('notebook', '${esc(slug)}')">📓 Notebook 单元格</button>
                   </div>
-                  <div style="font-size: 11px; color: var(--text-muted); font-family: var(--font-mono);">
-                    运行环境: Python 3 & ML Libraries
-                  </div>
+                  <span class="ide-file-label">
+                    <span class="dot-indicator"></span>
+                    <span id="ideFileLabel">predict.py</span>
+                  </span>
                 </div>
-                <p style="font-size: 12.5px; color: var(--text-secondary); margin-bottom: var(--space-xs); line-height: 1.5;">
-                  在下方编写预测算法。模型容器沙箱在运行您的代码时，会将测试集加载到 <code class="code-inline">/input/test.csv</code>，请将预测生成的 CSV 结果导出至 <code class="code-inline">/output/submission.csv</code>。
-                </p>
-                
-                <!-- Code Editor Container -->
-                <div class="editor-container-wrapper" style="position: relative; border-radius: var(--radius-md); overflow: hidden; border: var(--border-light); box-shadow: var(--shadow-sm);">
-                  <div class="editor-header" style="background: hsla(0, 0%, 100%, 0.03); border-bottom: var(--border-subtle); padding: 8px 16px; display: flex; justify-content: space-between; align-items: center;">
-                    <div style="display: flex; align-items: center; gap: 6px;">
-                      <span class="dot-red" style="width: 10px; height: 10px; background: var(--color-danger); border-radius: 50%; display: inline-block;"></span>
-                      <span class="dot-yellow" style="width: 10px; height: 10px; background: var(--color-warning); border-radius: 50%; display: inline-block;"></span>
-                      <span class="dot-green" style="width: 10px; height: 10px; background: var(--color-success); border-radius: 50%; display: inline-block;"></span>
-                      <span style="font-size: 12px; font-family: var(--font-mono); color: var(--text-secondary); margin-left: 6px; font-weight: 500;">predict.py</span>
-                    </div>
-                    <button class="btn btn-ghost btn-sm" onclick="resetEditorCode('${esc(slug)}')" style="font-size: 11px; padding: 4px 10px; gap: 4px;">
-                      <span>🔄</span> 重置模板
-                    </button>
-                  </div>
-                  <textarea id="codeEditor" spellcheck="false" placeholder="在此编写 Python 代码..." style="width: 100%; height: 380px; background: hsl(var(--hue-primary), 24%, 3%); color: hsl(120, 60%, 75%); font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 13.5px; padding: 16px; border: none; outline: none; resize: vertical; line-height: 1.6; white-space: pre; word-wrap: normal; overflow-x: auto; tab-size: 4; -moz-tab-size: 4;"></textarea>
-                </div>
-                
-                <!-- Action Row -->
-                <div style="display: flex; gap: var(--space-md); margin-top: var(--space-xs);">
-                  <button class="btn btn-secondary" onclick="runSandboxTest('${esc(slug)}')" id="btnRunTest" style="flex: 1; justify-content: center; gap: 8px; font-weight: 600;">
-                    🧪 运行测试 (Test Run)
-                  </button>
-                  <button class="btn btn-primary" onclick="submitEditorCode('${esc(slug)}', ${contestSlug ? `'${esc(contestSlug)}'` : 'null'})" id="btnSubmitCode" style="flex: 1; justify-content: center; gap: 8px; font-weight: 600;">
-                    🚀 正式提交 (Submit Solution)
+                <div class="ide-toolbar-right">
+                  <span style="font-size: 10.5px; color: var(--text-muted); font-family: var(--font-mono);">Python 3 &amp; ML Libs</span>
+                  <button class="btn btn-ghost btn-sm" onclick="resetEditorCode('${esc(slug)}')" style="font-size: 11px; padding: 4px 10px; gap: 4px;">
+                    <span>🔄</span> 重置
                   </button>
                 </div>
+              </div>
+              <div class="ide-editor-body" id="editorScriptMode">
+                <div class="ide-line-numbers" id="lineNumbers"></div>
+                <textarea id="codeEditor" class="ide-textarea" spellcheck="false" placeholder="在此编写 Python 预测代码..."></textarea>
+              </div>
+              <div id="editorNotebookMode" style="display: none;">
+                <div class="ide-cells-container" id="nbCellsContainer"></div>
+              </div>
+              <div class="ide-actions">
+                <button class="btn btn-secondary" onclick="runSandboxTest('${esc(slug)}')" id="btnRunTest" style="gap: 8px;">
+                  🧪 运行测试
+                </button>
+                <button class="btn btn-primary" onclick="submitEditorCode('${esc(slug)}', ${contestSlug ? `'${esc(contestSlug)}'` : 'null'})" id="btnSubmitCode" style="gap: 8px;">
+                  🚀 正式提交
+                </button>
               </div>
             </div>
-
-            <!-- Terminal output -->
-            <div class="card" style="background: hsl(var(--hue-primary), 32%, 2%); border: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.15); box-shadow: var(--shadow-sm); padding: 0; overflow: hidden; margin-bottom: var(--space-lg);" id="terminalCard">
-              <div style="background: hsla(0, 0%, 100%, 0.02); border-bottom: 1px solid hsla(var(--hue-accent), 70%, 65%, 0.1); padding: 8px 16px; display: flex; justify-content: space-between; align-items: center;">
-                <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="ide-terminal" id="terminalCard">
+              <div class="ide-terminal-header">
+                <div class="term-title">
                   <span style="font-size: 13px;">📟</span>
-                  <span style="font-family: var(--font-display); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary);">沙箱终端 Console Output</span>
+                  <span>沙箱终端 Console</span>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
-                  <span class="status-dot" id="terminalStatusDot" style="width: 8px; height: 8px; background: var(--text-muted); border-radius: 50%; display: inline-block;"></span>
+                <div class="term-status">
+                  <span id="terminalStatusDot" style="width: 8px; height: 8px; background: var(--text-muted); border-radius: 50%; display: inline-block;"></span>
                   <span style="font-size: 11px; font-family: var(--font-mono); color: var(--text-muted);" id="terminalStatusText">READY</span>
-                  <button class="btn btn-ghost btn-sm" onclick="$('terminalOutput').textContent = '';" style="font-size: 10px; padding: 2px 6px; margin-left: 8px; opacity: 0.6;">清空</button>
+                  <button class="btn btn-ghost btn-sm" onclick="$('terminalOutput').innerHTML = '';" style="font-size: 10px; padding: 2px 6px; opacity: 0.6;">清空</button>
+                  <button class="btn btn-ghost btn-sm" onclick="copyTerminalText()" style="font-size: 10px; padding: 2px 6px; opacity: 0.6;">复制</button>
                 </div>
               </div>
-              <pre id="terminalOutput" style="margin: 0; padding: var(--space-md); max-height: 250px; min-height: 120px; overflow-y: auto; font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace; font-size: 12.5px; color: hsl(200, 10%, 80%); line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: hsl(var(--hue-primary), 32%, 1.5%); scroll-behavior: smooth;"></pre>
+              <pre class="ide-terminal-output" id="terminalOutput"></pre>
             </div>
           </div>
-
           <!-- Submissions Tab -->
           <div class="tab-panel" id="tab-submissions">
             <div class="card">
@@ -1044,14 +1036,19 @@ async function renderProblemDetail(slug, contestSlug = null) {
     initDragAndDrop();
 
     // Setup online code editor
+    state.activeProblemSlug = slug;
     const textarea = $('codeEditor');
     if (textarea) {
       const savedCode = localStorage.getItem(`aioj_code_${slug}`) || CODE_TEMPLATE;
       textarea.value = savedCode;
       
+      // Sync line numbers initially
+      initEditorLineNumbers();
+
       // Save code on edit
       textarea.addEventListener('input', (e) => {
         localStorage.setItem(`aioj_code_${slug}`, e.target.value);
+        initEditorLineNumbers();
       });
 
       // Tab indent listener
@@ -1063,8 +1060,50 @@ async function renderProblemDetail(slug, contestSlug = null) {
           this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
           this.selectionStart = this.selectionEnd = start + 4;
           localStorage.setItem(`aioj_code_${slug}`, this.value);
+          initEditorLineNumbers();
         }
       });
+
+      // Drag & Drop for Editor
+      const ideContainer = document.querySelector('.ide-container');
+      if (ideContainer) {
+        ideContainer.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          ideContainer.style.borderColor = 'var(--color-primary)';
+        });
+        ideContainer.addEventListener('dragleave', (e) => {
+          e.preventDefault();
+          ideContainer.style.borderColor = 'hsla(var(--hue-accent), 70%, 65%, 0.18)';
+        });
+        ideContainer.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          ideContainer.style.borderColor = 'hsla(var(--hue-accent), 70%, 65%, 0.18)';
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            const file = files[0];
+            const name = file.name.toLowerCase();
+            const text = await file.text();
+            
+            if (name.endsWith('.ipynb')) {
+              try {
+                const cells = parseIpynbJson(text);
+                notebookCells = cells;
+                switchEditorMode('notebook', slug);
+                showToast(`成功导入 Notebook: ${file.name}`, 'success');
+              } catch (err) {
+                showToast(err.message, 'danger');
+              }
+            } else if (name.endsWith('.py')) {
+              $('codeEditor').value = text;
+              localStorage.setItem(`aioj_code_${slug}`, text);
+              switchEditorMode('script', slug);
+              showToast(`成功导入 Python 脚本: ${file.name}`, 'success');
+            } else {
+              showToast('仅支持拖拽导入 .py 或 .ipynb 文件！', 'warning');
+            }
+          }
+        });
+      }
     }
   } catch (err) {
     app.innerHTML = errorBox(err);
@@ -3773,6 +3812,278 @@ async function submitEditorCode(slug, contestSlug) {
   }
 }
 
+
+let notebookCells = [];
+
+function parseIpynbJson(jsonStr) {
+  try {
+    const ipynb = JSON.parse(jsonStr);
+    if (!ipynb || !Array.isArray(ipynb.cells)) {
+      throw new Error('格式不符合标准的 Jupyter Notebook 规范');
+    }
+    return ipynb.cells.map(c => {
+      const type = c.cell_type === 'markdown' ? 'markdown' : 'code';
+      const source = Array.isArray(c.source) ? c.source.join('') : (c.source || '');
+      return { type, source };
+    });
+  } catch (err) {
+    throw new Error('解析 Notebook JSON 失败: ' + err.message);
+  }
+}
+
+function parseScriptToCells(scriptText) {
+  const fileLines = scriptText.split('\n');
+  const cells = [];
+  let currentCell = { type: 'code', sourceLines: [] };
+
+  for (let i = 0; i < fileLines.length; i++) {
+    const line = fileLines[i];
+    const trimmed = line.trim();
+    if (trimmed.startsWith('# %%')) {
+      if (currentCell.sourceLines.length > 0 || cells.length > 0) {
+        cells.push({
+          type: currentCell.type,
+          source: currentCell.sourceLines.join('\n')
+        });
+      }
+      if (trimmed.startsWith('# %% [markdown]')) {
+        currentCell = { type: 'markdown', sourceLines: [] };
+      } else {
+        currentCell = { type: 'code', sourceLines: [] };
+      }
+    } else {
+      if (currentCell.type === 'markdown') {
+        if (line.trim().startsWith('#')) {
+          let content = line.trim().substring(1);
+          if (content.startsWith(' ')) {
+            content = content.substring(1);
+          }
+          currentCell.sourceLines.push(content);
+        } else {
+          currentCell.sourceLines.push(line);
+        }
+      } else {
+        currentCell.sourceLines.push(line);
+      }
+    }
+  }
+
+  if (currentCell.sourceLines.length > 0 || cells.length === 0) {
+    cells.push({
+      type: currentCell.type,
+      source: currentCell.sourceLines.join('\n')
+    });
+  }
+
+  return cells;
+}
+
+function parseCellsToScript(cells) {
+  const parts = [];
+  for (let i = 0; i < cells.length; i++) {
+    const cell = cells[i];
+    if (cell.type === 'markdown') {
+      parts.push('# %% [markdown]');
+      const cellLines = cell.source.split('\n');
+      for (const line of cellLines) {
+        parts.push('# ' + line);
+      }
+    } else {
+      parts.push('# %%');
+      parts.push(cell.source);
+    }
+  }
+  return parts.join('\n');
+}
+
+function initEditorLineNumbers() {
+  const textarea = $('codeEditor');
+  const lineNumbers = $('lineNumbers');
+  if (!textarea || !lineNumbers) return;
+
+  const updateLineNumbers = () => {
+    const linesArr = textarea.value.split('\n');
+    const count = Math.max(1, linesArr.length);
+    let html = '';
+    for (let i = 1; i <= count; i++) {
+      html += `<span class="ln">${i}</span>`;
+    }
+    lineNumbers.innerHTML = html;
+  };
+
+  const syncScroll = () => {
+    lineNumbers.scrollTop = textarea.scrollTop;
+  };
+
+  textarea.removeEventListener('input', updateLineNumbers);
+  textarea.removeEventListener('scroll', syncScroll);
+  textarea.addEventListener('input', updateLineNumbers);
+  textarea.addEventListener('scroll', syncScroll);
+  
+  updateLineNumbers();
+  syncScroll();
+}
+
+function switchEditorMode(mode, slug) {
+  const btnScript = $('modeScript');
+  const btnNotebook = $('modeNotebook');
+  const editorScript = $('editorScriptMode');
+  const editorNotebook = $('editorNotebookMode');
+  const fileLabel = $('ideFileLabel');
+  
+  if (mode === 'notebook') {
+    const scriptVal = $('codeEditor').value;
+    notebookCells = parseScriptToCells(scriptVal);
+    
+    btnScript.classList.remove('active');
+    btnNotebook.classList.add('active');
+    editorScript.style.display = 'none';
+    editorNotebook.style.display = 'block';
+    fileLabel.textContent = 'predict.ipynb';
+    
+    renderNotebookCells();
+  } else {
+    // Save cells to script
+    const scriptVal = parseCellsToScript(notebookCells);
+    $('codeEditor').value = scriptVal;
+    localStorage.setItem(`aioj_code_${slug}`, scriptVal);
+    
+    btnScript.classList.add('active');
+    btnNotebook.classList.remove('active');
+    editorScript.style.display = 'flex';
+    editorNotebook.style.display = 'none';
+    fileLabel.textContent = 'predict.py';
+    
+    initEditorLineNumbers();
+  }
+}
+
+function renderNotebookCells() {
+  const container = $('nbCellsContainer');
+  if (!container) return;
+
+  let html = '';
+  notebookCells.forEach((cell, idx) => {
+    const cellId = `nb-cell-${idx}`;
+    const cellTypeLabel = cell.type === 'code' ? 'Code 单元格' : 'Markdown 单元格';
+    const cellClass = cell.type === 'code' ? 'nb-cell code-cell' : 'nb-cell markdown-cell';
+    const placeholder = cell.type === 'code' ? '在此编写 Python 代码...' : '在此编写 Markdown 文本...';
+    
+    html += `
+      <div class="${cellClass}" id="${cellId}" data-index="${idx}">
+        <div class="nb-cell-header">
+          <div class="cell-label">
+            <span>${cell.type === 'code' ? '💻' : '📝'}</span>
+            <span>[${idx}] ${cellTypeLabel}</span>
+          </div>
+          <div class="cell-actions">
+            <button onclick="moveNbCell(${idx}, -1)" title="上移" ${idx === 0 ? 'disabled style="opacity:0.3; cursor:default;"' : ''}>▲</button>
+            <button onclick="moveNbCell(${idx}, 1)" title="下移" ${idx === notebookCells.length - 1 ? 'disabled style="opacity:0.3; cursor:default;"' : ''}>▼</button>
+            <button onclick="toggleNbCellType(${idx})" title="切换类型">${cell.type === 'code' ? '⚡ 转 Markdown' : '⚡ 转 Code'}</button>
+            <button onclick="removeNbCell(${idx})" title="删除" style="color: var(--color-danger);">🗑️</button>
+          </div>
+        </div>
+        <textarea id="cell-textarea-${idx}" placeholder="${placeholder}" oninput="updateNbCellContent(${idx}, this.value)">${esc(cell.source)}</textarea>
+      </div>
+    `;
+  });
+
+  html += `
+    <div style="display: flex; gap: 8px; margin-top: 12px;">
+      <button class="nb-add-cell-btn" onclick="addNbCell('code')" style="flex: 1;">➕ 添加 Code 单元格</button>
+      <button class="nb-add-cell-btn" onclick="addNbCell('markdown')" style="flex: 1;">➕ 添加 Markdown 单元格</button>
+    </div>
+  `;
+
+  container.innerHTML = html;
+
+  notebookCells.forEach((cell, idx) => {
+    const ta = $(`cell-textarea-${idx}`);
+    if (ta) {
+      ta.addEventListener('keydown', function(e) {
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          const start = this.selectionStart;
+          const end = this.selectionEnd;
+          this.value = this.value.substring(0, start) + "    " + this.value.substring(end);
+          this.selectionStart = this.selectionEnd = start + 4;
+          updateNbCellContent(idx, this.value);
+        }
+      });
+      const autoExpand = () => {
+        ta.style.height = 'auto';
+        ta.style.height = (ta.scrollHeight + 4) + 'px';
+      };
+      ta.addEventListener('input', autoExpand);
+      autoExpand();
+    }
+  });
+}
+
+function updateNbCellContent(idx, value) {
+  if (notebookCells[idx]) {
+    notebookCells[idx].source = value;
+    saveNotebookCellsToLocal();
+  }
+}
+
+function toggleNbCellType(idx) {
+  if (notebookCells[idx]) {
+    notebookCells[idx].type = notebookCells[idx].type === 'code' ? 'markdown' : 'code';
+    renderNotebookCells();
+    saveNotebookCellsToLocal();
+  }
+}
+
+function removeNbCell(idx) {
+  if (confirm('确认删除此单元格吗？此操作不可撤销。')) {
+    notebookCells.splice(idx, 1);
+    if (notebookCells.length === 0) {
+      notebookCells.push({ type: 'code', source: '' });
+    }
+    renderNotebookCells();
+    saveNotebookCellsToLocal();
+  }
+}
+
+function moveNbCell(idx, direction) {
+  const targetIdx = idx + direction;
+  if (targetIdx < 0 || targetIdx >= notebookCells.length) return;
+  const temp = notebookCells[idx];
+  notebookCells[idx] = notebookCells[targetIdx];
+  notebookCells[targetIdx] = temp;
+  
+  renderNotebookCells();
+  saveNotebookCellsToLocal();
+  
+  setTimeout(() => {
+    const ta = $(`cell-textarea-${targetIdx}`);
+    if (ta) ta.focus();
+  }, 50);
+}
+
+function addNbCell(type) {
+  notebookCells.push({ type: type, source: '' });
+  renderNotebookCells();
+  saveNotebookCellsToLocal();
+  
+  setTimeout(() => {
+    const ta = $(`cell-textarea-${notebookCells.length - 1}`);
+    if (ta) ta.focus();
+  }, 50);
+}
+
+function saveNotebookCellsToLocal() {
+  const scriptVal = parseCellsToScript(notebookCells);
+  const slug = state.activeProblemSlug;
+  if (slug) {
+    localStorage.setItem(`aioj_code_${slug}`, scriptVal);
+    // Keep raw textarea value updated too in case user submits from notebook view
+    const ta = $('codeEditor');
+    if (ta) ta.value = scriptVal;
+  }
+}
+
 // ─── Window exports for handlers ──────────────────────────────────────────
 Object.assign(window, {
   navigate, showAuthModal, switchAuthTab, submitAuth, logout,
@@ -3791,5 +4102,5 @@ Object.assign(window, {
   showAnnouncementModal, publishAnnouncement,
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   closeModal, copyTerminalText, toggleTheme,
-  resetEditorCode, runSandboxTest, submitEditorCode
+  resetEditorCode, runSandboxTest, submitEditorCode, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });
