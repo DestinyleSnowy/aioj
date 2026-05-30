@@ -31,6 +31,7 @@ const state = {
   countdownTimer: null,
   activeProblemTab: 'statement', // Default tab in problem detail
   notificationUnreadCount: 0,
+  messageUnreadCount: 0,
 };
 
 function setPage(title) {
@@ -66,6 +67,7 @@ async function api(path, options = {}) {
       localStorage.removeItem('aioj_token');
       state.user = null;
       state.notificationUnreadCount = 0;
+      state.messageUnreadCount = 0;
       updateNav();
       toast('登录会话已过期，请重新登录。', 'warning');
     }
@@ -93,6 +95,10 @@ function esc(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+function jsArg(value) {
+  return esc(JSON.stringify(value));
 }
 
 function formatDate(v) {
@@ -229,12 +235,20 @@ function updateNav() {
   $('userDropdownContainer').style.display = state.user ? 'block' : 'none';
   $('authBtn').style.display = state.user ? 'none' : '';
   $('notificationBtn').style.display = state.user ? 'inline-flex' : 'none';
+  $('messageBtn').style.display = state.user ? 'inline-flex' : 'none';
 
   const badge = $('notificationBadge');
   if (badge) {
     const unread = Number(state.notificationUnreadCount || 0);
     badge.style.display = state.user && unread > 0 ? '' : 'none';
     badge.textContent = unread > 99 ? '99+' : String(unread);
+  }
+
+  const messageBadge = $('messageBadge');
+  if (messageBadge) {
+    const unread = Number(state.messageUnreadCount || 0);
+    messageBadge.style.display = state.user && unread > 0 ? '' : 'none';
+    messageBadge.textContent = unread > 99 ? '99+' : String(unread);
   }
 
   const userPill = $('userPill');
@@ -305,19 +319,21 @@ async function loadMe() {
   if (!state.token) {
     state.user = null;
     state.notificationUnreadCount = 0;
+    state.messageUnreadCount = 0;
     updateNav();
     return;
   }
   try {
     const data = await api('/api/auth/me', { headers: authHeaders() });
     state.user = data.user || data;
-    await refreshNotificationCount();
+    await Promise.allSettled([refreshNotificationCount(), refreshMessageCount()]);
     updateNav();
   } catch {
     state.token = '';
     localStorage.removeItem('aioj_token');
     state.user = null;
     state.notificationUnreadCount = 0;
+    state.messageUnreadCount = 0;
     updateNav();
   }
 }
@@ -333,6 +349,21 @@ async function refreshNotificationCount() {
     state.notificationUnreadCount = Number(data.unread_count || 0);
   } catch {
     state.notificationUnreadCount = 0;
+  }
+  updateNav();
+}
+
+async function refreshMessageCount() {
+  if (!state.token || !state.user) {
+    state.messageUnreadCount = 0;
+    updateNav();
+    return;
+  }
+  try {
+    const data = await api('/api/messages/unread-count', { headers: authHeaders() });
+    state.messageUnreadCount = Number(data.unread_count || 0);
+  } catch {
+    state.messageUnreadCount = 0;
   }
   updateNav();
 }
@@ -452,6 +483,7 @@ function logout() {
   state.token = '';
   state.user = null;
   state.notificationUnreadCount = 0;
+  state.messageUnreadCount = 0;
   localStorage.removeItem('aioj_token');
   updateNav();
   toast('已成功登出您的账号', 'info');
@@ -2319,6 +2351,276 @@ async function openNotificationLink(notificationId, link) {
   }
 }
 
+// ─── Direct Messages ───────────────────────────────────────────────────────
+function messagePreview(text, limit = 96) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  if (value.length <= limit) return value || '空消息';
+  return `${value.slice(0, limit - 1)}…`;
+}
+
+function messagePeerInitial(name) {
+  return esc(String(name || '?').slice(0, 1).toUpperCase());
+}
+
+async function renderMessages(peerId = null) {
+  setPage('私信');
+  const app = $('app');
+  if (!state.user) {
+    app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button> 使用私信。</div>`;
+    return;
+  }
+
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在同步私信会话...</span>
+    </div>
+  `;
+
+  try {
+    const conversationData = await api('/api/messages/conversations?limit=100', { headers: authHeaders() });
+    const conversations = conversationData.items || [];
+    const selectedPeerId = peerId ? Number(peerId) : Number(conversations[0]?.peer_id || 0);
+    let thread = null;
+
+    if (selectedPeerId) {
+      thread = await api(`/api/messages/conversations/${selectedPeerId}?limit=120`, { headers: authHeaders() });
+      await refreshMessageCount();
+    }
+
+    const activePeer = thread?.peer || conversations.find(c => Number(c.peer_id) === selectedPeerId);
+    app.innerHTML = `
+      <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
+        <div>
+          <h3 class="section-title">私信</h3>
+          <div class="text-muted" style="font-size: 13px;">与站内用户一对一沟通，打开会话后会自动标记已读。</div>
+        </div>
+        <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
+      </div>
+
+      <div class="messages-layout">
+        <aside class="message-conversation-list">
+          ${conversations.length === 0 ? `
+            <div class="message-empty-panel">
+              <div class="empty-icon">✉</div>
+              <div class="text-muted" style="font-size: 13px;">暂无会话</div>
+              <button class="btn btn-secondary btn-sm mt-md" onclick="showNewMessageModal()">开始私信</button>
+            </div>
+          ` : conversations.map(c => {
+            const active = Number(c.peer_id) === selectedPeerId;
+            const incoming = Number(c.last_sender_id) !== Number(state.user.id);
+            const unread = Number(c.unread_count || 0);
+            return `
+              <button class="message-conversation ${active ? 'active' : ''}" onclick="navigate('/messages/${c.peer_id}')">
+                <span class="message-avatar">${messagePeerInitial(c.peer_username)}</span>
+                <span class="message-conversation-body">
+                  <span class="message-conversation-top">
+                    <strong>${esc(c.peer_username)}</strong>
+                    <span>${formatDate(c.last_created_at)}</span>
+                  </span>
+                  <span class="message-preview">
+                    ${incoming ? '' : '我：'}${esc(messagePreview(c.last_body_md))}
+                  </span>
+                </span>
+                ${unread > 0 ? `<span class="message-unread-dot">${unread > 99 ? '99+' : unread}</span>` : ''}
+              </button>
+            `;
+          }).join('')}
+        </aside>
+
+        <section class="message-thread-panel">
+          ${selectedPeerId && activePeer ? renderMessageThread(activePeer, thread?.items || []) : `
+            <div class="message-empty-panel">
+              <div class="empty-icon">✉</div>
+              <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信。</div>
+            </div>
+          `}
+        </section>
+      </div>
+    `;
+
+    setTimeout(() => {
+      const list = $('messageThreadList');
+      if (list) list.scrollTop = list.scrollHeight;
+      const composer = $('messageComposer');
+      if (composer) composer.focus();
+    }, 50);
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+function renderMessageThread(peer, messages) {
+  return `
+    <div class="message-thread-header">
+      <div class="message-avatar">${messagePeerInitial(peer.username || peer.peer_username)}</div>
+      <div>
+        <div style="font-weight: 700; color: var(--text-main);">${esc(peer.username || peer.peer_username)}</div>
+        <div class="text-muted" style="font-size: 12px;">${esc(peer.role || peer.peer_role || 'USER')}</div>
+      </div>
+    </div>
+
+    <div class="message-thread-list" id="messageThreadList">
+      ${messages.length === 0 ? `
+        <div class="message-empty-panel">
+          <div class="empty-icon">✉</div>
+          <div class="text-muted" style="font-size: 13px;">还没有消息，发送第一条私信。</div>
+        </div>
+      ` : messages.map(m => {
+        const mine = Number(m.sender_id) === Number(state.user.id);
+        return `
+          <div class="message-row ${mine ? 'mine' : ''}">
+            <div class="message-bubble">
+              ${renderMd(m.body_md)}
+              <div class="message-meta">
+                ${mine ? '我' : esc(m.sender_username)} · ${formatDate(m.created_at)}
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+
+    <div class="message-composer">
+      <textarea id="messageComposer" rows="3" maxlength="4000" placeholder="输入私信内容，Enter 换行"></textarea>
+      <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
+        <span class="text-muted" style="font-size: 12px;">最长 4000 字符</span>
+        <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${peer.id || peer.peer_id})">发送</button>
+      </div>
+    </div>
+  `;
+}
+
+function showNewMessageModal() {
+  const body = `
+    <input type="hidden" id="newMessageRecipientId" />
+    <div class="form-group">
+      <label for="messageRecipient">收件人用户名</label>
+      <input type="text" id="messageRecipient" placeholder="搜索或输入用户名" autocomplete="off" oninput="searchMessageUsers(this.value)" />
+      <div id="messageUserResults" class="message-user-results"></div>
+    </div>
+    <div class="form-group">
+      <label for="newMessageBody">私信内容</label>
+      <textarea id="newMessageBody" rows="6" maxlength="4000" placeholder="请输入要发送的内容"></textarea>
+    </div>
+    <div id="newMessageError" class="notice error" style="display:none"></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" id="newMessageSendBtn" onclick="sendNewMessage()">发送私信</button>
+  `;
+  openModal({ title: '写私信', body, footer });
+  setTimeout(() => $('messageRecipient')?.focus(), 50);
+}
+
+let messageUserSearchTimer = null;
+
+function searchMessageUsers(query) {
+  const resultsEl = $('messageUserResults');
+  const hidden = $('newMessageRecipientId');
+  if (hidden) hidden.value = '';
+  if (!resultsEl) return;
+
+  const q = String(query || '').trim();
+  if (!q) {
+    resultsEl.innerHTML = '';
+    return;
+  }
+
+  clearTimeout(messageUserSearchTimer);
+  messageUserSearchTimer = setTimeout(async () => {
+    try {
+      const data = await api(`/api/messages/users?q=${encodeURIComponent(q)}&limit=8`, { headers: authHeaders() });
+      const users = data.items || [];
+      resultsEl.innerHTML = users.length === 0
+        ? `<div class="message-user-result muted">未找到匹配用户</div>`
+        : users.map(u => `
+          <button type="button" class="message-user-result" onclick="selectMessageRecipient(${u.id}, ${jsArg(u.username)})">
+            <span class="message-avatar small">${messagePeerInitial(u.username)}</span>
+            <span>
+              <strong>${esc(u.username)}</strong>
+              <span class="text-muted">${esc(u.role || 'USER')}</span>
+            </span>
+          </button>
+        `).join('');
+    } catch (err) {
+      resultsEl.innerHTML = `<div class="message-user-result muted">${esc(err.message)}</div>`;
+    }
+  }, 200);
+}
+
+function selectMessageRecipient(userId, username) {
+  if ($('newMessageRecipientId')) $('newMessageRecipientId').value = userId;
+  if ($('messageRecipient')) $('messageRecipient').value = username;
+  if ($('messageUserResults')) $('messageUserResults').innerHTML = '';
+  $('newMessageBody')?.focus();
+}
+
+async function sendNewMessage() {
+  const btn = $('newMessageSendBtn');
+  const errEl = $('newMessageError');
+  const recipientId = $('newMessageRecipientId')?.value;
+  const recipient = $('messageRecipient')?.value.trim();
+  const body = $('newMessageBody')?.value.trim();
+
+  if (!recipient && !recipientId) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写收件人。'; }
+    return;
+  }
+  if (!body) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写私信内容。'; }
+    return;
+  }
+
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
+    const payload = { body_md: body };
+    if (recipientId) {
+      payload.recipient_id = Number(recipientId);
+    } else {
+      payload.recipient = recipient;
+    }
+    const data = await api('/api/messages', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    closeModal();
+    toast('私信已发送', 'success');
+    const peerId = data.peer?.id || data.message?.recipient_id;
+    navigate(`/messages/${peerId}`);
+  } catch (err) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '发送私信'; }
+  }
+}
+
+async function sendMessageToPeer(peerId) {
+  const textarea = $('messageComposer');
+  const btn = $('sendMessageBtn');
+  const body = textarea?.value.trim();
+  if (!body) {
+    toast('请输入私信内容', 'warning');
+    return;
+  }
+
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
+    await api('/api/messages', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipient_id: Number(peerId), body_md: body }),
+    });
+    if (textarea) textarea.value = '';
+    await renderMessages(peerId);
+  } catch (err) {
+    toast(`发送失败: ${err.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+  }
+}
+
 // ─── Account Settings ───────────────────────────────────────────────────────
 async function renderAccount() {
   setPage('个人中心');
@@ -3474,6 +3776,7 @@ function route() {
   updateNav();
   if (state.user) {
     refreshNotificationCount();
+    refreshMessageCount();
   }
 
   const app = $('app');
@@ -3485,6 +3788,7 @@ function route() {
   if (path === '/contests') return renderContests();
   if (path === '/submissions') return renderSubmissions();
   if (path === '/notifications') return renderNotifications();
+  if (path === '/messages') return renderMessages();
   if (path === '/account') return renderAccount();
   if (path === '/admin/users' || path === '/users') return renderUsers();
   if (path === '/judge-admin') return renderJudgeAdmin();
@@ -3495,6 +3799,9 @@ function route() {
   let match;
   if ((match = path.match(/^\/contests\/([^/]+)\/problems\/([^/]+)$/))) {
     return renderProblemDetail(match[2], match[1]);
+  }
+  if ((match = path.match(/^\/messages\/(\d+)$/))) {
+    return renderMessages(Number(match[1]));
   }
   if ((match = path.match(/^\/contests\/([^/]+)$/))) {
     return renderContestDetail(match[1]);
@@ -3528,6 +3835,13 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     navigate('/notifications');
+  });
+  $('messageBtn').addEventListener('click', () => {
+    if (!state.user) {
+      showAuthModal();
+      return;
+    }
+    navigate('/messages');
   });
 
   // User profile dropdown toggle
@@ -4163,6 +4477,7 @@ Object.assign(window, {
   showRegistrationModal, setRegStatus, bulkAddUsers,
   showAnnouncementModal, publishAnnouncement,
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
+  renderMessages, showNewMessageModal, searchMessageUsers, selectMessageRecipient, sendNewMessage, sendMessageToPeer,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });

@@ -197,6 +197,20 @@ create table if not exists notifications (
   read_at timestamptz
 );
 
+create table if not exists direct_messages (
+  id bigserial primary key,
+  sender_id bigint not null references users(id) on delete cascade,
+  recipient_id bigint not null references users(id) on delete cascade,
+  body_md text not null,
+  is_read boolean not null default false,
+  created_at timestamptz not null default now(),
+  read_at timestamptz,
+  constraint direct_messages_no_self_check check (sender_id <> recipient_id),
+  constraint direct_messages_body_length_check check (
+    length(btrim(body_md)) between 1 and 4000
+  )
+);
+
 create index if not exists judge_jobs_status_idx on judge_jobs(status, id);
 create index if not exists judge_jobs_claimed_by_status_idx on judge_jobs(claimed_by, status, id);
 create index if not exists judge_nodes_status_heartbeat_idx on judge_nodes(status, last_heartbeat_at desc);
@@ -214,3 +228,11 @@ create index if not exists idx_submissions_contest_scoreboard on submissions(con
 create index if not exists idx_submissions_contest_full_v6 on submissions(contest_id, user_id, problem_id, status, created_at);
 create index if not exists idx_notifications_user_created_desc on notifications(user_id, created_at desc, id desc);
 create index if not exists idx_notifications_user_unread on notifications(user_id, is_read, id desc);
+create index if not exists idx_direct_messages_recipient_unread on direct_messages(recipient_id, is_read, created_at desc, id desc);
+create index if not exists idx_direct_messages_sender_created on direct_messages(sender_id, created_at desc, id desc);
+create index if not exists idx_direct_messages_conversation on direct_messages(
+  least(sender_id, recipient_id),
+  greatest(sender_id, recipient_id),
+  created_at desc,
+  id desc
+);
