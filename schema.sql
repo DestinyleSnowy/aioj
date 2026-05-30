@@ -23,6 +23,7 @@ create table if not exists problems (
   cpu_count int not null default 2,
   output_limit_mb int not null default 64,
   status text not null default 'DRAFT',
+  active_version_id bigint,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -39,9 +40,21 @@ create table if not exists problem_versions (
   runner_image text not null default 'aioj-python-basic:latest',
   run_command jsonb not null default '["python","/workspace/predict.py","--input","/input/test.csv","--output","/output/submission.csv"]',
   required_tags text[] not null default '{}',
+  status text not null default 'DRAFT',
+  self_test_status text not null default 'PENDING',
+  self_test_result jsonb,
+  last_self_tested_at timestamptz,
+  activated_at timestamptz,
   created_at timestamptz not null default now(),
   unique(problem_id, version)
 );
+
+alter table problems
+  drop constraint if exists problems_active_version_id_fkey;
+
+alter table problems
+  add constraint problems_active_version_id_fkey
+  foreign key (active_version_id) references problem_versions(id) on delete set null;
 
 create table if not exists contests (
   id bigserial primary key,
@@ -172,6 +185,18 @@ create table if not exists system_settings (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists notifications (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  type text not null,
+  title text not null,
+  body_md text not null default '',
+  link text,
+  is_read boolean not null default false,
+  created_at timestamptz not null default now(),
+  read_at timestamptz
+);
+
 create index if not exists judge_jobs_status_idx on judge_jobs(status, id);
 create index if not exists judge_jobs_claimed_by_status_idx on judge_jobs(claimed_by, status, id);
 create index if not exists judge_nodes_status_heartbeat_idx on judge_nodes(status, last_heartbeat_at desc);
@@ -187,3 +212,5 @@ create index if not exists idx_contest_questions_contest_id on contest_questions
 create index if not exists idx_contest_questions_user_id on contest_questions(user_id);
 create index if not exists idx_submissions_contest_scoreboard on submissions(contest_id, status, user_id, problem_id);
 create index if not exists idx_submissions_contest_full_v6 on submissions(contest_id, user_id, problem_id, status, created_at);
+create index if not exists idx_notifications_user_created_desc on notifications(user_id, created_at desc, id desc);
+create index if not exists idx_notifications_user_unread on notifications(user_id, is_read, id desc);

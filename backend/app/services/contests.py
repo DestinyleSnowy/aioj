@@ -64,7 +64,7 @@ def get_contest_any(slug: str):
 
 def contest_problem_rows(contest_id: int, public_only: bool = True):
     with engine.connect() as conn:
-        status_filter = "and p.status = 'PUBLIC'" if public_only else ""
+        status_filter = "and p.status = 'PUBLIC' and p.active_version_id is not null" if public_only else ""
         rows = conn.execute(
             text(
                 f"""

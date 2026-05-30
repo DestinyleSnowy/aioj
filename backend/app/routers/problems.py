@@ -9,6 +9,12 @@ from app.db import engine
 from app.dependencies import require_admin
 from app.services.judge_admin import normalize_tags
 from app.services.problems import latest_problem_version
+from app.services.problem_versions import (
+    activate_problem_version,
+    list_problem_versions,
+    run_problem_version_self_test,
+    set_problem_version_status,
+)
 from app.settings import settings
 from app.storage import S3_BUCKET_PROBLEMS, get_text, put_bytes
 from app.uploads import parse_yaml, safe_extract_zip_bytes, safe_slug, validate_problem_archive
@@ -26,6 +32,7 @@ def list_problems():
                        memory_limit_mb, cpu_count, status, created_at
                 from problems
                 where status = 'PUBLIC'
+                  and active_version_id is not null
                 order by created_at desc, id desc
                 """
             )
@@ -47,6 +54,7 @@ def get_problem(slug: str):
     data.pop("label_object_key", None)
     data.pop("sample_submission_object_key", None)
     data.pop("scorer_object_key", None)
+    data.pop("self_test_result", None)
     return data
 
 
@@ -106,9 +114,11 @@ def admin_problems(user=Depends(require_admin)):
         rows = conn.execute(
             text(
                 """
-                select p.id, p.slug, p.title, p.status,
+                select p.id, p.slug, p.title, p.status, p.active_version_id,
                        count(pv.id) as versions,
-                       max(pv.created_at) as latest_version_at
+                       count(*) filter (where pv.status = 'DRAFT') as draft_versions,
+                       max(pv.created_at) as latest_version_at,
+                       max(case when pv.id = p.active_version_id then pv.version else null end) as active_version
                 from problems p
                 left join problem_versions pv on pv.problem_id = p.id
                 group by p.id
@@ -202,6 +212,11 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
         status = str(cfg.get("status") or "PUBLIC").upper()
         if status not in {"PUBLIC", "DRAFT", "ARCHIVED"}:
             status = "DRAFT"
+        requested_version_status = str(cfg.get("version_status") or "DRAFT").upper()
+        if requested_version_status not in {"DRAFT", "ACTIVE", "ARCHIVED"}:
+            requested_version_status = "DRAFT"
+        activate_after_import = bool(cfg.get("activate_on_import", False)) or requested_version_status == "ACTIVE"
+        initial_version_status = "ARCHIVED" if requested_version_status == "ARCHIVED" else "DRAFT"
 
         with engine.begin() as conn:
             existing = conn.execute(text("select id from problems where slug = :slug"), {"slug": slug}).mappings().first()
@@ -291,12 +306,12 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
                     insert into problem_versions (
                         problem_id, version, statement_md, test_input_object_key,
                         label_object_key, sample_submission_object_key, scorer_object_key,
-                        runner_image, run_command, required_tags
+                        runner_image, run_command, required_tags, status
                     )
                     values (
                         :problem_id, :version, :statement_md, :test_input_object_key,
                         :label_object_key, :sample_submission_object_key, :scorer_object_key,
-                        :runner_image, cast(:run_command as jsonb), :required_tags
+                        :runner_image, cast(:run_command as jsonb), :required_tags, :status
                     )
                     returning id
                     """
@@ -312,8 +327,19 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
                     "runner_image": runner_image,
                     "run_command": json.dumps(run_command),
                     "required_tags": required_tags,
+                    "status": initial_version_status,
                 },
             ).mappings().first()
+
+            self_test = run_problem_version_self_test(conn, slug, pv["id"])
+            activated = False
+            activation_error = None
+            if activate_after_import:
+                if self_test["ok"]:
+                    activate_problem_version(conn, slug, pv["id"])
+                    activated = True
+                else:
+                    activation_error = "Version self-test failed; import completed but version was not activated"
 
     return {
         "ok": True,
@@ -322,4 +348,62 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
         "version": version,
         "problem_version_id": pv["id"],
         "custom_scorer": bool(scorer_key),
+        "version_status": "ACTIVE" if activated else initial_version_status,
+        "self_test_status": self_test["self_test_status"],
+        "self_test_result": self_test,
+        "activated": activated,
+        "activation_error": activation_error,
     }
+
+
+@router.get("/api/admin/problems/{slug}/versions")
+def admin_problem_versions(slug: str, user=Depends(require_admin)):
+    slug = safe_slug(slug)
+    with engine.connect() as conn:
+        items = list_problem_versions(conn, slug)
+    if not items:
+        raise HTTPException(status_code=404, detail="Problem not found")
+    return {"slug": slug, "items": items}
+
+
+@router.post("/api/admin/problems/{slug}/versions/{version_id}/self-test")
+def admin_problem_version_self_test(slug: str, version_id: int, user=Depends(require_admin)):
+    slug = safe_slug(slug)
+    with engine.begin() as conn:
+        try:
+            result = run_problem_version_self_test(conn, slug, version_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True, "result": result}
+
+
+@router.post("/api/admin/problems/{slug}/versions/{version_id}/activate")
+def admin_activate_problem_version(slug: str, version_id: int, payload: dict | None = None, user=Depends(require_admin)):
+    slug = safe_slug(slug)
+    force = bool((payload or {}).get("force", False))
+    with engine.begin() as conn:
+        try:
+            version = activate_problem_version(conn, slug, version_id, force=force)
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 409 if "self-test" in detail else 404 if "not found" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+    return {"ok": True, "version": version}
+
+
+@router.post("/api/admin/problems/{slug}/versions/{version_id}/status")
+def admin_set_problem_version_status(
+    slug: str,
+    version_id: int,
+    payload: dict,
+    user=Depends(require_admin),
+):
+    slug = safe_slug(slug)
+    with engine.begin() as conn:
+        try:
+            version = set_problem_version_status(conn, slug, version_id, payload.get("status"))
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if "not found" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+    return {"ok": True, "version": version}

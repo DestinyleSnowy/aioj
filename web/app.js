@@ -30,6 +30,7 @@ const state = {
   currentRoute: '',
   countdownTimer: null,
   activeProblemTab: 'statement', // Default tab in problem detail
+  notificationUnreadCount: 0,
 };
 
 function setPage(title) {
@@ -109,8 +110,8 @@ function renderMd(md) {
 function statusPill(s) {
   s = String(s || '').toUpperCase();
   const cls =
-    s === 'ACCEPTED' || s === 'PUBLIC' || s === 'RUNNING' || s === 'RUN_FINISHED' ? 'green' :
-    s.includes('FAIL') || s === 'REJECTED' || s === 'ENDED' || s === 'ERROR' ? 'red' :
+    s === 'ACCEPTED' || s === 'PUBLIC' || s === 'RUNNING' || s === 'RUN_FINISHED' || s === 'PASSED' || s === 'ACTIVE' ? 'green' :
+    s.includes('FAIL') || s === 'REJECTED' || s === 'ENDED' || s === 'ERROR' || s === 'ARCHIVED' ? 'red' :
     s === 'PENDING' || s === 'UPCOMING' || s === 'DRAFT' || s === 'QUEUED' ? 'yellow' : 'gray';
   return `<span class="pill ${cls}">${esc(s || 'UNKNOWN')}</span>`;
 }
@@ -206,6 +207,14 @@ function updateNav() {
 
   $('userDropdownContainer').style.display = state.user ? 'block' : 'none';
   $('authBtn').style.display = state.user ? 'none' : '';
+  $('notificationBtn').style.display = state.user ? 'inline-flex' : 'none';
+
+  const badge = $('notificationBadge');
+  if (badge) {
+    const unread = Number(state.notificationUnreadCount || 0);
+    badge.style.display = state.user && unread > 0 ? '' : 'none';
+    badge.textContent = unread > 99 ? '99+' : String(unread);
+  }
 
   const userPill = $('userPill');
   if (state.user) {
@@ -272,17 +281,39 @@ async function checkHealth() {
 
 // ─── Auth Module ────────────────────────────────────────────────────────────
 async function loadMe() {
-  if (!state.token) { state.user = null; updateNav(); return; }
+  if (!state.token) {
+    state.user = null;
+    state.notificationUnreadCount = 0;
+    updateNav();
+    return;
+  }
   try {
     const data = await api('/api/auth/me', { headers: authHeaders() });
     state.user = data.user || data;
+    await refreshNotificationCount();
     updateNav();
   } catch {
     state.token = '';
     localStorage.removeItem('aioj_token');
     state.user = null;
+    state.notificationUnreadCount = 0;
     updateNav();
   }
+}
+
+async function refreshNotificationCount() {
+  if (!state.token || !state.user) {
+    state.notificationUnreadCount = 0;
+    updateNav();
+    return;
+  }
+  try {
+    const data = await api('/api/notifications/unread-count', { headers: authHeaders() });
+    state.notificationUnreadCount = Number(data.unread_count || 0);
+  } catch {
+    state.notificationUnreadCount = 0;
+  }
+  updateNav();
 }
 
 function showAuthModal(tab = 'login') {
@@ -399,6 +430,7 @@ async function submitAuth() {
 function logout() {
   state.token = '';
   state.user = null;
+  state.notificationUnreadCount = 0;
   localStorage.removeItem('aioj_token');
   updateNav();
   toast('已成功登出您的账号', 'info');
@@ -2109,6 +2141,113 @@ function copyTerminalText() {
   }
 }
 
+// ─── Notifications ──────────────────────────────────────────────────────────
+function notificationTypeLabel(kind) {
+  return ({
+    SUBMISSION_RESULT: '评测结果',
+    CONTEST_REGISTRATION: '报名状态',
+    CONTEST_ANNOUNCEMENT: '比赛公告',
+    QUESTION_ANSWERED: '答疑回复',
+  })[kind] || kind || '通知';
+}
+
+async function renderNotifications() {
+  setPage('通知中心');
+  const app = $('app');
+  if (!state.user) {
+    app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button> 查看站内通知。</div>`;
+    return;
+  }
+
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在同步站内通知流...</span>
+    </div>
+  `;
+
+  try {
+    const data = await api('/api/notifications?limit=100', { headers: authHeaders() });
+    const items = data.items || [];
+    app.innerHTML = `
+      <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
+        <div>
+          <h3 class="section-title">站内通知中心</h3>
+          <div class="text-muted" style="font-size: 13px;">未读消息会在右上角铃铛上计数显示。</div>
+        </div>
+        <button class="btn btn-secondary" onclick="markAllNotificationsRead()">全部标记为已读</button>
+      </div>
+
+      ${items.length === 0 ? emptyBox('当前没有新的站内通知') : `
+        <div style="display:flex; flex-direction:column; gap: var(--space-md);">
+          ${items.map(item => `
+            <div class="card ${item.is_read ? '' : 'highlight'}" style="padding: var(--space-lg);">
+              <div class="row flex-between gap-md" style="align-items:flex-start; flex-wrap: wrap;">
+                <div style="flex:1; min-width: 280px;">
+                  <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-bottom: 8px;">
+                    <strong>${esc(item.title)}</strong>
+                    <span class="pill ${item.is_read ? 'gray' : 'green'}">${item.is_read ? 'READ' : 'UNREAD'}</span>
+                    <span class="pill blue">${esc(notificationTypeLabel(item.type))}</span>
+                  </div>
+                  <div class="text-muted" style="font-size: 12px; margin-bottom: 10px;">${formatDate(item.created_at)}</div>
+                  <div class="md-content"><p>${esc(item.body_md || '').replace(/\n/g, '<br>')}</p></div>
+                </div>
+                <div class="row gap-xs" style="justify-content:flex-end; flex-wrap: wrap;">
+                  ${item.link ? `<button class="btn btn-primary btn-sm" onclick="openNotificationLink(${item.id}, '${esc(item.link)}')">查看详情</button>` : ''}
+                  ${item.is_read ? '' : `<button class="btn btn-secondary btn-sm" onclick="markNotificationRead(${item.id})">标记已读</button>`}
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `}
+    `;
+    refreshNotificationCount();
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function markNotificationRead(notificationId, rerender = true) {
+  try {
+    await api(`/api/notifications/${notificationId}/read`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    await refreshNotificationCount();
+    if (rerender && state.currentRoute === '/notifications') {
+      renderNotifications();
+    }
+  } catch (err) {
+    toast(`标记通知失败: ${err.message}`, 'error');
+  }
+}
+
+async function markAllNotificationsRead() {
+  try {
+    await api('/api/notifications/read-all', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    toast('所有通知均已标记为已读', 'success');
+    await refreshNotificationCount();
+    if (state.currentRoute === '/notifications') {
+      renderNotifications();
+    }
+  } catch (err) {
+    toast(`批量已读失败: ${err.message}`, 'error');
+  }
+}
+
+async function openNotificationLink(notificationId, link) {
+  await markNotificationRead(notificationId, false);
+  if (link) {
+    navigate(link);
+  } else if (state.currentRoute === '/notifications') {
+    renderNotifications();
+  }
+}
+
 // ─── Account Settings ───────────────────────────────────────────────────────
 async function renderAccount() {
   setPage('个人中心');
@@ -2673,6 +2812,7 @@ async function renderProblemAdmin() {
                   <th>题目标识 (Slug)</th>
                   <th>题目名称</th>
                   <th>评测可见状态</th>
+                  <th>当前生效版本</th>
                   <th>可用历史版本</th>
                   <th style="text-align: right;">快速调试</th>
                 </tr>
@@ -2683,10 +2823,12 @@ async function renderProblemAdmin() {
                     <td><strong style="font-family: var(--font-mono);">${esc(p.slug)}</strong></td>
                     <td><strong>${esc(p.title)}</strong></td>
                     <td>${statusPill(p.status)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 12px;">${esc(p.active_version || '未激活')}</td>
                     <td style="font-family: var(--font-mono); font-size: 12px;">${p.versions || '1'}</td>
                     <td>
                       <div class="row gap-xs" style="justify-content: flex-end;">
                         <a href="/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" data-link>预览</a>
+                        <button class="btn btn-secondary btn-sm" onclick="showProblemVersionsModal('${esc(p.slug)}')">版本流水线</button>
                         <button class="btn btn-secondary btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'PUBLIC')">发布公开</button>
                         <button class="btn btn-secondary btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'DRAFT')">草稿锁定</button>
                         <button class="btn btn-danger btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'ARCHIVED')">封存归档</button>
@@ -2724,7 +2866,10 @@ async function importProblem() {
     );
     resultEl.innerHTML = `
       <div class="notice success">
-        <strong>部署成功!</strong> 题目: ${esc(data.slug)} 已经成功装载入库 (版本号: v${esc(data.version || '1')})。
+        <strong>部署成功!</strong> 题目: ${esc(data.slug)} 已经成功装载入库 (版本号: ${esc(data.version || '1')})。
+        <div style="margin-top: 8px; font-size: 13px;">
+          版本状态: ${esc(data.version_status || 'DRAFT')}，自测结果: ${esc(data.self_test_status || 'PENDING')}${data.activated ? '，已自动激活。' : '。'}
+        </div>
       </div>
     `;
     toast('题包文件部署入库成功', 'success');
@@ -2745,6 +2890,125 @@ async function setProblemStatus(slug, status) {
     renderProblemAdmin();
   } catch (err) {
     toast(`变更状态失败: ${err.message}`, 'error');
+  }
+}
+
+function renderProblemVersionSelfTestSummary(item) {
+  const result = item.self_test_result || {};
+  const status = item.self_test_status || 'PENDING';
+  if (status === 'PENDING') {
+    return '<span class="text-muted" style="font-size: 12px;">尚未完成版本自测</span>';
+  }
+  if (status === 'FAILED') {
+    return `<span style="font-size: 12px; color: var(--color-danger);">${esc(result.error_message || '自测失败')}</span>`;
+  }
+  return `
+    <span style="font-size: 12px; color: var(--text-secondary);">
+      Public: <strong>${scoreDisplay(result.public_score)}</strong> ·
+      Private: <strong>${scoreDisplay(result.private_score)}</strong>
+    </span>
+  `;
+}
+
+async function showProblemVersionsModal(slug) {
+  try {
+    const data = await api(`/api/admin/problems/${slug}/versions`, { headers: authHeaders() });
+    const items = data.items || [];
+    openModal({
+      title: `题目版本发布流水线 — ${slug}`,
+      wide: true,
+      body: `
+        <div class="notice info" style="margin-bottom: var(--space-md);">
+          这里管理题目版本的自测、激活与回滚。只有激活版本会对选手可见并接收新提交。
+        </div>
+        ${items.length === 0 ? emptyBox('该题目暂时没有历史版本记录') : `
+          <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+            ${items.map(item => `
+              <div class="card ${item.is_active ? 'highlight' : ''}" style="padding: var(--space-lg);">
+                <div class="row flex-between gap-md" style="align-items: flex-start; flex-wrap: wrap;">
+                  <div style="flex: 1; min-width: 260px;">
+                    <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-bottom: 8px;">
+                      <strong style="font-family: var(--font-mono); font-size: 16px;">${esc(item.version)}</strong>
+                      ${statusPill(item.status)}
+                      ${statusPill(item.self_test_status || 'PENDING')}
+                      ${item.is_active ? '<span class="pill blue">CURRENT</span>' : ''}
+                    </div>
+                    <div class="text-muted" style="font-size: 12px; margin-bottom: 8px;">
+                      激活时间: ${formatDate(item.activated_at) || '—'} · 最近自测: ${formatDate(item.last_self_tested_at) || '—'}
+                    </div>
+                    <div class="text-muted" style="font-size: 12px; margin-bottom: 6px;">
+                      Runner: <code>${esc(item.runner_image || '—')}</code> · Tags: <code>${esc((item.required_tags || []).join(', ') || 'none')}</code>
+                    </div>
+                    ${renderProblemVersionSelfTestSummary(item)}
+                  </div>
+                  <div class="row gap-xs" style="justify-content: flex-end; flex-wrap: wrap;">
+                    <button class="btn btn-secondary btn-sm" onclick="rerunProblemVersionSelfTest('${esc(slug)}', ${item.id})">重新自测</button>
+                    <button class="btn btn-primary btn-sm" onclick="activateProblemVersion('${esc(slug)}', ${item.id})">激活/回滚到此版本</button>
+                    <button class="btn btn-secondary btn-sm" onclick="setProblemVersionStatus('${esc(slug)}', ${item.id}, 'DRAFT')">置为草稿</button>
+                    <button class="btn btn-danger btn-sm" onclick="setProblemVersionStatus('${esc(slug)}', ${item.id}, 'ARCHIVED')">归档版本</button>
+                  </div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `}
+      `,
+      footer: `
+        <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+        <button class="btn btn-primary" onclick="renderProblemAdmin(); showProblemVersionsModal('${esc(slug)}')">刷新列表</button>
+      `,
+    });
+  } catch (err) {
+    toast(`读取版本流水线失败: ${err.message}`, 'error');
+  }
+}
+
+async function rerunProblemVersionSelfTest(slug, versionId) {
+  try {
+    await api(`/api/admin/problems/${slug}/versions/${versionId}/self-test`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    toast(`版本 #${versionId} 自测完成`, 'success');
+    showProblemVersionsModal(slug);
+    renderProblemAdmin();
+  } catch (err) {
+    toast(`版本自测失败: ${err.message}`, 'error');
+  }
+}
+
+async function activateProblemVersion(slug, versionId, force = false) {
+  try {
+    await api(`/api/admin/problems/${slug}/versions/${versionId}/activate`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ force }),
+    });
+    toast(`版本 #${versionId} 已切换为当前生效版本`, 'success');
+    showProblemVersionsModal(slug);
+    renderProblemAdmin();
+  } catch (err) {
+    if (!force && /force=true|自测/i.test(err.message || '')) {
+      if (confirm(`该版本当前未通过自测，是否强制激活版本 #${versionId}？`)) {
+        return activateProblemVersion(slug, versionId, true);
+      }
+    }
+    toast(`激活版本失败: ${err.message}`, 'error');
+  }
+}
+
+async function setProblemVersionStatus(slug, versionId, status) {
+  try {
+    await api(`/api/admin/problems/${slug}/versions/${versionId}/status`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    toast(`版本 #${versionId} 状态已更新为 ${status}`, 'success');
+    showProblemVersionsModal(slug);
+    renderProblemAdmin();
+  } catch (err) {
+    toast(`更新版本状态失败: ${err.message}`, 'error');
   }
 }
 
@@ -3137,6 +3401,9 @@ function route() {
 
   state.currentRoute = path;
   updateNav();
+  if (state.user) {
+    refreshNotificationCount();
+  }
 
   const app = $('app');
   app.className = 'content animate-fade-in';
@@ -3146,6 +3413,7 @@ function route() {
   if (path === '/problems') return renderProblems();
   if (path === '/contests') return renderContests();
   if (path === '/submissions') return renderSubmissions();
+  if (path === '/notifications') return renderNotifications();
   if (path === '/account') return renderAccount();
   if (path === '/admin/users' || path === '/users') return renderUsers();
   if (path === '/judge-admin') return renderJudgeAdmin();
@@ -3183,6 +3451,13 @@ function route() {
 document.addEventListener('DOMContentLoaded', () => {
   $('authBtn').addEventListener('click', () => showAuthModal());
   $('logoutBtn').addEventListener('click', logout);
+  $('notificationBtn').addEventListener('click', () => {
+    if (!state.user) {
+      showAuthModal();
+      return;
+    }
+    navigate('/notifications');
+  });
 
   // User profile dropdown toggle
   const userPill = $('userPill');
@@ -3508,11 +3783,13 @@ Object.assign(window, {
   changePassword, showResetPasswordModal, resetUserPassword,
   renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
   toggleUserRole, toggleUserDisabled,
-  importProblem, setProblemStatus,
+  importProblem, setProblemStatus, showProblemVersionsModal, rerunProblemVersionSelfTest,
+  activateProblemVersion, setProblemVersionStatus,
   showCreateContestModal, createContest,
   showContestSettingsModal, saveContestSettings,
   showRegistrationModal, setRegStatus, bulkAddUsers,
   showAnnouncementModal, publishAnnouncement,
+  renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode
 });

@@ -19,6 +19,7 @@ from app.services.judge_admin import (
     should_retry_job,
     utc_now,
 )
+from app.services.notifications import notify_submission_result
 from app.settings import settings
 
 router = APIRouter()
@@ -168,6 +169,8 @@ def _finalize_job_failure(
     spec = normalize_run_spec(run_spec)
     if not spec.get("is_test_run"):
         rebuild_leaderboard(conn, submission["problem_id"])
+
+    notify_submission_result(conn, submission["id"])
 
 
 def _mark_offline_nodes(conn, *, now) -> int:
@@ -444,6 +447,7 @@ def internal_judge_finish(payload: dict, _: None = Depends(require_internal_toke
                 {"id": job_id},
             )
             final_status = "TEST_ACCEPTED" if spec.get("is_test_run") else "ACCEPTED"
+            notify_submission_result(conn, submission_id)
             return {"ok": True, "submission_id": submission_id, "status": final_status}
 
         fail_status = failed_submission_status(spec)

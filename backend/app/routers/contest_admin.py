@@ -15,6 +15,11 @@ from app.services.contests import (
     parse_utc_datetime,
     scoreboard_rows,
 )
+from app.services.notifications import (
+    notify_contest_announcement,
+    notify_question_answered,
+    notify_registration_status,
+)
 
 router = APIRouter()
 
@@ -163,7 +168,7 @@ def admin_add_contest_participant(slug: str, payload: dict, user=Depends(require
         if not user_row:
             raise HTTPException(status_code=404, detail="User not found")
 
-        conn.execute(
+        inserted = conn.execute(
             text(
                 """
                 insert into contest_participants(contest_id, user_id)
@@ -173,6 +178,15 @@ def admin_add_contest_participant(slug: str, payload: dict, user=Depends(require
             ),
             {"contest_id": contest["id"], "user_id": user_row["id"]},
         )
+        if inserted.rowcount:
+            notify_registration_status(
+                conn,
+                contest_id=contest["id"],
+                contest_slug=contest["slug"],
+                contest_title=contest["title"],
+                user_id=user_row["id"],
+                status="ACCEPTED",
+            )
 
     return {"ok": True, "user": dict(user_row), "participant_count": contest_participant_count(contest["id"])}
 
@@ -223,8 +237,17 @@ def admin_create_contest_announcement(slug: str, payload: dict, user=Depends(req
                 "is_published": is_published,
             },
         ).mappings().first()
+        notified_users = 0
+        if is_published:
+            notified_users = notify_contest_announcement(
+                conn,
+                contest_id=contest["id"],
+                contest_slug=contest["slug"],
+                title=f"比赛公告：{title}",
+                body_md=body_md,
+            )
 
-    return {"ok": True, "announcement": dict(row)}
+    return {"ok": True, "announcement": dict(row), "notified_users": notified_users}
 
 
 @router.post("/api/admin/contests/{slug}/announcements/{announcement_id}/delete")
@@ -355,7 +378,7 @@ def admin_answer_contest_question(slug: str, question_id: int, payload: dict, us
                     status = 'ANSWERED',
                     answered_at = now()
                 where id = :id and contest_id = :contest_id
-                returning id, title, body_md, answer_md, status, is_public, created_at, answered_at
+                returning id, user_id, title, body_md, answer_md, status, is_public, created_at, answered_at
                 """
             ),
             {
@@ -365,6 +388,15 @@ def admin_answer_contest_question(slug: str, question_id: int, payload: dict, us
                 "is_public": is_public,
             },
         ).mappings().first()
+        if row:
+            notify_question_answered(
+                conn,
+                user_id=row["user_id"],
+                contest_slug=contest["slug"],
+                question_id=row["id"],
+                question_title=row["title"],
+                answer_md=row["answer_md"] or "",
+            )
 
     if not row:
         raise HTTPException(status_code=404, detail="Question not found")
@@ -513,6 +545,16 @@ def admin_set_contest_registration_status(slug: str, user_id: int, payload: dict
             ),
             {"contest_id": contest["id"], "user_id": user_id, "status": status, "note": note},
         ).mappings().first()
+        if row:
+            notify_registration_status(
+                conn,
+                contest_id=contest["id"],
+                contest_slug=contest["slug"],
+                contest_title=contest["title"],
+                user_id=user_id,
+                status=status,
+                note=note,
+            )
     if not row:
         raise HTTPException(status_code=404, detail="Registration not found")
     return {"ok": True, "registration": dict(row)}
@@ -549,6 +591,14 @@ def admin_bulk_add_contest_registrations(slug: str, payload: dict, user=Depends(
                     """
                 ),
                 {"contest_id": contest["id"], "user_id": user_row["id"], "status": status},
+            )
+            notify_registration_status(
+                conn,
+                contest_id=contest["id"],
+                contest_slug=contest["slug"],
+                contest_title=contest["title"],
+                user_id=user_row["id"],
+                status=status,
             )
             added.append(dict(user_row))
     return {"ok": True, "added": added, "missing": missing}
