@@ -2279,6 +2279,100 @@ tr:last-child td {
   line-height: 1.6;
 }
 
+.message-image-frame {
+  margin-bottom: 8px;
+  max-width: 100%;
+}
+
+.message-image-placeholder {
+  min-width: 180px;
+  min-height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-light);
+  border-radius: var(--radius-md);
+  background: hsla(0, 0%, 0%, 0.12);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.message-image {
+  display: block;
+  max-width: min(360px, 100%);
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  cursor: zoom-in;
+}
+
+.message-image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  margin: 0 auto;
+  border-radius: var(--radius-md);
+}
+
+.message-file-card {
+  width: min(360px, 100%);
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 10px;
+  margin-bottom: 8px;
+  border: var(--border-light);
+  border-radius: var(--radius-md);
+  background: hsla(0, 0%, 0%, 0.1);
+  color: var(--text-main);
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-file-card:hover {
+  border-color: hsla(var(--hue-primary), 90%, 60%, 0.28);
+}
+
+.message-file-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: hsla(var(--hue-primary), 90%, 60%, 0.13);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.message-file-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.message-file-info strong,
+.message-file-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-file-info span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.message-file-download {
+  color: var(--color-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .message-bubble .md-content p:last-child,
 .message-bubble .md-content pre:last-child {
   margin-bottom: 0;
@@ -2302,6 +2396,10 @@ tr:last-child td {
 .message-composer textarea {
   resize: vertical;
   min-height: 84px;
+}
+
+.message-file-button {
+  cursor: pointer;
 }
 
 .message-empty-panel {

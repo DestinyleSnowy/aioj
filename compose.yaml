@@ -64,6 +64,7 @@ services:
       S3_BUCKET_PROBLEMS: aioj-problems
       S3_BUCKET_SUBMISSIONS: aioj-submissions
       S3_BUCKET_LOGS: aioj-logs
+      S3_BUCKET_MESSAGES: aioj-messages
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXP_SECONDS: 604800

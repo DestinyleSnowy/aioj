@@ -20,6 +20,7 @@ from app.services.system_settings import ensure_default_settings
 from app.settings import settings
 from app.storage import (
     S3_BUCKET_LOGS,
+    S3_BUCKET_MESSAGES,
     S3_BUCKET_PROBLEMS,
     S3_BUCKET_SUBMISSIONS,
     ensure_bucket,
@@ -35,6 +36,7 @@ async def lifespan(_: FastAPI):
     ensure_bucket(S3_BUCKET_PROBLEMS)
     ensure_bucket(S3_BUCKET_SUBMISSIONS)
     ensure_bucket(S3_BUCKET_LOGS)
+    ensure_bucket(S3_BUCKET_MESSAGES)
     if settings.bootstrap_admin_on_startup:
         ensure_admin()
     yield

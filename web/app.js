@@ -2352,8 +2352,25 @@ async function openNotificationLink(notificationId, link) {
 }
 
 // ─── Direct Messages ───────────────────────────────────────────────────────
-function messagePreview(text, limit = 96) {
+function isImageAttachment(contentType) {
+  return String(contentType || '').toLowerCase().startsWith('image/');
+}
+
+function formatFileSize(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function messagePreview(text, limit = 96, attachmentContentType = '') {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
+  const attachmentLabel = attachmentContentType
+    ? (isImageAttachment(attachmentContentType) ? '[图片]' : '[文件]')
+    : '';
+  if (!value && attachmentLabel) return attachmentLabel;
+  if (value && attachmentLabel) return `${attachmentLabel} ${value.length <= limit ? value : `${value.slice(0, limit - 1)}…`}`;
   if (value.length <= limit) return value || '空消息';
   return `${value.slice(0, limit - 1)}…`;
 }
@@ -2362,7 +2379,7 @@ function messagePeerInitial(name) {
   return esc(String(name || '?').slice(0, 1).toUpperCase());
 }
 
-async function renderMessages(peerId = null) {
+async function renderMessages(peerId = null, options = {}) {
   setPage('私信');
   const app = $('app');
   if (!state.user) {
@@ -2370,12 +2387,15 @@ async function renderMessages(peerId = null) {
     return;
   }
 
-  app.innerHTML = `
-    <div class="loading-overlay">
-      <div class="spinner-ring"></div>
-      <span class="loading-text">正在同步私信会话...</span>
-    </div>
-  `;
+  const silent = !!options.silent || !!app.querySelector('.messages-layout');
+  if (!silent) {
+    app.innerHTML = `
+      <div class="loading-overlay">
+        <div class="spinner-ring"></div>
+        <span class="loading-text">正在同步私信会话...</span>
+      </div>
+    `;
+  }
 
   try {
     const conversationData = await api('/api/messages/conversations?limit=100', { headers: authHeaders() });
@@ -2411,7 +2431,7 @@ async function renderMessages(peerId = null) {
             const incoming = Number(c.last_sender_id) !== Number(state.user.id);
             const unread = Number(c.unread_count || 0);
             return `
-              <button class="message-conversation ${active ? 'active' : ''}" onclick="navigate('/messages/${c.peer_id}')">
+              <button class="message-conversation ${active ? 'active' : ''}" onclick="openMessageConversation(${c.peer_id})">
                 <span class="message-avatar">${messagePeerInitial(c.peer_username)}</span>
                 <span class="message-conversation-body">
                   <span class="message-conversation-top">
@@ -2419,7 +2439,7 @@ async function renderMessages(peerId = null) {
                     <span>${formatDate(c.last_created_at)}</span>
                   </span>
                   <span class="message-preview">
-                    ${incoming ? '' : '我：'}${esc(messagePreview(c.last_body_md))}
+                    ${incoming ? '' : '我：'}${esc(messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : '')))}
                   </span>
                 </span>
                 ${unread > 0 ? `<span class="message-unread-dot">${unread > 99 ? '99+' : unread}</span>` : ''}
@@ -2444,13 +2464,33 @@ async function renderMessages(peerId = null) {
       if (list) list.scrollTop = list.scrollHeight;
       const composer = $('messageComposer');
       if (composer) composer.focus();
+      hydrateMessageAttachments();
     }, 50);
   } catch (err) {
-    app.innerHTML = errorBox(err);
+    if (silent) {
+      toast(`刷新私信失败: ${err.message}`, 'error');
+    } else {
+      app.innerHTML = errorBox(err);
+    }
   }
 }
 
+function openMessageConversation(peerId) {
+  const path = `/messages/${peerId}`;
+  if (location.pathname !== path) {
+    history.pushState(null, '', path);
+  }
+  state.currentRoute = path;
+  updateNav();
+  renderMessages(peerId, { silent: true });
+}
+
+function refreshMessages(peerId) {
+  return renderMessages(peerId, { silent: true });
+}
+
 function renderMessageThread(peer, messages) {
+  const peerId = peer.id || peer.peer_id;
   return `
     <div class="message-thread-header">
       <div class="message-avatar">${messagePeerInitial(peer.username || peer.peer_username)}</div>
@@ -2471,7 +2511,8 @@ function renderMessageThread(peer, messages) {
         return `
           <div class="message-row ${mine ? 'mine' : ''}">
             <div class="message-bubble">
-              ${renderMd(m.body_md)}
+              ${m.has_attachment ? renderMessageAttachment(m) : ''}
+              ${m.body_md ? renderMd(m.body_md) : ''}
               <div class="message-meta">
                 ${mine ? '我' : esc(m.sender_username)} · ${formatDate(m.created_at)}
               </div>
@@ -2482,13 +2523,109 @@ function renderMessageThread(peer, messages) {
     </div>
 
     <div class="message-composer">
-      <textarea id="messageComposer" rows="3" maxlength="4000" placeholder="输入私信内容，Enter 换行"></textarea>
+      <textarea id="messageComposer" rows="3" maxlength="4000" placeholder="输入私信内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${peerId})"></textarea>
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
         <span class="text-muted" style="font-size: 12px;">最长 4000 字符</span>
-        <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${peer.id || peer.peer_id})">发送</button>
+        <div class="row gap-sm" style="flex-wrap: wrap;">
+          <label class="btn btn-secondary message-file-button" for="messageFileInput">文件</label>
+          <input type="file" id="messageFileInput" style="display:none" onchange="sendFileToPeer(${peerId}, this)" />
+          <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${peerId})">发送</button>
+        </div>
       </div>
     </div>
   `;
+}
+
+function renderMessageAttachment(message) {
+  const attachmentId = message.attachment_id || message.id;
+  if (!attachmentId) return '';
+  const filename = message.attachment_filename || '附件';
+  const contentType = message.attachment_content_type || 'application/octet-stream';
+  if (!isImageAttachment(contentType)) {
+    return `
+      <button class="message-file-card" type="button" onclick="downloadMessageFile(${attachmentId}, ${jsArg(filename)})">
+        <span class="message-file-icon">FILE</span>
+        <span class="message-file-info">
+          <strong>${esc(filename)}</strong>
+          <span>${esc(formatFileSize(message.attachment_size_bytes) || contentType)}</span>
+        </span>
+        <span class="message-file-download">下载</span>
+      </button>
+    `;
+  }
+  return `
+    <div class="message-image-frame" data-message-attachment-frame="${attachmentId}">
+      <div class="message-image-placeholder">图片加载中...</div>
+      <img class="message-image" data-message-attachment-id="${attachmentId}" alt="${esc(filename)}" hidden onclick="openMessageImage(this.src)" />
+    </div>
+  `;
+}
+
+async function hydrateMessageAttachments() {
+  const images = Array.from(document.querySelectorAll('img[data-message-attachment-id]:not([data-loaded])'));
+  for (const img of images) {
+    const attachmentId = img.dataset.messageAttachmentId;
+    const frame = img.closest('.message-image-frame');
+    const placeholder = frame?.querySelector('.message-image-placeholder');
+    try {
+      const res = await fetch(`/api/messages/${attachmentId}/attachment`, { headers: authHeaders() });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      img.src = url;
+      img.hidden = false;
+      img.dataset.loaded = '1';
+      if (placeholder) placeholder.style.display = 'none';
+    } catch {
+      if (placeholder) placeholder.textContent = '图片加载失败';
+    }
+  }
+}
+
+async function downloadMessageFile(attachmentId, filename = 'attachment') {
+  try {
+    const res = await fetch(`/api/messages/${attachmentId}/attachment`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename || 'attachment';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (err) {
+    toast(`下载失败: ${err.message}`, 'error');
+  }
+}
+
+function openMessageImage(src) {
+  if (!src) return;
+  openModal({
+    title: '图片消息',
+    body: `<img src="${esc(src)}" alt="图片消息" class="message-image-preview" />`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">关闭</button>`,
+    wide: true,
+  });
+}
+
+function insertTextareaNewline(textarea) {
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  textarea.value = `${textarea.value.slice(0, start)}\n${textarea.value.slice(end)}`;
+  textarea.selectionStart = textarea.selectionEnd = start + 1;
+}
+
+function handleMessageComposerKeydown(event, peerId) {
+  if (event.key !== 'Enter' || event.isComposing) return;
+  if (event.ctrlKey) {
+    event.preventDefault();
+    insertTextareaNewline(event.target);
+    return;
+  }
+  event.preventDefault();
+  sendMessageToPeer(peerId);
 }
 
 function showNewMessageModal() {
@@ -2501,7 +2638,12 @@ function showNewMessageModal() {
     </div>
     <div class="form-group">
       <label for="newMessageBody">私信内容</label>
-      <textarea id="newMessageBody" rows="6" maxlength="4000" placeholder="请输入要发送的内容"></textarea>
+      <textarea id="newMessageBody" rows="6" maxlength="4000" placeholder="请输入要发送的内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleNewMessageKeydown(event)"></textarea>
+    </div>
+    <div class="form-group">
+      <label for="newMessageFile">文件</label>
+      <input type="file" id="newMessageFile" onchange="updateNewMessageFileLabel(this)" />
+      <div id="newMessageFileLabel" class="text-muted" style="font-size: 12px; margin-top: 6px;">支持任意文件，最大 20 MB；图片会直接预览。</div>
     </div>
     <div id="newMessageError" class="notice error" style="display:none"></div>
   `;
@@ -2511,6 +2653,24 @@ function showNewMessageModal() {
   `;
   openModal({ title: '写私信', body, footer });
   setTimeout(() => $('messageRecipient')?.focus(), 50);
+}
+
+function updateNewMessageFileLabel(input) {
+  const label = $('newMessageFileLabel');
+  const file = input?.files?.[0];
+  if (!label || !file) return;
+  label.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+}
+
+function handleNewMessageKeydown(event) {
+  if (event.key !== 'Enter' || event.isComposing) return;
+  if (event.ctrlKey) {
+    event.preventDefault();
+    insertTextareaNewline(event.target);
+    return;
+  }
+  event.preventDefault();
+  sendNewMessage();
 }
 
 let messageUserSearchTimer = null;
@@ -2562,33 +2722,55 @@ async function sendNewMessage() {
   const recipientId = $('newMessageRecipientId')?.value;
   const recipient = $('messageRecipient')?.value.trim();
   const body = $('newMessageBody')?.value.trim();
+  const attachedFile = $('newMessageFile')?.files?.[0];
 
   if (!recipient && !recipientId) {
     if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写收件人。'; }
     return;
   }
-  if (!body) {
-    if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写私信内容。'; }
+  if (!body && !attachedFile) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写私信内容或选择文件。'; }
+    return;
+  }
+  if (attachedFile && !isAllowedMessageFile(attachedFile)) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请选择 20 MB 以内的文件。'; }
     return;
   }
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
-    const payload = { body_md: body };
-    if (recipientId) {
-      payload.recipient_id = Number(recipientId);
+    let data;
+    if (attachedFile) {
+      const fd = new FormData();
+      fd.append('body_md', body || '');
+      fd.append('file', attachedFile);
+      if (recipientId) {
+        fd.append('recipient_id', recipientId);
+      } else {
+        fd.append('recipient', recipient);
+      }
+      data = await api('/api/messages/files', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      });
     } else {
-      payload.recipient = recipient;
+      const payload = { body_md: body };
+      if (recipientId) {
+        payload.recipient_id = Number(recipientId);
+      } else {
+        payload.recipient = recipient;
+      }
+      data = await api('/api/messages', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
     }
-    const data = await api('/api/messages', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
     closeModal();
     toast('私信已发送', 'success');
     const peerId = data.peer?.id || data.message?.recipient_id;
-    navigate(`/messages/${peerId}`);
+    openMessageConversation(peerId);
   } catch (err) {
     if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
   } finally {
@@ -2613,9 +2795,48 @@ async function sendMessageToPeer(peerId) {
       body: JSON.stringify({ recipient_id: Number(peerId), body_md: body }),
     });
     if (textarea) textarea.value = '';
-    await renderMessages(peerId);
+    await refreshMessages(peerId);
   } catch (err) {
     toast(`发送失败: ${err.message}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+  }
+}
+
+function isAllowedMessageFile(file) {
+  if (!file) return false;
+  return file.size > 0 && file.size <= 20 * 1024 * 1024;
+}
+
+async function sendFileToPeer(peerId, input) {
+  const file = input?.files?.[0];
+  if (!file) return;
+  if (!isAllowedMessageFile(file)) {
+    input.value = '';
+    toast('请选择 20 MB 以内的文件。', 'warning');
+    return;
+  }
+
+  const textarea = $('messageComposer');
+  const btn = $('sendMessageBtn');
+  const caption = textarea?.value.trim() || '';
+  const fd = new FormData();
+  fd.append('recipient_id', String(peerId));
+  fd.append('body_md', caption);
+  fd.append('file', file);
+
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
+    await api('/api/messages/files', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    if (textarea) textarea.value = '';
+    input.value = '';
+    await refreshMessages(peerId);
+  } catch (err) {
+    toast(`文件发送失败: ${err.message}`, 'error');
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
   }
@@ -4477,7 +4698,9 @@ Object.assign(window, {
   showRegistrationModal, setRegStatus, bulkAddUsers,
   showAnnouncementModal, publishAnnouncement,
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
-  renderMessages, showNewMessageModal, searchMessageUsers, selectMessageRecipient, sendNewMessage, sendMessageToPeer,
+  renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
+  sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
+  handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, downloadMessageFile,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });

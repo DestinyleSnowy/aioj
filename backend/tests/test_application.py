@@ -16,3 +16,7 @@ def test_create_app_registers_core_routes():
     assert "/api/notifications" in paths
     assert "/api/messages/conversations" in paths
     assert "/api/messages/unread-count" in paths
+    assert "/api/messages/files" in paths
+    assert "/api/messages/images" in paths
+    assert "/api/messages/{message_id}/attachment" in paths
+    assert "/api/messages/{message_id}/image" in paths

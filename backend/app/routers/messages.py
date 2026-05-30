@@ -1,21 +1,128 @@
-from fastapi import APIRouter, Depends, HTTPException
+from pathlib import Path
+import mimetypes
+from urllib.parse import quote
+from uuid import uuid4
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import require_user
+from app.storage import S3_BUCKET_MESSAGES, get_bytes, put_bytes
 
 router = APIRouter()
 
 MAX_MESSAGE_LENGTH = 4000
+MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+IMAGE_CONTENT_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 
 
 def normalize_message_body(value) -> str:
-    body = str(value or "").strip()
+    body = normalize_optional_message_body(value)
     if not body:
         raise HTTPException(status_code=400, detail="Message body is required")
+    return body
+
+
+def normalize_optional_message_body(value) -> str:
+    body = str(value or "").strip()
     if len(body) > MAX_MESSAGE_LENGTH:
         raise HTTPException(status_code=400, detail=f"Message body must be at most {MAX_MESSAGE_LENGTH} characters")
     return body
+
+
+def normalize_recipient_id(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        recipient_id = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid recipient_id")
+    if recipient_id <= 0:
+        raise HTTPException(status_code=400, detail="Invalid recipient_id")
+    return recipient_id
+
+
+def resolve_recipient(conn, *, current_user_id: int, recipient_id=None, recipient_key: str = ""):
+    recipient_id = normalize_recipient_id(recipient_id)
+    recipient_key = str(recipient_key or "").strip()
+    if recipient_id is None and not recipient_key:
+        raise HTTPException(status_code=400, detail="Recipient is required")
+
+    if recipient_id is not None:
+        recipient = conn.execute(
+            text(
+                """
+                select id, username, role, coalesce(is_disabled, false) as is_disabled
+                from users
+                where id = :recipient_id
+                """
+            ),
+            {"recipient_id": recipient_id},
+        ).mappings().first()
+    else:
+        recipient = conn.execute(
+            text(
+                """
+                select id, username, role, coalesce(is_disabled, false) as is_disabled
+                from users
+                where username = :recipient_key
+                   or email = :recipient_key
+                limit 1
+                """
+            ),
+            {"recipient_key": recipient_key},
+        ).mappings().first()
+
+    if not recipient:
+        raise HTTPException(status_code=404, detail="Recipient not found")
+    if recipient["id"] == current_user_id:
+        raise HTTPException(status_code=400, detail="Cannot send a message to yourself")
+    if bool(recipient["is_disabled"]):
+        raise HTTPException(status_code=400, detail="Recipient is disabled")
+    return recipient
+
+
+def normalize_content_type(filename: str | None, content_type: str | None) -> str:
+    content_type = str(content_type or "").split(";", 1)[0].strip().lower()
+    if content_type and content_type != "application/octet-stream":
+        return content_type
+    guessed, _ = mimetypes.guess_type(filename or "")
+    return guessed or "application/octet-stream"
+
+
+def validate_file_upload(filename: str | None, content_type: str | None, data: bytes) -> tuple[str, str]:
+    content_type = normalize_content_type(filename, content_type)
+    if not data:
+        raise HTTPException(status_code=400, detail="File is empty")
+    if len(data) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(status_code=400, detail="File must be at most 20 MB")
+
+    suffix = Path(filename or "").suffix.lower()
+    if not suffix or len(suffix) > 16:
+        suffix = mimetypes.guess_extension(content_type) or ".bin"
+    if suffix == ".jpeg":
+        suffix = ".jpg"
+    return content_type, suffix
+
+
+def safe_attachment_filename(filename: str | None, fallback_suffix: str) -> str:
+    name = Path(filename or f"file{fallback_suffix}").name
+    safe = "".join(ch for ch in name if ch.isalnum() or ch in " ._-()[]").strip()
+    return (safe or f"file{fallback_suffix}")[:180]
+
+
+def content_disposition(filename: str | None, *, inline: bool = False) -> str:
+    disposition = "inline" if inline else "attachment"
+    if not filename:
+        return disposition
+    ascii_name = "".join(ch if 32 <= ord(ch) < 127 and ch not in {'"', "\\"} else "_" for ch in filename)
+    return f'{disposition}; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
 
 
 def clamp_limit(value, *, default: int = 50, max_value: int = 200) -> int:
@@ -113,6 +220,10 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
                   ranked.sender_id as last_sender_id,
                   ranked.recipient_id as last_recipient_id,
                   ranked.body_md as last_body_md,
+                  (ranked.attachment_object_key is not null) as last_has_attachment,
+                  ranked.attachment_content_type as last_attachment_content_type,
+                  ranked.attachment_filename as last_attachment_filename,
+                  ranked.attachment_size_bytes as last_attachment_size_bytes,
                   ranked.is_read as last_is_read,
                   ranked.created_at as last_created_at,
                   ranked.read_at as last_read_at,
@@ -175,6 +286,11 @@ def get_message_conversation(peer_id: int, limit: int = 100, user=Depends(requir
                     dm.recipient_id,
                     ru.username as recipient_username,
                     dm.body_md,
+                    (dm.attachment_object_key is not null) as has_attachment,
+                    case when dm.attachment_object_key is not null then dm.id end as attachment_id,
+                    dm.attachment_content_type,
+                    dm.attachment_filename,
+                    dm.attachment_size_bytes,
                     dm.is_read,
                     dm.created_at,
                     dm.read_at
@@ -198,60 +314,27 @@ def get_message_conversation(peer_id: int, limit: int = 100, user=Depends(requir
 @router.post("/api/messages")
 def send_direct_message(payload: dict, user=Depends(require_user)):
     body = normalize_message_body(payload.get("body_md") or payload.get("body"))
-    recipient_id_raw = payload.get("recipient_id")
-    recipient_id = None
+    recipient_id = payload.get("recipient_id")
     recipient_key = str(payload.get("recipient_username") or payload.get("recipient") or "").strip()
 
-    if recipient_id_raw not in (None, ""):
-        try:
-            recipient_id = int(recipient_id_raw)
-        except (TypeError, ValueError):
-            raise HTTPException(status_code=400, detail="Invalid recipient_id")
-        if recipient_id <= 0:
-            raise HTTPException(status_code=400, detail="Invalid recipient_id")
-    if recipient_id is None and not recipient_key:
-        raise HTTPException(status_code=400, detail="Recipient is required")
-
     with engine.begin() as conn:
-        if recipient_id is not None:
-            recipient = conn.execute(
-                text(
-                    """
-                    select id, username, role, coalesce(is_disabled, false) as is_disabled
-                    from users
-                    where id = :recipient_id
-                    """
-                ),
-                {"recipient_id": recipient_id},
-            ).mappings().first()
-        else:
-            recipient = conn.execute(
-                text(
-                    """
-                    select id, username, role, coalesce(is_disabled, false) as is_disabled
-                    from users
-                    where username = :recipient_key
-                       or email = :recipient_key
-                    limit 1
-                    """
-                ),
-                {"recipient_key": recipient_key},
-            ).mappings().first()
-
-        if not recipient:
-            raise HTTPException(status_code=404, detail="Recipient not found")
-        if recipient["id"] == user["id"]:
-            raise HTTPException(status_code=400, detail="Cannot send a message to yourself")
-        if bool(recipient["is_disabled"]):
-            raise HTTPException(status_code=400, detail="Recipient is disabled")
-
+        recipient = resolve_recipient(
+            conn,
+            current_user_id=user["id"],
+            recipient_id=recipient_id,
+            recipient_key=recipient_key,
+        )
         row = conn.execute(
             text(
                 """
                 with inserted as (
                   insert into direct_messages(sender_id, recipient_id, body_md)
                   values (:sender_id, :recipient_id, :body_md)
-                  returning id, sender_id, recipient_id, body_md, is_read, created_at, read_at
+                  returning id, sender_id, recipient_id, body_md,
+                            false as has_attachment,
+                            null::bigint as attachment_id,
+                            attachment_content_type, attachment_filename, attachment_size_bytes,
+                            is_read, created_at, read_at
                 )
                 select
                   inserted.id,
@@ -260,6 +343,11 @@ def send_direct_message(payload: dict, user=Depends(require_user)):
                   inserted.recipient_id,
                   ru.username as recipient_username,
                   inserted.body_md,
+                  inserted.has_attachment,
+                  inserted.attachment_id,
+                  inserted.attachment_content_type,
+                  inserted.attachment_filename,
+                  inserted.attachment_size_bytes,
                   inserted.is_read,
                   inserted.created_at,
                   inserted.read_at
@@ -272,6 +360,154 @@ def send_direct_message(payload: dict, user=Depends(require_user)):
         ).mappings().first()
 
     return {"ok": True, "message": dict(row), "peer": dict(recipient)}
+
+
+@router.post("/api/messages/files")
+async def send_direct_message_file(
+    recipient_id: int | None = Form(None),
+    recipient: str | None = Form(None),
+    recipient_username: str | None = Form(None),
+    body_md: str = Form(""),
+    file: UploadFile = File(...),
+    user=Depends(require_user),
+):
+    body = normalize_optional_message_body(body_md)
+    file_bytes = await file.read()
+    content_type, suffix = validate_file_upload(file.filename, file.content_type, file_bytes)
+    object_key = f"messages/{user['id']}/{uuid4().hex}{suffix}"
+    filename = safe_attachment_filename(file.filename, suffix)
+
+    with engine.begin() as conn:
+        peer = resolve_recipient(
+            conn,
+            current_user_id=user["id"],
+            recipient_id=recipient_id,
+            recipient_key=recipient_username or recipient or "",
+        )
+        row = conn.execute(
+            text(
+                """
+                with inserted as (
+                  insert into direct_messages(
+                    sender_id,
+                    recipient_id,
+                    body_md,
+                    attachment_object_key,
+                    attachment_content_type,
+                    attachment_filename,
+                    attachment_size_bytes
+                  )
+                  values (
+                    :sender_id,
+                    :recipient_id,
+                    :body_md,
+                    :attachment_object_key,
+                    :attachment_content_type,
+                    :attachment_filename,
+                    :attachment_size_bytes
+                  )
+                  returning id, sender_id, recipient_id, body_md,
+                            true as has_attachment,
+                            id as attachment_id,
+                            attachment_content_type, attachment_filename, attachment_size_bytes,
+                            is_read, created_at, read_at
+                )
+                select
+                  inserted.id,
+                  inserted.sender_id,
+                  su.username as sender_username,
+                  inserted.recipient_id,
+                  ru.username as recipient_username,
+                  inserted.body_md,
+                  inserted.has_attachment,
+                  inserted.attachment_id,
+                  inserted.attachment_content_type,
+                  inserted.attachment_filename,
+                  inserted.attachment_size_bytes,
+                  inserted.is_read,
+                  inserted.created_at,
+                  inserted.read_at
+                from inserted
+                join users su on su.id = inserted.sender_id
+                join users ru on ru.id = inserted.recipient_id
+                """
+            ),
+            {
+                "sender_id": user["id"],
+                "recipient_id": peer["id"],
+                "body_md": body,
+                "attachment_object_key": object_key,
+                "attachment_content_type": content_type,
+                "attachment_filename": filename,
+                "attachment_size_bytes": len(file_bytes),
+            },
+        ).mappings().first()
+
+    try:
+        put_bytes(S3_BUCKET_MESSAGES, object_key, file_bytes, content_type)
+    except Exception as exc:
+        with engine.begin() as conn:
+            conn.execute(text("delete from direct_messages where id = :id"), {"id": row["id"]})
+        raise HTTPException(status_code=500, detail="Failed to store message file") from exc
+
+    return {"ok": True, "message": dict(row), "peer": dict(peer)}
+
+
+@router.post("/api/messages/images")
+async def send_direct_message_image(
+    recipient_id: int | None = Form(None),
+    recipient: str | None = Form(None),
+    recipient_username: str | None = Form(None),
+    body_md: str = Form(""),
+    image: UploadFile = File(...),
+    user=Depends(require_user),
+):
+    return await send_direct_message_file(
+        recipient_id=recipient_id,
+        recipient=recipient,
+        recipient_username=recipient_username,
+        body_md=body_md,
+        file=image,
+        user=user,
+    )
+
+
+@router.get("/api/messages/{message_id}/attachment")
+def get_direct_message_attachment(message_id: int, user=Depends(require_user)):
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                select attachment_object_key, attachment_content_type, attachment_filename
+                from direct_messages
+                where id = :message_id
+                  and (sender_id = :user_id or recipient_id = :user_id)
+                  and attachment_object_key is not null
+                """
+            ),
+            {"message_id": message_id, "user_id": user["id"]},
+        ).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        content = get_bytes(S3_BUCKET_MESSAGES, row["attachment_object_key"])
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+
+    content_type = row["attachment_content_type"] or "application/octet-stream"
+    headers = {
+        "Content-Disposition": content_disposition(
+            row["attachment_filename"],
+            inline=content_type.startswith("image/"),
+        )
+    }
+    return Response(content=content, media_type=content_type, headers=headers)
+
+
+@router.get("/api/messages/{message_id}/image")
+def get_direct_message_image(message_id: int, user=Depends(require_user)):
+    return get_direct_message_attachment(message_id, user)
 
 
 @router.post("/api/messages/conversations/{peer_id}/read")

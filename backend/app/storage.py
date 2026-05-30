@@ -8,6 +8,7 @@ from app.settings import settings
 S3_BUCKET_PROBLEMS = settings.s3_bucket_problems
 S3_BUCKET_SUBMISSIONS = settings.s3_bucket_submissions
 S3_BUCKET_LOGS = settings.s3_bucket_logs
+S3_BUCKET_MESSAGES = settings.s3_bucket_messages
 
 
 def s3_client():

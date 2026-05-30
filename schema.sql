@@ -202,12 +202,20 @@ create table if not exists direct_messages (
   sender_id bigint not null references users(id) on delete cascade,
   recipient_id bigint not null references users(id) on delete cascade,
   body_md text not null,
+  attachment_object_key text,
+  attachment_content_type text,
+  attachment_filename text,
+  attachment_size_bytes integer,
   is_read boolean not null default false,
   created_at timestamptz not null default now(),
   read_at timestamptz,
   constraint direct_messages_no_self_check check (sender_id <> recipient_id),
-  constraint direct_messages_body_length_check check (
+  constraint direct_messages_content_check check (
     length(btrim(body_md)) between 1 and 4000
+    or attachment_object_key is not null
+  ),
+  constraint direct_messages_attachment_size_check check (
+    attachment_size_bytes is null or attachment_size_bytes between 1 and 20971520
   )
 );
 

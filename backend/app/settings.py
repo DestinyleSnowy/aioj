@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     s3_bucket_problems: str = "aioj-problems"
     s3_bucket_submissions: str = "aioj-submissions"
     s3_bucket_logs: str = "aioj-logs"
+    s3_bucket_messages: str = "aioj-messages"
 
     internal_api_token: str = ""
     jwt_secret: str = ""
