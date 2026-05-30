@@ -10,7 +10,7 @@ from app.db import engine
 from app.dependencies import get_optional_user, require_admin, require_user
 from app.services.problems import latest_problem_version
 from app.storage import S3_BUCKET_LOGS, S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_text, put_bytes
-from app.uploads import safe_slug, validate_submission_archive
+from app.uploads import convert_notebook_to_python, safe_slug, validate_submission_archive
 
 router = APIRouter()
 
@@ -107,10 +107,18 @@ async def create_submission(
     else:
         if not file:
             raise HTTPException(status_code=400, detail="Either file or code is required")
-        if not file.filename.endswith(".zip"):
-            raise HTTPException(status_code=400, detail="Please upload source.zip")
-        data = await file.read()
-        validate_submission_archive(data)
+        if file.filename.endswith(".ipynb"):
+            nb_bytes = await file.read()
+            py_code = convert_notebook_to_python(nb_bytes)
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
+                zip_file.writestr("predict.py", py_code)
+            data = zip_buffer.getvalue()
+        elif file.filename.endswith(".zip"):
+            data = await file.read()
+            validate_submission_archive(data)
+        else:
+            raise HTTPException(status_code=400, detail="Please upload .zip or .ipynb file")
 
     with engine.begin() as conn:
         pv = latest_problem_version(conn, slug, public_only=True)

@@ -970,14 +970,14 @@ async function renderProblemDetail(slug, contestSlug = null) {
 
           <!-- Step 2: Upload Solution -->
           <div class="card highlight" style="margin-bottom: 0;">
-            <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px;">2. 评测阶段：提报 ZIP 解答包</h3>
+            <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px;">2. 评测阶段：提报解答文件</h3>
             
             <div class="file-upload" id="uploadArea" style="padding: 16px 10px; min-height: unset; margin-bottom: 12px;">
-              <input type="file" id="submitFile" accept=".zip" onchange="handleFileSelect(this)" />
+              <input type="file" id="submitFile" accept=".zip,.ipynb" onchange="handleFileSelect(this)" />
               <div class="file-upload-label" style="gap: 4px;">
                 <span class="file-upload-icon" style="font-size: 18px;">📁</span>
-                <span id="uploadFileName" style="font-weight: 600; color: var(--text-main); font-size: 12px;">选择或拖入解答压缩包</span>
-                <span style="font-size: 10.5px; color: var(--text-muted);">容量在 20MB 以内</span>
+                <span id="uploadFileName" style="font-weight: 600; color: var(--text-main); font-size: 12px;">选择或拖入解答文件 (.zip / .ipynb)</span>
+                <span style="font-size: 10.5px; color: var(--text-muted);">支持 ZIP 压缩包和 Jupyter Notebook</span>
               </div>
             </div>
             
@@ -1157,7 +1157,7 @@ async function loadProblemLeaderboard(slug) {
 async function submitSolution(slug, contestSlug) {
   const fileInput = $('submitFile');
   if (!fileInput || !fileInput.files.length) {
-    toast('请先选择或拖拽拖入 ZIP 解答包文件', 'warning');
+    toast('请先选择或拖拽拖入解答文件 (.zip 或 .ipynb)', 'warning');
     return;
   }
   if (!state.token) {

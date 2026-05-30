@@ -92,6 +92,44 @@ def validate_submission_archive(zip_bytes: bytes) -> None:
     )
 
 
+def convert_notebook_to_python(nb_bytes: bytes) -> str:
+    """Extract code cells from a Jupyter notebook (.ipynb) and return as a Python script."""
+    import json as _json
+    try:
+        nb = _json.loads(nb_bytes.decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid .ipynb file: {exc}")
+
+    if not isinstance(nb, dict) or "cells" not in nb:
+        raise HTTPException(status_code=400, detail="Invalid notebook format: missing 'cells'")
+
+    code_fragments = []
+    for cell in nb["cells"]:
+        if cell.get("cell_type") != "code":
+            continue
+        source = cell.get("source", [])
+        if isinstance(source, list):
+            lines = "".join(source)
+        else:
+            lines = str(source)
+        # Filter out IPython magics and shell commands
+        filtered = []
+        for line in lines.splitlines(True):
+            stripped = line.lstrip()
+            if stripped.startswith("%") or stripped.startswith("!"):
+                filtered.append("# " + line)
+            else:
+                filtered.append(line)
+        fragment = "".join(filtered)
+        if fragment.strip():
+            code_fragments.append(fragment)
+
+    if not code_fragments:
+        raise HTTPException(status_code=400, detail="Notebook contains no code cells")
+
+    return "\n\n".join(code_fragments)
+
+
 def validate_problem_archive(zip_bytes: bytes) -> None:
     if len(zip_bytes) > settings.max_problem_zip_bytes:
         raise HTTPException(status_code=400, detail="problem.zip too large")
