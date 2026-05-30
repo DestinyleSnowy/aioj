@@ -32,7 +32,11 @@ const state = {
   activeProblemTab: 'statement', // Default tab in problem detail
   notificationUnreadCount: 0,
   messageUnreadCount: 0,
+  messageRefreshTimer: null,
+  messageRefreshInFlight: false,
 };
+
+const MESSAGE_REFRESH_INTERVAL_MS = 5000;
 
 function setPage(title) {
   $('pageTitle').textContent = title || 'AIOJ';
@@ -217,8 +221,17 @@ function clearPageState() {
     clearInterval(state.countdownTimer);
     state.countdownTimer = null;
   }
+  stopMessageAutoRefresh();
   $('sidebar').classList.remove('open');
   $('sidebarOverlay').classList.remove('open');
+}
+
+function stopMessageAutoRefresh() {
+  if (state.messageRefreshTimer) {
+    clearInterval(state.messageRefreshTimer);
+    state.messageRefreshTimer = null;
+  }
+  state.messageRefreshInFlight = false;
 }
 
 function updateNav() {
@@ -2379,6 +2392,64 @@ function messagePeerInitial(name) {
   return esc(String(name || '?').slice(0, 1).toUpperCase());
 }
 
+function captureMessageViewState() {
+  const composer = $('messageComposer');
+  const list = $('messageThreadList');
+  const scrollGap = list ? list.scrollHeight - list.scrollTop - list.clientHeight : 0;
+  return {
+    draft: composer ? composer.value : '',
+    composerFocused: document.activeElement === composer,
+    selectionStart: composer ? composer.selectionStart : 0,
+    selectionEnd: composer ? composer.selectionEnd : 0,
+    scrollTop: list ? list.scrollTop : 0,
+    wasNearBottom: !list || scrollGap < 80,
+  };
+}
+
+function restoreMessageViewState(viewState) {
+  const list = $('messageThreadList');
+  if (list) {
+    if (!viewState || viewState.wasNearBottom) {
+      list.scrollTop = list.scrollHeight;
+    } else {
+      list.scrollTop = Math.min(viewState.scrollTop, list.scrollHeight);
+    }
+  }
+
+  const composer = $('messageComposer');
+  if (composer && viewState) {
+    composer.value = viewState.draft || '';
+    if (viewState.composerFocused) {
+      composer.focus();
+      const start = Math.min(viewState.selectionStart || 0, composer.value.length);
+      const end = Math.min(viewState.selectionEnd || start, composer.value.length);
+      composer.setSelectionRange(start, end);
+    }
+  } else if (composer && !viewState) {
+    composer.focus();
+  }
+}
+
+function ensureMessageAutoRefresh() {
+  if (state.messageRefreshTimer) return;
+  state.messageRefreshTimer = setInterval(async () => {
+    if (!state.user || !location.pathname.startsWith('/messages')) {
+      stopMessageAutoRefresh();
+      return;
+    }
+    if (state.messageRefreshInFlight) return;
+
+    const match = location.pathname.match(/^\/messages\/(\d+)$/);
+    const peerId = match ? Number(match[1]) : null;
+    state.messageRefreshInFlight = true;
+    try {
+      await renderMessages(peerId, { silent: true, auto: true });
+    } finally {
+      state.messageRefreshInFlight = false;
+    }
+  }, MESSAGE_REFRESH_INTERVAL_MS);
+}
+
 async function renderMessages(peerId = null, options = {}) {
   setPage('私信');
   const app = $('app');
@@ -2388,6 +2459,7 @@ async function renderMessages(peerId = null, options = {}) {
   }
 
   const silent = !!options.silent || !!app.querySelector('.messages-layout');
+  const viewState = silent ? captureMessageViewState() : null;
   if (!silent) {
     app.innerHTML = `
       <div class="loading-overlay">
@@ -2460,12 +2532,10 @@ async function renderMessages(peerId = null, options = {}) {
     `;
 
     setTimeout(() => {
-      const list = $('messageThreadList');
-      if (list) list.scrollTop = list.scrollHeight;
-      const composer = $('messageComposer');
-      if (composer) composer.focus();
+      restoreMessageViewState(viewState);
       hydrateMessageAttachments();
     }, 50);
+    ensureMessageAutoRefresh();
   } catch (err) {
     if (silent) {
       toast(`刷新私信失败: ${err.message}`, 'error');
