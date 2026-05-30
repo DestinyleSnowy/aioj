@@ -61,6 +61,14 @@ async function api(path, options = {}) {
     payload = await res.text();
   }
   if (!res.ok) {
+    if (res.status === 401 && state.token) {
+      state.token = '';
+      localStorage.removeItem('aioj_token');
+      state.user = null;
+      state.notificationUnreadCount = 0;
+      updateNav();
+      toast('登录会话已过期，请重新登录。', 'warning');
+    }
     const detail = typeof payload === 'object'
       ? (payload.detail || payload.message || JSON.stringify(payload))
       : payload;
@@ -102,6 +110,19 @@ function renderMd(md) {
   t = t.replace(/^# (.*)$/gm, '<h1>$1</h1>');
   t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  
+  // Render lists: match consecutive lines starting with - or * and format as <ul><li>
+  t = t.replace(/((?:^\s*[-*]\s+.*(?:\n|$))+)/gm, (match) => {
+    let listItems = match.trim().split('\n').map(line => {
+      let content = line.replace(/^\s*[-*]\s+/, '');
+      return `<li>${content}</li>`;
+    }).join('');
+    return `<ul>${listItems}</ul>`;
+  });
+
+  // Render links: [Text](URL)
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-primary" style="text-decoration: underline;">$1</a>');
+  
   t = t.replace(/\n{2,}/g, '</p><p>');
   t = t.replace(/\n/g, '<br>');
   return `<div class="md-content"><p>${t}</p></div>`;
@@ -479,7 +500,7 @@ async function renderDashboard() {
     const strokeDashoffset = circumference - (solvedPercent / 100) * circumference;
 
     app.innerHTML = `
-      <div class="two-col" style="grid-template-columns: 1fr 340px; align-items: start; gap: var(--space-lg);">
+      <div class="dashboard-layout">
         <!-- Main Column (Left) -->
         <div style="display: flex; flex-direction: column; gap: var(--space-lg); min-width: 0;">
 
@@ -943,7 +964,15 @@ async function renderProblemDetail(slug, contestSlug = null) {
           <!-- Leaderboard Tab -->
           <div class="tab-panel" id="tab-leaderboard">
             <div class="card">
-              <div id="problemLeaderboard">
+              <div class="card-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-sm); border-bottom: var(--border-subtle); padding-bottom: 8px;">
+                <h3 class="card-title" style="font-size: 13.5px; color: var(--text-secondary); display: flex; align-items: center; gap: 6px;">
+                  <span>🏆</span> 实时评测排行榜
+                </h3>
+                <button class="btn btn-ghost btn-sm" onclick="loadProblemLeaderboard('${esc(slug)}')" style="font-size: 11px; padding: 4px 10px; display: flex; align-items: center; gap: 4px;">
+                  <span>🔄</span> 刷新排行
+                </button>
+              </div>
+              <div id="problemLeaderboard" style="padding-top: var(--space-xs);">
                 <div class="loading-overlay" style="min-height: 150px;">
                   <div class="spinner-ring"></div>
                 </div>
@@ -1092,17 +1121,17 @@ async function renderProblemDetail(slug, contestSlug = null) {
                 const cells = parseIpynbJson(text);
                 notebookCells = cells;
                 switchEditorMode('notebook', slug);
-                showToast(`成功导入 Notebook: ${file.name}`, 'success');
+                toast(`成功导入 Notebook: ${file.name}`, 'success');
               } catch (err) {
-                showToast(err.message, 'danger');
+                toast(err.message, 'danger');
               }
             } else if (name.endsWith('.py')) {
               $('codeEditor').value = text;
               localStorage.setItem(`aioj_code_${slug}`, text);
               switchEditorMode('script', slug);
-              showToast(`成功导入 Python 脚本: ${file.name}`, 'success');
+              toast(`成功导入 Python 脚本: ${file.name}`, 'success');
             } else {
-              showToast('仅支持拖拽导入 .py 或 .ipynb 文件！', 'warning');
+              toast('仅支持拖拽导入 .py 或 .ipynb 文件！', 'warning');
             }
           }
         });
@@ -2646,7 +2675,7 @@ async function renderJudgeAdmin() {
         </div>
       </div>
 
-      <div class="two-col" style="grid-template-columns: minmax(0, 360px) minmax(0, 1fr); align-items: start; gap: var(--space-lg);">
+      <div class="judge-admin-layout">
         <div class="card">
           <div class="card-header">
             <h3 class="card-title">节点状态</h3>
@@ -3606,7 +3635,7 @@ function resetEditorCode(slug) {
 async function runSandboxTest(slug) {
   const code = $('codeEditor').value.trim();
   if (!code) {
-    showToast('请输入代码！', 'danger');
+    toast('请输入代码！', 'danger');
     return;
   }
   
@@ -3731,7 +3760,7 @@ async function pollTestRun(submissionId, slug) {
 async function submitEditorCode(slug, contestSlug) {
   const code = $('codeEditor').value.trim();
   if (!code) {
-    showToast('请输入代码！', 'danger');
+    toast('请输入代码！', 'danger');
     return;
   }
   
@@ -3756,7 +3785,7 @@ async function submitEditorCode(slug, contestSlug) {
       headers: authHeaders(),
     });
     
-    showToast('代码提交成功！容器沙箱已启动评测。', 'success');
+    toast('代码提交成功！容器沙箱已启动评测。', 'success');
     
     // Reload submissions and navigate to submissions tab
     const [problem, subsData] = await Promise.all([
@@ -3808,7 +3837,7 @@ async function submitEditorCode(slug, contestSlug) {
     
     switchProblemTab('submissions');
   } catch (err) {
-    showToast(`提交失败: ${err.message}`, 'danger');
+    toast(`提交失败: ${err.message}`, 'danger');
   } finally {
     btn.disabled = false;
     btn.textContent = '🚀 正式提交 (Submit Solution)';
