@@ -869,6 +869,9 @@ async function renderProblemDetail(slug, contestSlug = null) {
                   <button class="btn btn-ghost btn-sm" onclick="resetEditorCode('${esc(slug)}')" style="font-size: 11px; padding: 4px 10px; gap: 4px;">
                     <span>🔄</span> 重置
                   </button>
+                  <button class="btn btn-ghost btn-sm" onclick="toggleFullscreenEditor()" id="btnFullscreenEditor" style="font-size: 11px; padding: 4px 10px; gap: 4px;" title="全屏模式">
+                    <span>⛶</span> 全屏
+                  </button>
                 </div>
               </div>
               <div class="ide-editor-body" id="editorScriptMode">
@@ -4084,6 +4087,36 @@ function saveNotebookCellsToLocal() {
   }
 }
 
+
+function toggleFullscreenEditor() {
+  const container = document.querySelector('.ide-container');
+  const btn = $('btnFullscreenEditor');
+  if (!container || !btn) return;
+  
+  const isFull = container.classList.toggle('ide-fullscreen');
+  if (isFull) {
+    btn.innerHTML = '<span>🗗</span> 退出';
+    btn.title = '退出全屏';
+    document.body.style.overflow = 'hidden';
+  } else {
+    btn.innerHTML = '<span>⛶</span> 全屏';
+    btn.title = '全屏模式';
+    document.body.style.overflow = '';
+  }
+  
+  initEditorLineNumbers();
+  
+  if (window.notebookCells) {
+    window.notebookCells.forEach((_, idx) => {
+      const ta = $(`cell-textarea-${idx}`);
+      if (ta) {
+        ta.style.height = 'auto';
+        ta.style.height = (ta.scrollHeight + 4) + 'px';
+      }
+    });
+  }
+}
+
 // ─── Window exports for handlers ──────────────────────────────────────────
 Object.assign(window, {
   navigate, showAuthModal, switchAuthTab, submitAuth, logout,
@@ -4102,5 +4135,5 @@ Object.assign(window, {
   showAnnouncementModal, publishAnnouncement,
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   closeModal, copyTerminalText, toggleTheme,
-  resetEditorCode, runSandboxTest, submitEditorCode, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
+  resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });
