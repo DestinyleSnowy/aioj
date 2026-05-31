@@ -207,7 +207,7 @@ def _recover_stalled_jobs(conn, *, now) -> dict:
             left join judge_nodes n on n.id = j.claimed_by
             where j.status = 'CLAIMED'
             order by j.id asc
-            for update skip locked
+            for update of j skip locked
             """
         )
     ).mappings().all()
