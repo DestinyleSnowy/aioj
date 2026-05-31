@@ -4,6 +4,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.dependencies import require_admin
 from app.security import hash_password
+from app.services.audit import audit_log
 
 router = APIRouter()
 
@@ -42,6 +43,15 @@ def admin_set_user_role(user_id: int, payload: dict, user=Depends(require_admin)
             ),
             {"id": user_id, "role": role},
         ).mappings().first()
+        if row:
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.user.role",
+                resource_type="user",
+                resource_id=user_id,
+                metadata={"role": role},
+            )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
     return {"ok": True, "user": dict(row)}
@@ -64,6 +74,15 @@ def admin_set_user_disabled(user_id: int, payload: dict, user=Depends(require_ad
             ),
             {"id": user_id, "is_disabled": is_disabled},
         ).mappings().first()
+        if row:
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.user.disabled",
+                resource_type="user",
+                resource_id=user_id,
+                metadata={"is_disabled": is_disabled},
+            )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
     return {"ok": True, "user": dict(row)}
@@ -87,6 +106,14 @@ def admin_reset_user_password(user_id: int, payload: dict, user=Depends(require_
             ),
             {"id": user_id, "password_hash": hash_password(new_password)},
         ).mappings().first()
+        if row:
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.user.password_reset",
+                resource_type="user",
+                resource_id=user_id,
+            )
 
     if not row:
         raise HTTPException(status_code=404, detail="User not found")

@@ -36,3 +36,13 @@ def test_safe_extract_zip_bytes_rejects_path_traversal(tmp_path: Path):
         safe_extract_zip_bytes(zip_bytes, tmp_path, max_files=10, max_uncompressed_bytes=1024)
 
     assert "Unsafe zip path" in excinfo.value.detail
+
+
+def test_safe_extract_zip_bytes_rejects_sibling_prefix_escape(tmp_path: Path):
+    dest = tmp_path / "root"
+    zip_bytes = build_zip({"../root_evil/escape.txt": b"boom"})
+
+    with pytest.raises(HTTPException) as excinfo:
+        safe_extract_zip_bytes(zip_bytes, dest, max_files=10, max_uncompressed_bytes=1024)
+
+    assert "Unsafe zip path" in excinfo.value.detail

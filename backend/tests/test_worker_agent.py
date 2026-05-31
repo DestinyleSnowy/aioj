@@ -1,5 +1,8 @@
 import importlib.util
+import zipfile
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +30,28 @@ def test_worker_defaults_to_cpu_tag(monkeypatch):
     agent = load_worker_agent()
     monkeypatch.delenv("JUDGE_NODE_TAGS", raising=False)
     monkeypatch.delenv("AIOJ_JUDGE_TAGS", raising=False)
+    monkeypatch.delenv("AIOJ_ALLOW_LOCAL_JUDGE_RUNNER", raising=False)
 
     agent.configure_runtime()
 
     assert agent.NODE_TAGS == ["cpu"]
+    assert agent.ALLOW_LOCAL_RUNNER is False
+
+
+def test_worker_safe_extract_rejects_sibling_prefix_escape(tmp_path):
+    agent = load_worker_agent()
+    archive_path = tmp_path / "source.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("../workspace_evil/predict.py", "print('boom')")
+
+    with pytest.raises(RuntimeError, match="unsafe zip path"):
+        agent.safe_extract(archive_path, tmp_path / "workspace")
+
+
+def test_worker_local_runner_requires_explicit_opt_in(monkeypatch):
+    agent = load_worker_agent()
+    monkeypatch.setenv("AIOJ_ALLOW_LOCAL_JUDGE_RUNNER", "true")
+
+    agent.configure_runtime()
+
+    assert agent.ALLOW_LOCAL_RUNNER is True

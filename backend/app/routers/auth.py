@@ -1,22 +1,30 @@
-from fastapi import APIRouter, Depends, HTTPException
+import re
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import require_user
+from app.rate_limit import check_rate_limit, client_key
 from app.security import hash_password, make_token, verify_password
 from app.services.system_settings import get_setting_bool
 
 router = APIRouter()
 
+USERNAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,49}")
+
 
 @router.post("/api/auth/register")
-def register(payload: dict):
+def register(payload: dict, request: Request):
     username = (payload.get("username") or "").strip()
     email = (payload.get("email") or "").strip() or None
     password = payload.get("password") or ""
+    check_rate_limit(client_key(request, "auth-register", username.lower()), max_calls=5, window_seconds=600)
 
-    if not username or len(username) > 50:
+    if not USERNAME_PATTERN.fullmatch(username):
         raise HTTPException(status_code=400, detail="Invalid username")
+    if email and (len(email) > 254 or "@" not in email):
+        raise HTTPException(status_code=400, detail="Invalid email")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     if not get_setting_bool("registration_enabled", True):
@@ -42,9 +50,10 @@ def register(payload: dict):
 
 
 @router.post("/api/auth/login")
-def login(payload: dict):
+def login(payload: dict, request: Request):
     key = (payload.get("username_or_email") or "").strip()
     password = payload.get("password") or ""
+    check_rate_limit(client_key(request, "auth-login", key.lower()), max_calls=10, window_seconds=300)
 
     with engine.begin() as conn:
         row = conn.execute(

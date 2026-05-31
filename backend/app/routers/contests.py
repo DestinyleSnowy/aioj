@@ -21,6 +21,31 @@ from app.services.contests import (
 router = APIRouter()
 
 
+def _is_admin(user) -> bool:
+    return bool(user and user.get("role") == "ADMIN")
+
+
+def _access_for(contest: dict, user=None) -> dict:
+    access = contest_access_payload(contest, user)
+    if not access["can_view_contest"]:
+        raise HTTPException(status_code=404, detail="Contest not found")
+    return access
+
+
+def _require_problem_access(contest: dict, user=None) -> dict:
+    access = _access_for(contest, user)
+    if not access["can_view_problems"]:
+        raise HTTPException(status_code=403, detail="Contest problems are not visible")
+    return access
+
+
+def _require_scoreboard_access(contest: dict, user=None) -> dict:
+    access = _access_for(contest, user)
+    if not access["scoreboard_visible"] and not _is_admin(user):
+        raise HTTPException(status_code=403, detail="Scoreboard is hidden")
+    return access
+
+
 @router.get("/api/contests")
 def list_contests():
     with engine.connect() as conn:
@@ -41,15 +66,18 @@ def list_contests():
 
 
 @router.get("/api/contests/{slug}")
-def contest_detail(slug: str):
+def contest_detail(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
-    contest["problems"] = contest_problem_rows(contest["id"], public_only=True)
+    access = _access_for(contest, user)
+    contest["problems"] = contest_problem_rows(contest["id"], public_only=True) if access["can_view_problems"] else []
+    contest["access"] = access
     return contest
 
 
 @router.get("/api/contests/{slug}/leaderboard")
-def contest_leaderboard(slug: str):
+def contest_leaderboard(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _require_scoreboard_access(contest, user)
     with engine.connect() as conn:
         rows = conn.execute(
             text(
@@ -57,13 +85,17 @@ def contest_leaderboard(slug: str):
                 with ranked as (
                     select s.id as submission_id, s.user_id,
                            coalesce(u.username, 'anonymous') as username,
-                           s.problem_id, s.public_score, s.private_score,
+                           s.problem_id, s.public_score, s.private_score, p.higher_is_better,
                            row_number() over (
                                partition by coalesce(s.user_id, 0), s.problem_id
-                               order by s.public_score desc nulls last, s.id asc
+                               order by
+                                 case when p.higher_is_better then s.public_score end desc nulls last,
+                                 case when not p.higher_is_better then s.public_score end asc nulls last,
+                                 s.id asc
                            ) as rn
                     from submissions s
                     join contest_problems cp on cp.problem_id = s.problem_id and cp.contest_id = :contest_id
+                    join problems p on p.id = s.problem_id
                     left join users u on u.id = s.user_id
                     where s.status = 'ACCEPTED'
                       and s.contest_id = :contest_id
@@ -95,6 +127,7 @@ def contest_leaderboard(slug: str):
 @router.get("/api/contests/{slug}/me")
 def contest_me(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _access_for(contest, user)
     is_participant = False
 
     if user:
@@ -149,8 +182,9 @@ def contest_leave(slug: str, user=Depends(require_user)):
 
 
 @router.get("/api/contests/{slug}/stats")
-def contest_stats(slug: str):
+def contest_stats(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _access_for(contest, user)
 
     with engine.connect() as conn:
         row = conn.execute(
@@ -170,8 +204,9 @@ def contest_stats(slug: str):
 
 
 @router.get("/api/contests/{slug}/announcements")
-def contest_announcements(slug: str):
+def contest_announcements(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _access_for(contest, user)
 
     with engine.connect() as conn:
         rows = conn.execute(
@@ -192,6 +227,7 @@ def contest_announcements(slug: str):
 @router.get("/api/contests/{slug}/submissions")
 def contest_user_submissions(slug: str, show_all: bool = False, limit: int = 50, user=Depends(require_user)):
     contest = get_contest(slug, public_only=True)
+    _access_for(contest, user)
     limit = max(1, min(int(limit or 50), 200))
 
     where_user = ""
@@ -233,6 +269,7 @@ def contest_user_submissions(slug: str, show_all: bool = False, limit: int = 50,
 @router.get("/api/contests/{slug}/scoreboard")
 def contest_scoreboard(slug: str, admin_full: bool = False, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _require_scoreboard_access(contest, user)
     state = contest_state(contest)
     now = datetime.now(timezone.utc)
 
@@ -259,6 +296,7 @@ def contest_scoreboard(slug: str, admin_full: bool = False, user=Depends(get_opt
 @router.get("/api/contests/{slug}/questions")
 def contest_questions(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _access_for(contest, user)
     is_admin = bool(user and user.get("role") == "ADMIN")
 
     with engine.connect() as conn:
@@ -343,6 +381,9 @@ def contest_questions(slug: str, user=Depends(get_optional_user)):
 @router.post("/api/contests/{slug}/questions")
 def contest_ask_question(slug: str, payload: dict, user=Depends(require_user)):
     contest = get_contest(slug, public_only=True)
+    access = _access_for(contest, user)
+    if not access["can_ask"]:
+        raise HTTPException(status_code=403, detail="Contest questions are disabled")
     title = str(payload.get("title") or "").strip()
     body_md = str(payload.get("body_md") or "").strip()
 
@@ -389,6 +430,7 @@ def contest_ask_question(slug: str, payload: dict, user=Depends(require_user)):
 @router.get("/api/contests/{slug}/access")
 def contest_access(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    access = _access_for(contest, user)
     with engine.connect() as conn:
         counts = conn.execute(
             text(
@@ -407,7 +449,7 @@ def contest_access(slug: str, user=Depends(get_optional_user)):
     return {
         "contest_slug": slug,
         "state": contest_state(contest),
-        **contest_access_payload(contest, user),
+        **access,
         "participant_counts": dict(counts),
     }
 
@@ -421,10 +463,8 @@ def contest_register(slug: str, payload: dict | None = None, user=Depends(requir
 @router.get("/api/contests/{slug}/scoreboard-advanced")
 def contest_scoreboard_advanced(slug: str, admin_full: bool = False, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
-    access = contest_access_payload(contest, user)
-    is_admin = bool(user and user.get("role") == "ADMIN")
-    if not access["scoreboard_visible"] and not is_admin:
-        raise HTTPException(status_code=403, detail="Scoreboard is hidden")
+    access = _require_scoreboard_access(contest, user)
+    is_admin = _is_admin(user)
 
     state = contest_state(contest)
     now = datetime.now(timezone.utc)
@@ -447,8 +487,9 @@ def contest_scoreboard_advanced(slug: str, admin_full: bool = False, user=Depend
 
 
 @router.get("/api/contests/{slug}/problem-stats")
-def contest_problem_stats(slug: str):
+def contest_problem_stats(slug: str, user=Depends(get_optional_user)):
     contest = get_contest(slug, public_only=True)
+    _require_problem_access(contest, user)
     with engine.connect() as conn:
         rows = conn.execute(
             text(

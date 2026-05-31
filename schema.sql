@@ -219,6 +219,16 @@ create table if not exists direct_messages (
   )
 );
 
+create table if not exists audit_logs (
+  id bigserial primary key,
+  user_id bigint references users(id) on delete set null,
+  action text not null,
+  resource_type text not null,
+  resource_id text,
+  metadata jsonb not null default '{}',
+  created_at timestamptz not null default now()
+);
+
 create index if not exists judge_jobs_status_idx on judge_jobs(status, id);
 create index if not exists judge_jobs_claimed_by_status_idx on judge_jobs(claimed_by, status, id);
 create index if not exists judge_nodes_status_heartbeat_idx on judge_nodes(status, last_heartbeat_at desc);
@@ -244,3 +254,6 @@ create index if not exists idx_direct_messages_conversation on direct_messages(
   created_at desc,
   id desc
 );
+create index if not exists idx_audit_logs_created_desc on audit_logs(created_at desc, id desc);
+create index if not exists idx_audit_logs_user_created on audit_logs(user_id, created_at desc, id desc);
+create index if not exists idx_audit_logs_resource on audit_logs(resource_type, resource_id, created_at desc);

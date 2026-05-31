@@ -3,16 +3,26 @@ import json
 import zipfile
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import get_optional_user, require_admin, require_user
+from app.rate_limit import check_rate_limit, client_key
 from app.services.problems import latest_problem_version
-from app.storage import S3_BUCKET_LOGS, S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_text, put_bytes
+from app.settings import settings
+from app.storage import S3_BUCKET_LOGS, S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_bytes, get_text, put_bytes
 from app.uploads import convert_notebook_to_python, safe_slug, validate_submission_archive
 
 router = APIRouter()
+
+
+def _validate_source_bytes(data: bytes, *, label: str) -> None:
+    if not data:
+        raise HTTPException(status_code=400, detail=f"{label} is empty")
+    if len(data) > settings.max_source_uncompressed_bytes:
+        limit_mb = settings.max_source_uncompressed_bytes // (1024 * 1024)
+        raise HTTPException(status_code=400, detail=f"{label} must be at most {limit_mb} MB")
 
 
 def _get_submission_detail(submission_id: int, user=None):
@@ -41,6 +51,7 @@ def _get_submission_detail(submission_id: int, user=None):
 
 @router.post("/api/problems/{slug}/submissions")
 async def create_submission(
+    request: Request,
     slug: str,
     file: UploadFile | None = File(None),
     code: str | None = Form(None),
@@ -48,6 +59,11 @@ async def create_submission(
     contest_slug: str | None = Form(None),
     user=Depends(get_optional_user),
 ):
+    check_rate_limit(
+        client_key(request, "submission", str(user["id"]) if user else "anonymous"),
+        max_calls=30,
+        window_seconds=3600,
+    )
     contest_id = None
     if contest_slug:
         with engine.connect() as conn:
@@ -100,21 +116,28 @@ async def create_submission(
 
     slug = safe_slug(slug)
     if code is not None:
+        code_bytes = code.encode("utf-8")
+        _validate_source_bytes(code_bytes, label="code")
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
             zip_file.writestr("predict.py", code)
         data = zip_buffer.getvalue()
+        validate_submission_archive(data)
     else:
         if not file:
             raise HTTPException(status_code=400, detail="Either file or code is required")
-        if file.filename.endswith(".ipynb"):
+        filename = (file.filename or "").lower()
+        if filename.endswith(".ipynb"):
             nb_bytes = await file.read()
+            _validate_source_bytes(nb_bytes, label="notebook")
             py_code = convert_notebook_to_python(nb_bytes)
+            _validate_source_bytes(py_code.encode("utf-8"), label="converted notebook")
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED) as zip_file:
                 zip_file.writestr("predict.py", py_code)
             data = zip_buffer.getvalue()
-        elif file.filename.endswith(".zip"):
+            validate_submission_archive(data)
+        elif filename.endswith(".zip"):
             data = await file.read()
             validate_submission_archive(data)
         else:
@@ -241,6 +264,58 @@ def get_submission(submission_id: int, user=Depends(get_optional_user)):
     return _get_submission_detail(submission_id, user)
 
 
+@router.post("/api/submissions/{submission_id}/cancel")
+def cancel_submission(submission_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                """
+                select id, user_id, status
+                from submissions
+                where id = :id
+                for update
+                """
+            ),
+            {"id": submission_id},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        if user["role"] != "ADMIN" and row["user_id"] != user["id"]:
+            raise HTTPException(status_code=403, detail="Forbidden")
+
+        status = str(row["status"] or "").upper()
+        if status not in {"QUEUED", "TEST_QUEUED", "PENDING"}:
+            raise HTTPException(status_code=409, detail=f"Submission cannot be canceled from status {status}")
+
+        conn.execute(
+            text(
+                """
+                update judge_jobs
+                set status = 'CANCELED',
+                    finished_at = now()
+                where submission_id = :submission_id
+                  and status = 'PENDING'
+                """
+            ),
+            {"submission_id": submission_id},
+        )
+        updated = conn.execute(
+            text(
+                """
+                update submissions
+                set status = 'CANCELED',
+                    error_message = 'Canceled by user',
+                    judged_at = now()
+                where id = :submission_id
+                returning *
+                """
+            ),
+            {"submission_id": submission_id},
+        ).mappings().first()
+
+    return {"ok": True, "submission": dict(updated)}
+
+
 @router.get("/api/problems/{slug}/submissions")
 def list_problem_submissions(slug: str, user=Depends(get_optional_user)):
     slug = safe_slug(slug)
@@ -344,9 +419,23 @@ def submission_output(submission_id: int, user=Depends(get_optional_user)):
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Output file not found: {exc}") from exc
 
-    return {
-        "submission": submission,
-        "filename": "submission.csv",
-        "content_type": "text/csv",
-        "content": content,
-    }
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="submission-{submission_id}-output.csv"'},
+    )
+
+
+@router.get("/api/submissions/{submission_id}/source")
+def submission_source(submission_id: int, user=Depends(require_user)):
+    submission = _get_submission_detail(submission_id, user)
+    try:
+        content = get_bytes(S3_BUCKET_SUBMISSIONS, submission["source_object_key"])
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Source archive not found: {exc}") from exc
+
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="submission-{submission_id}-source.zip"'},
+    )

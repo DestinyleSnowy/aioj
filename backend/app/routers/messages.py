@@ -3,11 +3,12 @@ import mimetypes
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import require_user
+from app.rate_limit import check_rate_limit, client_key
 from app.storage import S3_BUCKET_MESSAGES, get_bytes, put_bytes
 
 router = APIRouter()
@@ -312,7 +313,8 @@ def get_message_conversation(peer_id: int, limit: int = 100, user=Depends(requir
 
 
 @router.post("/api/messages")
-def send_direct_message(payload: dict, user=Depends(require_user)):
+def send_direct_message(payload: dict, request: Request, user=Depends(require_user)):
+    check_rate_limit(client_key(request, "message", str(user["id"])), max_calls=120, window_seconds=3600)
     body = normalize_message_body(payload.get("body_md") or payload.get("body"))
     recipient_id = payload.get("recipient_id")
     recipient_key = str(payload.get("recipient_username") or payload.get("recipient") or "").strip()
@@ -364,6 +366,7 @@ def send_direct_message(payload: dict, user=Depends(require_user)):
 
 @router.post("/api/messages/files")
 async def send_direct_message_file(
+    request: Request,
     recipient_id: int | None = Form(None),
     recipient: str | None = Form(None),
     recipient_username: str | None = Form(None),
@@ -371,6 +374,7 @@ async def send_direct_message_file(
     file: UploadFile = File(...),
     user=Depends(require_user),
 ):
+    check_rate_limit(client_key(request, "message-file", str(user["id"])), max_calls=60, window_seconds=3600)
     body = normalize_optional_message_body(body_md)
     file_bytes = await file.read()
     content_type, suffix = validate_file_upload(file.filename, file.content_type, file_bytes)
@@ -455,6 +459,7 @@ async def send_direct_message_file(
 
 @router.post("/api/messages/images")
 async def send_direct_message_image(
+    request: Request,
     recipient_id: int | None = Form(None),
     recipient: str | None = Form(None),
     recipient_username: str | None = Form(None),
@@ -463,6 +468,7 @@ async def send_direct_message_image(
     user=Depends(require_user),
 ):
     return await send_direct_message_file(
+        request=request,
         recipient_id=recipient_id,
         recipient=recipient,
         recipient_username=recipient_username,

@@ -1,13 +1,29 @@
 import csv
 import io
 import json
+import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 from sqlalchemy import text
 
 from app.storage import S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_text
+
+
+def scorer_subprocess_env(temp_dir: Path) -> dict[str, str]:
+    env = {
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "TMPDIR": str(temp_dir),
+        "TEMP": str(temp_dir),
+        "TMP": str(temp_dir),
+    }
+    # Windows Python startup needs SystemRoot; keep only non-secret runtime basics.
+    if os.name == "nt" and os.environ.get("SystemRoot"):
+        env["SystemRoot"] = os.environ["SystemRoot"]
+    return env
 
 
 def default_accuracy_score(prediction_csv: str, label_csv: str) -> dict:
@@ -108,8 +124,9 @@ print(json.dumps(result, ensure_ascii=False))
         )
 
         proc = subprocess.run(
-            ["python", str(runner)],
+            [sys.executable, "-I", str(runner)],
             cwd=str(root),
+            env=scorer_subprocess_env(root),
             text=True,
             capture_output=True,
             timeout=20,

@@ -45,7 +45,9 @@ def _validate_zip_members(
     for info in archive.infolist():
         if dest_root is not None:
             target = (dest_root / info.filename).resolve()
-            if not str(target).startswith(str(dest_root)):
+            try:
+                target.relative_to(dest_root)
+            except ValueError:
                 raise HTTPException(status_code=400, detail=f"Unsafe zip path: {info.filename}")
 
         if info.is_dir():

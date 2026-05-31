@@ -7,7 +7,10 @@ def test_create_app_registers_core_routes():
 
     assert "/health" in paths
     assert "/api/auth/login" in paths
+    assert "/api/submissions/{submission_id}/cancel" in paths
+    assert "/api/submissions/{submission_id}/source" in paths
     assert "/api/admin/problems/import" in paths
+    assert "/api/admin/audit-logs" in paths
     assert "/api/admin/problems/{slug}/versions" in paths
     assert "/api/admin/judge/overview" in paths
     assert "/api/internal/judge/claim" in paths

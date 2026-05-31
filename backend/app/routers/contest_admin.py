@@ -3,6 +3,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import require_admin
+from app.services.audit import audit_log
 from app.services.contests import (
     contest_access_payload,
     contest_dict,
@@ -106,6 +107,14 @@ def admin_upsert_contest(payload: dict, user=Depends(require_admin)):
                 ),
                 {"contest_id": contest_id, "problem_id": problem["id"], "display_order": index},
             )
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.contest.upsert",
+            resource_type="contest",
+            resource_id=slug,
+            metadata={"status": status, "problem_slugs": problem_slugs},
+        )
 
     contest = contest_dict(row)
     contest["problems"] = contest_problem_rows(contest["id"], public_only=False)
@@ -122,6 +131,15 @@ def admin_set_contest_status(slug: str, payload: dict, user=Depends(require_admi
             text("update contests set status = :status, updated_at = now() where slug = :slug returning *"),
             {"slug": slug, "status": status},
         ).mappings().first()
+        if row:
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.contest.status",
+                resource_type="contest",
+                resource_id=slug,
+                metadata={"status": status},
+            )
     if not row:
         raise HTTPException(status_code=404, detail="Contest not found")
     return {"ok": True, "contest": contest_dict(row)}
@@ -187,6 +205,14 @@ def admin_add_contest_participant(slug: str, payload: dict, user=Depends(require
                 user_id=user_row["id"],
                 status="ACCEPTED",
             )
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.contest.participant_add",
+                resource_type="contest",
+                resource_id=slug,
+                metadata={"participant_user_id": user_row["id"]},
+            )
 
     return {"ok": True, "user": dict(user_row), "participant_count": contest_participant_count(contest["id"])}
 
@@ -246,6 +272,14 @@ def admin_create_contest_announcement(slug: str, payload: dict, user=Depends(req
                 title=f"比赛公告：{title}",
                 body_md=body_md,
             )
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.contest.announcement_create",
+            resource_type="contest",
+            resource_id=slug,
+            metadata={"announcement_id": row["id"], "is_published": is_published},
+        )
 
     return {"ok": True, "announcement": dict(row), "notified_users": notified_users}
 
@@ -262,6 +296,14 @@ def admin_delete_contest_announcement(slug: str, announcement_id: int, user=Depe
                 """
             ),
             {"id": announcement_id, "contest_id": contest["id"]},
+        )
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.contest.announcement_delete",
+            resource_type="contest",
+            resource_id=slug,
+            metadata={"announcement_id": announcement_id},
         )
     return {"ok": True}
 
@@ -328,6 +370,17 @@ def admin_contest_scoreboard_settings(slug: str, payload: dict, user=Depends(req
                 "show_private_after_end": show_private_after_end,
             },
         ).mappings().first()
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.contest.scoreboard_settings",
+            resource_type="contest",
+            resource_id=slug,
+            metadata={
+                "freeze_at": str(freeze_at) if freeze_at else None,
+                "show_private_after_end": show_private_after_end,
+            },
+        )
 
     return {"ok": True, "contest": dict(row)}
 
@@ -396,6 +449,14 @@ def admin_answer_contest_question(slug: str, question_id: int, payload: dict, us
                 question_id=row["id"],
                 question_title=row["title"],
                 answer_md=row["answer_md"] or "",
+            )
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.contest.question_answer",
+                resource_type="contest_question",
+                resource_id=question_id,
+                metadata={"contest_slug": slug, "is_public": is_public},
             )
 
     if not row:
@@ -492,6 +553,18 @@ def admin_update_contest_full_settings(slug: str, payload: dict, user=Depends(re
                 ),
             },
         ).mappings().first()
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.contest.full_settings",
+            resource_type="contest",
+            resource_id=slug,
+            metadata={
+                "visibility": visibility,
+                "registration_mode": registration_mode,
+                "scoreboard_mode": scoreboard_mode,
+            },
+        )
     return {"ok": True, "contest": dict(row)}
 
 
@@ -554,6 +627,14 @@ def admin_set_contest_registration_status(slug: str, user_id: int, payload: dict
                 user_id=user_id,
                 status=status,
                 note=note,
+            )
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.contest.registration_status",
+                resource_type="contest",
+                resource_id=slug,
+                metadata={"participant_user_id": user_id, "status": status},
             )
     if not row:
         raise HTTPException(status_code=404, detail="Registration not found")

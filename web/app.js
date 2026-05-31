@@ -101,6 +101,20 @@ function esc(value) {
     .replaceAll("'", '&#039;');
 }
 
+function safeMdHref(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '#';
+  try {
+    const decoded = raw.replaceAll('&amp;', '&');
+    if ((decoded.startsWith('/') && !decoded.startsWith('//')) || decoded.startsWith('#')) return esc(decoded);
+    const url = new URL(decoded, window.location.origin);
+    if (['http:', 'https:', 'mailto:'].includes(url.protocol)) return esc(decoded);
+  } catch {
+    return '#';
+  }
+  return '#';
+}
+
 function jsArg(value) {
   return esc(JSON.stringify(value));
 }
@@ -130,8 +144,12 @@ function renderMd(md) {
     return `<ul>${listItems}</ul>`;
   });
 
-  // Render links: [Text](URL)
-  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" class="text-primary" style="text-decoration: underline;">$1</a>');
+  // Render links with a conservative protocol allow-list.
+  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+    const safeHref = safeMdHref(href);
+    const target = safeHref.startsWith('/') || safeHref.startsWith('#') ? '' : ' target="_blank" rel="noopener noreferrer"';
+    return `<a href="${safeHref}"${target} class="text-primary" style="text-decoration: underline;">${label}</a>`;
+  });
   
   t = t.replace(/\n{2,}/g, '</p><p>');
   t = t.replace(/\n/g, '<br>');
@@ -182,6 +200,7 @@ function scoreDisplay(score) {
 
 // ─── Toast Notifications ────────────────────────────────────────────────────
 function toast(message, type = 'info', duration = 4000) {
+  if (type === 'danger') type = 'error';
   const container = $('toastContainer');
   const el = document.createElement('div');
   el.className = `toast ${type}`;
@@ -829,8 +848,26 @@ async function renderProblems() {
       }
       return `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px; opacity:0.65;">未尝试</span>`;
     };
+    const getProgressState = (slug) => solvedSlugs.has(slug) ? 'solved' : attemptedSlugs.has(slug) ? 'attempted' : 'new';
+    const metricOptions = Array.from(new Set(items.map(p => p.metric || 'accuracy'))).sort();
 
     app.innerHTML = `
+      <div class="card" style="margin-bottom: var(--space-md);">
+        <div class="row gap-sm" style="flex-wrap: wrap;">
+          <input id="problemSearchInput" type="search" placeholder="搜索题目标题或 Slug" style="flex: 1 1 260px;" />
+          <select id="problemMetricFilter" style="width: 180px;">
+            <option value="">全部指标</option>
+            ${metricOptions.map(metric => `<option value="${esc(metric)}">${esc(metric)}</option>`).join('')}
+          </select>
+          <select id="problemProgressFilter" style="width: 160px;">
+            <option value="">全部状态</option>
+            <option value="solved">已通过</option>
+            <option value="attempted">已尝试</option>
+            <option value="new">未尝试</option>
+          </select>
+          <span id="problemFilterCount" class="text-muted" style="font-size: 12px; margin-left: auto;">共 ${items.length} 题</span>
+        </div>
+      </div>
       <div class="table-wrap">
         <table>
           <thead>
@@ -844,7 +881,7 @@ async function renderProblems() {
           </thead>
           <tbody>
             ${items.map(p => `
-              <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/problems/${esc(p.slug)}')" style="transition: all var(--transition-fast);">
+              <tr class="clickable-row problem-row" data-title="${esc(p.title)}" data-slug="${esc(p.slug)}" data-metric="${esc(p.metric || 'accuracy')}" data-progress="${getProgressState(p.slug)}" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/problems/${esc(p.slug)}')" style="transition: all var(--transition-fast);">
                 <td style="font-weight: 500;">
                   ${getStatusPill(p.slug)}
                 </td>
@@ -868,6 +905,27 @@ async function renderProblems() {
         </table>
       </div>
     `;
+    const applyProblemFilters = () => {
+      const q = ($('problemSearchInput')?.value || '').trim().toLowerCase();
+      const metric = $('problemMetricFilter')?.value || '';
+      const progress = $('problemProgressFilter')?.value || '';
+      let visible = 0;
+      document.querySelectorAll('.problem-row').forEach(row => {
+        const haystack = `${row.dataset.title || ''} ${row.dataset.slug || ''}`.toLowerCase();
+        const ok = (!q || haystack.includes(q)) &&
+          (!metric || row.dataset.metric === metric) &&
+          (!progress || row.dataset.progress === progress);
+        row.style.display = ok ? '' : 'none';
+        if (ok) visible++;
+      });
+      const countEl = $('problemFilterCount');
+      if (countEl) countEl.textContent = `显示 ${visible} / ${items.length} 题`;
+    };
+    ['problemSearchInput', 'problemMetricFilter', 'problemProgressFilter'].forEach(id => {
+      const el = $(id);
+      if (el) el.addEventListener('input', applyProblemFilters);
+      if (el) el.addEventListener('change', applyProblemFilters);
+    });
   } catch (err) {
     app.innerHTML = errorBox(err);
   }
@@ -1033,7 +1091,7 @@ async function renderProblemDetail(slug, contestSlug = null) {
             <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px; color: var(--text-secondary);">1. 研发阶段：下载解答包范例</h3>
             <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">下载评测要求的目录规范与数据接口，用于本地编写预测算法。</p>
             <a href="/api/problems/${esc(slug)}/sample-submission" target="_blank" class="btn btn-secondary btn-sm full-width">
-              📥 下载示例提包 (.zip)
+              📥 下载示例提交 (.csv)
             </a>
           </div>
 
@@ -1419,13 +1477,13 @@ async function renderContestDetail(slug) {
   `;
   try {
     const results = await Promise.allSettled([
-      api(`/api/contests/${slug}`),
+      api(`/api/contests/${slug}`, { headers: authHeaders() }),
       api(`/api/contests/${slug}/access`, { headers: authHeaders() }),
-      api(`/api/contests/${slug}/stats`),
-      api(`/api/contests/${slug}/announcements`),
+      api(`/api/contests/${slug}/stats`, { headers: authHeaders() }),
+      api(`/api/contests/${slug}/announcements`, { headers: authHeaders() }),
       api(`/api/contests/${slug}/questions`, { headers: authHeaders() }).catch(() => ({ items: [] })),
       state.token ? api(`/api/contests/${slug}/submissions?show_all=true`, { headers: authHeaders() }).catch(() => ({ items: [] })) : Promise.resolve({ items: [] }),
-      api(`/api/contests/${slug}/problem-stats`).catch(() => ({ items: [] })),
+      api(`/api/contests/${slug}/problem-stats`, { headers: authHeaders() }).catch(() => ({ items: [] })),
     ]);
 
     const contest = results[0].status === 'fulfilled' ? results[0].value : null;
@@ -2228,8 +2286,12 @@ async function renderSubmissionDetail(id) {
 
           <!-- Actions Card -->
           <div class="card" style="display: flex; flex-direction: column; gap: var(--space-sm); padding: var(--space-md);">
+            ${['QUEUED', 'TEST_QUEUED', 'PENDING'].includes(String(sub.status || '').toUpperCase()) ? `
+              <button class="btn btn-danger w-full" onclick="cancelSubmission(${Number(id)})">取消排队提交</button>
+            ` : ''}
             ${sub.problem_slug ? `<a href="/problems/${esc(sub.problem_slug)}" class="btn btn-secondary w-full" data-link>回到题目工作区</a>` : ''}
-            <a href="/api/submissions/${id}/output" target="_blank" class="btn btn-primary w-full">📥 下载容器输出 (.zip)</a>
+            <button class="btn btn-secondary w-full" onclick="downloadSubmissionArtifact(${Number(id)}, 'source')">下载提交源码 (.zip)</button>
+            <button class="btn btn-primary w-full" onclick="downloadSubmissionArtifact(${Number(id)}, 'output')">📥 下载预测输出 (.csv)</button>
           </div>
         </div>
       </div>
@@ -2245,6 +2307,42 @@ async function renderSubmissionDetail(id) {
     }
   } catch (err) {
     app.innerHTML = errorBox(err);
+  }
+}
+
+async function cancelSubmission(id) {
+  if (!confirm(`确认取消提交 #${id} 吗？仅排队中的任务可以取消。`)) return;
+  try {
+    await api(`/api/submissions/${id}/cancel`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    toast(`提交 #${id} 已取消`, 'success');
+    renderSubmissionDetail(id);
+  } catch (err) {
+    toast(`取消失败: ${err.message}`, 'error');
+  }
+}
+
+async function downloadSubmissionArtifact(id, kind) {
+  const url = kind === 'source' ? `/api/submissions/${id}/source` : `/api/submissions/${id}/output`;
+  try {
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(text || `${res.status} ${res.statusText}`);
+    }
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    const objectUrl = URL.createObjectURL(blob);
+    a.href = objectUrl;
+    a.download = kind === 'source' ? `submission-${id}-source.zip` : `submission-${id}-output.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(objectUrl);
+  } catch (err) {
+    toast(`下载失败: ${err.message}`, 'error');
   }
 }
 
@@ -3068,6 +3166,52 @@ function requireAdmin() {
     return false;
   }
   return true;
+}
+
+async function renderAuditLogs() {
+  setPage('审计日志');
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在读取管理员操作流水...</span>
+    </div>
+  `;
+  try {
+    const data = await api('/api/admin/audit-logs?limit=200', { headers: authHeaders() });
+    const items = data.items || [];
+    app.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 190px;">时间</th>
+              <th style="width: 140px;">操作者</th>
+              <th>动作</th>
+              <th style="width: 160px;">资源</th>
+              <th>元数据</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${items.length === 0 ? `
+              <tr><td colspan="5">${emptyBox('暂无审计记录')}</td></tr>
+            ` : items.map(item => `
+              <tr>
+                <td style="font-size: 12px; color: var(--text-muted);">${formatDate(item.created_at)}</td>
+                <td><strong>${esc(item.username || 'system')}</strong></td>
+                <td><span class="pill blue" style="font-family: var(--font-mono); text-transform: none;">${esc(item.action)}</span></td>
+                <td style="font-family: var(--font-mono); font-size: 12px;">${esc(item.resource_type)}${item.resource_id ? `#${esc(item.resource_id)}` : ''}</td>
+                <td><code style="white-space: pre-wrap;">${esc(JSON.stringify(item.metadata || {}, null, 2))}</code></td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
 }
 
 // Admin: User Administration
@@ -4082,6 +4226,7 @@ function route() {
   if (path === '/messages') return renderMessages();
   if (path === '/account') return renderAccount();
   if (path === '/admin/users' || path === '/users') return renderUsers();
+  if (path === '/admin/audit') return renderAuditLogs();
   if (path === '/judge-admin') return renderJudgeAdmin();
   if (path === '/problem-admin') return renderProblemAdmin();
   if (path === '/contest-admin') return renderContestAdmin();
@@ -4755,6 +4900,7 @@ function toggleFullscreenEditor() {
 Object.assign(window, {
   navigate, showAuthModal, switchAuthTab, submitAuth, logout,
   submitSolution, showContestTab, switchProblemTab, handleFileSelect,
+  cancelSubmission, downloadSubmissionArtifact, renderAuditLogs,
   joinContest, submitInviteCode, leaveContest,
   showAskQuestionModal, submitQuestion,
   showAnswerQuestionModal, submitAnswer, closeQuestion,

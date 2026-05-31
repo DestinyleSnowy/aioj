@@ -25,6 +25,7 @@ NODE_NAME = "local-worker"
 NODE_TAGS = []
 MAX_PARALLEL = 1
 HEARTBEAT_INTERVAL = 15
+ALLOW_LOCAL_RUNNER = False
 
 
 def load_env(path: Path):
@@ -40,7 +41,7 @@ def load_env(path: Path):
 
 def configure_runtime():
     global ROOT, RUN_ROOT, HOST_RUN_ROOT
-    global API_BASE, INTERVAL, NODE_NAME, NODE_TAGS, MAX_PARALLEL, HEARTBEAT_INTERVAL
+    global API_BASE, INTERVAL, NODE_NAME, NODE_TAGS, MAX_PARALLEL, HEARTBEAT_INTERVAL, ALLOW_LOCAL_RUNNER
 
     ROOT = Path(os.environ.get("AIOJ_ROOT", str(ROOT)))
     RUN_ROOT = ROOT / "runs"
@@ -62,6 +63,7 @@ def configure_runtime():
             )
         ),
     )
+    ALLOW_LOCAL_RUNNER = str(os.environ.get("AIOJ_ALLOW_LOCAL_JUDGE_RUNNER", "")).lower() in {"1", "true", "yes", "on"}
 
 
 def parse_tags(value):
@@ -95,10 +97,13 @@ def s3_client():
 
 def safe_extract(zip_path: Path, dest: Path):
     dest.mkdir(parents=True, exist_ok=True)
+    dest_root = dest.resolve()
     with zipfile.ZipFile(zip_path) as z:
         for info in z.infolist():
             target = (dest / info.filename).resolve()
-            if not str(target).startswith(str(dest.resolve())):
+            try:
+                target.relative_to(dest_root)
+            except ValueError:
                 raise RuntimeError(f"unsafe zip path: {info.filename}")
         z.extractall(dest)
 
@@ -239,9 +244,18 @@ def run_job(job):
                     "--rm",
                     "--network",
                     "none",
+                    "--cap-drop",
+                    "ALL",
+                    "--security-opt",
+                    "no-new-privileges",
+                    "--read-only",
+                    "--tmpfs",
+                    "/tmp:rw,nosuid,nodev,size=64m",
                     "--cpus",
                     cpu_count,
                     "--memory",
+                    f"{memory_limit_mb}m",
+                    "--memory-swap",
                     f"{memory_limit_mb}m",
                     "--pids-limit",
                     "256",
@@ -267,6 +281,11 @@ def run_job(job):
                 )
                 runtime_ms = int((time.time() - start) * 1000)
             else:
+                if not ALLOW_LOCAL_RUNNER:
+                    raise RuntimeError(
+                        "Docker daemon is not available; refusing to run untrusted submission locally. "
+                        "Set AIOJ_ALLOW_LOCAL_JUDGE_RUNNER=true only for isolated development environments."
+                    )
                 write("WARNING: Docker daemon not running or not found. Falling back to local process runner.")
                 
                 is_windows = (os.name == "nt")

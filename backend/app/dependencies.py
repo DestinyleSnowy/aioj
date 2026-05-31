@@ -17,10 +17,20 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
 
     with engine.connect() as conn:
         row = conn.execute(
-            text("select id, username, email, role from users where id = :id"),
+            text(
+                """
+                select id, username, email, role, coalesce(is_disabled, false) as is_disabled
+                from users
+                where id = :id
+                """
+            ),
             {"id": payload["sub"]},
         ).mappings().first()
-    return dict(row) if row else None
+    if not row or bool(row["is_disabled"]):
+        return None
+    data = dict(row)
+    data.pop("is_disabled", None)
+    return data
 
 
 def require_user(user=Depends(get_optional_user)):

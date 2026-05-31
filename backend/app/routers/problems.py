@@ -2,12 +2,13 @@ import json
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from sqlalchemy import text
 
 from app.db import engine
 from app.dependencies import require_admin
 from app.services.judge_admin import normalize_tags
+from app.services.audit import audit_log
 from app.services.problems import latest_problem_version
 from app.services.problem_versions import (
     activate_problem_version,
@@ -22,20 +23,39 @@ from app.uploads import parse_yaml, safe_extract_zip_bytes, safe_slug, validate_
 router = APIRouter()
 
 
+def _bounded_int(value, *, field: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{field} must be an integer") from exc
+    if parsed < minimum or parsed > maximum:
+        raise HTTPException(status_code=400, detail=f"{field} must be between {minimum} and {maximum}")
+    return parsed
+
+
 @router.get("/api/problems")
-def list_problems():
+def list_problems(q: str | None = None, metric: str | None = None):
+    params = {}
+    filters = ["status = 'PUBLIC'", "active_version_id is not null"]
+    if q:
+        params["q"] = f"%{q.strip()}%"
+        filters.append("(title ilike :q or slug ilike :q)")
+    if metric:
+        params["metric"] = metric.strip()
+        filters.append("metric = :metric")
+    where_sql = " and ".join(filters)
     with engine.connect() as conn:
         rows = conn.execute(
             text(
-                """
+                f"""
                 select id, slug, title, metric, higher_is_better, time_limit_sec,
                        memory_limit_mb, cpu_count, status, created_at
                 from problems
-                where status = 'PUBLIC'
-                  and active_version_id is not null
+                where {where_sql}
                 order by created_at desc, id desc
                 """
-            )
+            ),
+            params,
         ).mappings().all()
     return {"items": [dict(r) for r in rows]}
 
@@ -68,19 +88,21 @@ def get_problem_sample_submission(slug: str):
         raise HTTPException(status_code=404, detail="Problem not found")
 
     content = get_text(S3_BUCKET_PROBLEMS, row["sample_submission_object_key"])
-    return {
-        "slug": slug,
-        "filename": "sample_submission.csv",
-        "content_type": "text/csv",
-        "content": content,
-    }
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{slug}_sample_submission.csv"'},
+    )
 
 
 @router.get("/api/problems/{slug}/leaderboard")
 def leaderboard(slug: str):
     slug = safe_slug(slug)
     with engine.connect() as conn:
-        problem = conn.execute(text("select id from problems where slug = :slug"), {"slug": slug}).mappings().first()
+        problem = conn.execute(
+            text("select id, higher_is_better from problems where slug = :slug"),
+            {"slug": slug},
+        ).mappings().first()
         if not problem:
             raise HTTPException(status_code=404, detail="Problem not found")
 
@@ -88,7 +110,10 @@ def leaderboard(slug: str):
             text(
                 """
                 select row_number() over (
-                          order by le.public_score desc nulls last, le.updated_at asc
+                          order by
+                            case when :higher_is_better then le.public_score end desc nulls last,
+                            case when not :higher_is_better then le.public_score end asc nulls last,
+                            le.updated_at asc
                        ) as rank,
                        le.user_id,
                        le.username,
@@ -102,7 +127,7 @@ def leaderboard(slug: str):
                 limit 100
                 """
             ),
-            {"problem_id": problem["id"]},
+            {"problem_id": problem["id"], "higher_is_better": bool(problem["higher_is_better"])},
         ).mappings().all()
 
     return {"problem_slug": slug, "items": [dict(r) for r in rows]}
@@ -148,6 +173,15 @@ def admin_problem_status(slug: str, payload: dict, user=Depends(require_admin)):
             ),
             {"slug": slug, "status": status},
         ).mappings().first()
+        if row:
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.problem.status",
+                resource_type="problem",
+                resource_id=slug,
+                metadata={"status": status},
+            )
 
     if not row:
         raise HTTPException(status_code=404, detail="Problem not found")
@@ -188,10 +222,16 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
         title = str(cfg.get("title") or slug)
         metric = str(cfg.get("metric") or "accuracy")
         higher_is_better = bool(cfg.get("higher_is_better", True))
-        time_limit_sec = int(cfg.get("time_limit_sec", 60))
-        memory_limit_mb = int(cfg.get("memory_limit_mb", 2048))
-        cpu_count = int(cfg.get("cpu_count", 2))
-        output_limit_mb = int(cfg.get("output_limit_mb", 64))
+        time_limit_sec = _bounded_int(
+            cfg.get("time_limit_sec", 60), field="time_limit_sec", default=60, minimum=1, maximum=3600
+        )
+        memory_limit_mb = _bounded_int(
+            cfg.get("memory_limit_mb", 2048), field="memory_limit_mb", default=2048, minimum=128, maximum=65536
+        )
+        cpu_count = _bounded_int(cfg.get("cpu_count", 2), field="cpu_count", default=2, minimum=1, maximum=32)
+        output_limit_mb = _bounded_int(
+            cfg.get("output_limit_mb", 64), field="output_limit_mb", default=64, minimum=1, maximum=1024
+        )
         runner_image = str(cfg.get("runner_image") or "aioj-python-basic:latest")
         run_command = cfg.get("run_command") or [
             "python",
@@ -340,6 +380,14 @@ async def import_problem(file: UploadFile = File(...), user=Depends(require_admi
                     activated = True
                 else:
                     activation_error = "Version self-test failed; import completed but version was not activated"
+            audit_log(
+                conn,
+                user_id=user["id"],
+                action="admin.problem.import",
+                resource_type="problem",
+                resource_id=slug,
+                metadata={"version": version, "version_id": pv["id"], "activated": activated},
+            )
 
     return {
         "ok": True,
@@ -374,6 +422,14 @@ def admin_problem_version_self_test(slug: str, version_id: int, user=Depends(req
             result = run_problem_version_self_test(conn, slug, version_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem_version.self_test",
+            resource_type="problem_version",
+            resource_id=version_id,
+            metadata={"slug": slug, "self_test_status": result.get("self_test_status")},
+        )
     return {"ok": True, "result": result}
 
 
@@ -388,6 +444,14 @@ def admin_activate_problem_version(slug: str, version_id: int, payload: dict | N
             detail = str(exc)
             status_code = 409 if "self-test" in detail else 404 if "not found" in detail.lower() else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem_version.activate",
+            resource_type="problem_version",
+            resource_id=version_id,
+            metadata={"slug": slug, "force": force},
+        )
     return {"ok": True, "version": version}
 
 
@@ -406,4 +470,12 @@ def admin_set_problem_version_status(
             detail = str(exc)
             status_code = 404 if "not found" in detail.lower() else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem_version.status",
+            resource_type="problem_version",
+            resource_id=version_id,
+            metadata={"slug": slug, "status": payload.get("status")},
+        )
     return {"ok": True, "version": version}

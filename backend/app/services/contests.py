@@ -120,6 +120,8 @@ def contest_access_payload(contest: dict, user=None):
     visibility = contest.get("visibility") or "PUBLIC"
 
     can_view_contest = contest.get("status") == "PUBLIC" or is_admin or is_accepted
+    if visibility == "PRIVATE" and not (is_admin or is_accepted):
+        can_view_contest = False
     can_view_problems = is_admin or is_accepted
     if visibility == "PUBLIC" and not contest.get("hide_problems_before_start"):
         can_view_problems = True
