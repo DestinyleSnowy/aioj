@@ -16,8 +16,11 @@ fi
 echo "[deploy] checking docker compose..."
 docker compose version
 
-echo "[deploy] building api..."
-docker compose build api
+export AIOJ_HOST_RUN_ROOT="$(pwd)/runs"
+mkdir -p runs
+
+echo "[deploy] building application images..."
+docker compose build api worker
 
 if [ -f "judge-images/python-basic/Dockerfile" ]; then
   echo "[deploy] building default judge image..."
@@ -31,14 +34,14 @@ echo "[deploy] running database migrations..."
 docker compose run --rm api alembic upgrade head
 
 echo "[deploy] starting application services..."
-docker compose up -d --remove-orphans api caddy
+docker compose up -d --remove-orphans api worker caddy
 
-echo "[deploy] restarting judge agent if installed..."
+echo "[deploy] restarting legacy systemd judge agent if installed..."
 if sudo -n systemctl cat aioj-judge-agent >/dev/null 2>&1; then
   sudo -n systemctl restart aioj-judge-agent
-  echo "[deploy] judge agent restarted"
+  echo "[deploy] legacy judge agent restarted"
 else
-  echo "[deploy] judge agent service not available or requires interactive sudo; skipped"
+  echo "[deploy] legacy judge agent service not available or requires interactive sudo; skipped"
 fi
 
 echo "[deploy] waiting for api health..."

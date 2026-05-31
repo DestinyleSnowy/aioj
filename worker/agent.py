@@ -16,6 +16,7 @@ import requests
 
 ROOT = Path(os.environ.get("AIOJ_ROOT", "/opt/aioj"))
 RUN_ROOT = ROOT / "runs"
+HOST_RUN_ROOT = Path(os.environ.get("AIOJ_HOST_RUN_ROOT", str(RUN_ROOT)))
 LOOP = "--loop" in sys.argv
 
 API_BASE = "http://127.0.0.1:8000"
@@ -38,12 +39,16 @@ def load_env(path: Path):
 
 
 def configure_runtime():
+    global ROOT, RUN_ROOT, HOST_RUN_ROOT
     global API_BASE, INTERVAL, NODE_NAME, NODE_TAGS, MAX_PARALLEL, HEARTBEAT_INTERVAL
 
+    ROOT = Path(os.environ.get("AIOJ_ROOT", str(ROOT)))
+    RUN_ROOT = ROOT / "runs"
+    HOST_RUN_ROOT = Path(os.environ.get("AIOJ_HOST_RUN_ROOT", str(RUN_ROOT)))
     API_BASE = os.environ.get("AIOJ_API_BASE", "http://127.0.0.1:8000")
     INTERVAL = max(1, int(os.environ.get("AIOJ_JUDGE_INTERVAL", "3")))
     NODE_NAME = str(os.environ.get("JUDGE_NODE_NAME") or socket.gethostname()).strip() or "local-worker"
-    NODE_TAGS = parse_tags(os.environ.get("JUDGE_NODE_TAGS") or os.environ.get("AIOJ_JUDGE_TAGS") or "")
+    NODE_TAGS = parse_tags(os.environ.get("JUDGE_NODE_TAGS") or os.environ.get("AIOJ_JUDGE_TAGS") or "cpu")
     MAX_PARALLEL = max(
         1,
         int(os.environ.get("JUDGE_NODE_MAX_PARALLEL", os.environ.get("AIOJ_JUDGE_MAX_PARALLEL", "1"))),
@@ -148,6 +153,15 @@ def upload_object(s3, bucket, key, path: Path, content_type="application/octet-s
     s3.upload_file(str(path), bucket, key, ExtraArgs={"ContentType": content_type})
 
 
+def docker_bind_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(RUN_ROOT.resolve())
+    except ValueError:
+        return str(resolved)
+    return str((HOST_RUN_ROOT / relative).resolve())
+
+
 def run_job(job):
     job_id = job["id"]
     attempt = job.get("attempt")
@@ -232,11 +246,11 @@ def run_job(job):
                     "--pids-limit",
                     "256",
                     "-v",
-                    f"{workspace}:/workspace:ro",
+                    f"{docker_bind_path(workspace)}:/workspace:ro",
                     "-v",
-                    f"{input_dir}:/input:ro",
+                    f"{docker_bind_path(input_dir)}:/input:ro",
                     "-v",
-                    f"{output_dir}:/output",
+                    f"{docker_bind_path(output_dir)}:/output",
                     runner_image,
                     *run_command,
                 ]
