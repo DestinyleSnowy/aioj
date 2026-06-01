@@ -104,9 +104,13 @@ def convert_notebook_to_python(nb_bytes: bytes) -> str:
 
     if not isinstance(nb, dict) or "cells" not in nb:
         raise HTTPException(status_code=400, detail="Invalid notebook format: missing 'cells'")
+    if not isinstance(nb["cells"], list):
+        raise HTTPException(status_code=400, detail="Invalid notebook format: 'cells' must be a list")
 
     code_fragments = []
     for cell in nb["cells"]:
+        if not isinstance(cell, dict):
+            raise HTTPException(status_code=400, detail="Invalid notebook format: each cell must be an object")
         if cell.get("cell_type") != "code":
             continue
         source = cell.get("source", [])

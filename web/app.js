@@ -1340,10 +1340,6 @@ async function submitSolution(slug, contestSlug) {
     toast('请先选择或拖拽拖入解答文件 (.zip 或 .ipynb)', 'warning');
     return;
   }
-  if (!state.token) {
-    showAuthModal();
-    return;
-  }
   const fd = new FormData();
   fd.append('file', fileInput.files[0]);
   if (contestSlug) fd.append('contest_slug', contestSlug);
@@ -2644,12 +2640,17 @@ function captureMessageViewState() {
   const composer = $('messageComposer');
   const list = $('messageThreadList');
   const scrollGap = list ? list.scrollHeight - list.scrollTop - list.clientHeight : 0;
+  const rows = list ? Array.from(list.querySelectorAll('.message-row[data-message-id]')) : [];
+  const anchor = rows.find((row) => row.offsetTop + row.offsetHeight > list.scrollTop);
+  const anchorOffset = anchor ? Math.max(0, list.scrollTop - anchor.offsetTop) : 0;
   return {
     draft: composer ? composer.value : '',
     composerFocused: document.activeElement === composer,
     selectionStart: composer ? composer.selectionStart : 0,
     selectionEnd: composer ? composer.selectionEnd : 0,
     scrollTop: list ? list.scrollTop : 0,
+    anchorMessageId: anchor?.dataset.messageId || '',
+    anchorOffset,
     wasNearBottom: !list || scrollGap < 80,
   };
 }
@@ -2659,6 +2660,16 @@ function restoreMessageViewState(viewState) {
   if (list) {
     if (!viewState || viewState.wasNearBottom) {
       list.scrollTop = list.scrollHeight;
+    } else if (viewState.anchorMessageId) {
+      const selectorId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(viewState.anchorMessageId)
+        : String(viewState.anchorMessageId).replace(/"/g, '\\"');
+      const anchor = list.querySelector(`.message-row[data-message-id="${selectorId}"]`);
+      if (anchor) {
+        list.scrollTop = Math.max(0, anchor.offsetTop + (viewState.anchorOffset || 0));
+      } else {
+        list.scrollTop = Math.min(viewState.scrollTop, list.scrollHeight);
+      }
     } else {
       list.scrollTop = Math.min(viewState.scrollTop, list.scrollHeight);
     }
@@ -2793,10 +2804,8 @@ async function renderMessages(peerId = null, options = {}) {
     state.messageRenderPeerId = selectedPeerId;
     state.messageRenderKey = renderKey;
 
-    setTimeout(() => {
-      restoreMessageViewState(viewState);
-      hydrateMessageAttachments();
-    }, 50);
+    restoreMessageViewState(viewState);
+    hydrateMessageAttachments(viewState);
     ensureMessageAutoRefresh();
   } catch (err) {
     if (silent) {
@@ -2841,7 +2850,7 @@ function renderMessageThread(peer, messages) {
       ` : messages.map(m => {
         const mine = Number(m.sender_id) === Number(state.user.id);
         return `
-          <div class="message-row ${mine ? 'mine' : ''}">
+          <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(m.id)}">
             <div class="message-bubble">
               ${m.has_attachment ? renderMessageAttachment(m) : ''}
               ${m.body_md ? renderMd(m.body_md) : ''}
@@ -2894,7 +2903,7 @@ function renderMessageAttachment(message) {
   `;
 }
 
-async function hydrateMessageAttachments() {
+async function hydrateMessageAttachments(viewState = null) {
   const images = Array.from(document.querySelectorAll('img[data-message-attachment-id]:not([data-loaded])'));
   for (const img of images) {
     const attachmentId = img.dataset.messageAttachmentId;
@@ -2909,8 +2918,10 @@ async function hydrateMessageAttachments() {
       img.hidden = false;
       img.dataset.loaded = '1';
       if (placeholder) placeholder.style.display = 'none';
+      restoreMessageViewState(viewState);
     } catch {
       if (placeholder) placeholder.textContent = '图片加载失败';
+      restoreMessageViewState(viewState);
     }
   }
 }

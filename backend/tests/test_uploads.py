@@ -1,11 +1,12 @@
 import io
+import json
 import zipfile
 from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
 
-from app.uploads import inspect_zip_bytes, safe_extract_zip_bytes, validate_submission_archive
+from app.uploads import convert_notebook_to_python, inspect_zip_bytes, safe_extract_zip_bytes, validate_submission_archive
 
 
 def build_zip(entries: dict[str, bytes]) -> bytes:
@@ -46,3 +47,35 @@ def test_safe_extract_zip_bytes_rejects_sibling_prefix_escape(tmp_path: Path):
         safe_extract_zip_bytes(zip_bytes, dest, max_files=10, max_uncompressed_bytes=1024)
 
     assert "Unsafe zip path" in excinfo.value.detail
+
+
+def test_convert_notebook_to_python_extracts_code_and_comments_magics():
+    nb = {
+        "cells": [
+            {"cell_type": "markdown", "source": ["# heading\n"]},
+            {"cell_type": "code", "source": ["%matplotlib inline\n", "print('ok')\n", "!pwd\n"]},
+        ]
+    }
+
+    script = convert_notebook_to_python(json.dumps(nb).encode("utf-8"))
+
+    assert "print('ok')" in script
+    assert "# %matplotlib inline" in script
+    assert "# !pwd" in script
+    assert "# heading" not in script
+
+
+def test_convert_notebook_to_python_rejects_non_list_cells():
+    with pytest.raises(HTTPException) as excinfo:
+        convert_notebook_to_python(b'{"cells":"oops"}')
+
+    assert excinfo.value.status_code == 400
+    assert "'cells' must be a list" in excinfo.value.detail
+
+
+def test_convert_notebook_to_python_rejects_non_object_cell():
+    with pytest.raises(HTTPException) as excinfo:
+        convert_notebook_to_python(b'{"cells":["oops"]}')
+
+    assert excinfo.value.status_code == 400
+    assert "each cell must be an object" in excinfo.value.detail
