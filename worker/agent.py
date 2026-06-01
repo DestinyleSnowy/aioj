@@ -167,6 +167,26 @@ def docker_bind_path(path: Path) -> str:
     return str((HOST_RUN_ROOT / relative).resolve())
 
 
+def docker_availability_error() -> str | None:
+    try:
+        d_check = subprocess.run(
+            ["docker", "ps"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+
+    if d_check.returncode == 0:
+        return None
+
+    detail = (d_check.stderr or d_check.stdout or "").strip()
+    if detail:
+        return detail
+    return f"docker ps exited with code {d_check.returncode}"
+
+
 def run_job(job):
     job_id = job["id"]
     attempt = job.get("attempt")
@@ -229,13 +249,8 @@ def run_job(job):
             time_limit_sec = int(limits.get("time_limit_sec", 60))
             output_limit_mb = int(limits.get("output_limit_mb", 64))
 
-            # Check if docker is available
-            has_docker = False
-            try:
-                d_check = subprocess.run(["docker", "ps"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                has_docker = (d_check.returncode == 0)
-            except Exception:
-                pass
+            docker_error = docker_availability_error()
+            has_docker = docker_error is None
 
             if has_docker:
                 cmd = [
@@ -281,9 +296,13 @@ def run_job(job):
                 )
                 runtime_ms = int((time.time() - start) * 1000)
             else:
+                if docker_error:
+                    write("docker availability check failed: " + docker_error)
                 if not ALLOW_LOCAL_RUNNER:
                     raise RuntimeError(
-                        "Docker daemon is not available; refusing to run untrusted submission locally. "
+                        "Docker daemon is not available or not accessible from worker; "
+                        f"check failed with: {docker_error}. "
+                        "Refusing to run untrusted submission locally. "
                         "Set AIOJ_ALLOW_LOCAL_JUDGE_RUNNER=true only for isolated development environments."
                     )
                 write("WARNING: Docker daemon not running or not found. Falling back to local process runner.")

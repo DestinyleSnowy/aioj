@@ -36,10 +36,19 @@ docker compose run --rm api alembic upgrade head
 echo "[deploy] starting application services..."
 docker compose up -d --remove-orphans api worker caddy
 
-echo "[deploy] restarting legacy systemd judge agent if installed..."
+echo "[deploy] checking legacy systemd judge agent..."
 if sudo -n systemctl cat aioj-judge-agent >/dev/null 2>&1; then
-  sudo -n systemctl restart aioj-judge-agent
-  echo "[deploy] legacy judge agent restarted"
+  if [ "${AIOJ_ENABLE_LEGACY_JUDGE_AGENT:-false}" = "true" ]; then
+    sudo -n systemctl restart aioj-judge-agent
+    echo "[deploy] legacy judge agent restarted (AIOJ_ENABLE_LEGACY_JUDGE_AGENT=true)"
+  else
+    if sudo -n systemctl is-active --quiet aioj-judge-agent; then
+      sudo -n systemctl stop aioj-judge-agent || true
+      echo "[deploy] legacy judge agent stopped to avoid duplicate worker registration"
+    else
+      echo "[deploy] legacy judge agent installed but inactive; compose worker remains primary"
+    fi
+  fi
 else
   echo "[deploy] legacy judge agent service not available or requires interactive sudo; skipped"
 fi
