@@ -64,12 +64,14 @@ def get_contest_any(slug: str):
 
 def contest_problem_rows(contest_id: int, public_only: bool = True):
     with engine.connect() as conn:
-        status_filter = "and p.status = 'PUBLIC' and p.active_version_id is not null" if public_only else ""
+        status_filter = "and p.status = 'PUBLIC'" if public_only else ""
         rows = conn.execute(
             text(
                 f"""
                 select p.id, p.slug, p.title, p.metric, p.higher_is_better,
-                       p.time_limit_sec, p.memory_limit_mb, p.cpu_count, cp.display_order
+                       p.time_limit_sec, p.memory_limit_mb, p.cpu_count,
+                       (p.active_version_id is not null) as is_submittable,
+                       cp.display_order
                 from contest_problems cp
                 join problems p on p.id = cp.problem_id
                 where cp.contest_id = :contest_id

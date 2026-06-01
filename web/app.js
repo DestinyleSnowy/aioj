@@ -1746,6 +1746,7 @@ async function renderContestDetail(slug) {
                   <tbody>
                     ${problems.map(p => {
                       const ps = problemStats.find(s => s.slug === p.slug || s.id === p.id) || {};
+                      const isSubmittable = p.is_submittable !== false;
                       const isSolved = solvedSlugs.has(p.slug);
                       const isAttempted = attemptedSlugs.has(p.slug);
                       let statusPill = `<span class="pill gray" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px; opacity:0.65;">未尝试</span>`;
@@ -1756,12 +1757,15 @@ async function renderContestDetail(slug) {
                       }
 
                       return `
-                        <tr class="clickable-row" onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(slug)}/problems/${esc(p.slug)}')" style="transition: all var(--transition-fast);">
+                        <tr class="${isSubmittable ? 'clickable-row' : ''}" ${isSubmittable ? `onclick="if (!event.target.closest('a') && !event.target.closest('button')) navigate('/contests/${esc(slug)}/problems/${esc(p.slug)}')"` : ''} style="transition: all var(--transition-fast);">
                           <td>
                             ${statusPill}
                           </td>
                           <td>
-                            <div style="font-weight: 700; font-size: 15px; color: var(--text-main); font-family: var(--font-display);">${esc(p.title)}</div>
+                            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                              <div style="font-weight: 700; font-size: 15px; color: var(--text-main); font-family: var(--font-display);">${esc(p.title)}</div>
+                              ${!isSubmittable ? `<span class="pill red" style="font-size:10.5px; padding: 3px 10px; border-radius: 6px;">无法提交</span>` : ''}
+                            </div>
                             <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); margin-top: 4px;">ID: ${esc(p.slug)}</div>
                           </td>
                           <td style="font-family: var(--font-mono); font-size: 12.5px; color: var(--text-secondary);">
@@ -1769,7 +1773,9 @@ async function renderContestDetail(slug) {
                             <div style="font-size: 11px; color: var(--text-muted); margin-top: 2px;">📈 提报次数: ${ps.submissions || 0} 次</div>
                           </td>
                           <td style="text-align: right;">
-                            <a href="/contests/${esc(slug)}/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即挑战 🚀</a>
+                            ${isSubmittable
+                              ? `<a href="/contests/${esc(slug)}/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px;" data-link>立即挑战 🚀</a>`
+                              : `<span class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 6px 14px; opacity: 0.55; pointer-events: none;">无法提交</span>`}
                           </td>
                         </tr>
                       `;
