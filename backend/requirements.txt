@@ -9,3 +9,14 @@ boto3==1.35.90
 python-multipart==0.0.20
 PyYAML==6.0.2
 requests==2.32.3
+accelerate==1.8.1
+datasets==3.6.0
+matplotlib==3.10.0
+openai==1.93.0
+Pillow==11.1.0
+scipy==1.14.1
+scikit-learn==1.6.1
+torch==2.5.1
+torchvision==0.20.1
+tqdm==4.67.1
+transformers==4.53.2

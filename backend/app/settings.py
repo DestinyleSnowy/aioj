@@ -50,9 +50,9 @@ class Settings(BaseSettings):
     max_source_zip_mb: int = 20
     max_source_files: int = 50
     max_source_uncompressed_mb: int = 50
-    max_problem_zip_mb: int = 200
-    max_problem_files: int = 500
-    max_problem_uncompressed_mb: int = 1024
+    max_problem_zip_mb: int = 512
+    max_problem_files: int = 2000
+    max_problem_uncompressed_mb: int = 2048
 
     stale_job_minutes: int = 15
     max_job_attempts: int = 3

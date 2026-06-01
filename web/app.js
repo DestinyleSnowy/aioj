@@ -37,6 +37,8 @@ const state = {
   messageRenderKey: '',
   messageRenderPeerId: 0,
   newMessagePendingFiles: [],
+  currentProblem: null,
+  activeProblemStatementId: '',
 };
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
@@ -119,6 +121,49 @@ function safeMdHref(value) {
   return '#';
 }
 
+function safeMdSrc(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  try {
+    const decoded = raw.replaceAll('&amp;', '&');
+    if ((decoded.startsWith('/') && !decoded.startsWith('//')) || decoded.startsWith('data:')) return esc(decoded);
+    const url = new URL(decoded, window.location.origin);
+    if (['http:', 'https:'].includes(url.protocol)) return esc(decoded);
+  } catch {
+    return '';
+  }
+  return '';
+}
+
+function isRelativeMdTarget(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw.startsWith('#') || raw.startsWith('/') || raw.startsWith('data:')) return false;
+  return !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw);
+}
+
+function problemResourceUrl(problem, resourcePath) {
+  const slug = String(problem?.slug || '').trim();
+  const normalized = String(resourcePath || '')
+    .replace(/^\.?\//, '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .map(segment => encodeURIComponent(segment))
+    .join('/');
+  if (!slug || !normalized) return '';
+  return `/api/problems/${encodeURIComponent(slug)}/resource-files/${normalized}`;
+}
+
+function rewriteProblemMarkdownAssets(md, problem) {
+  const text = String(md || '');
+  if (!problem?.slug) return text;
+  return text.replace(/(!?\[[^\]]*\])\(([^)]+)\)/g, (match, prefix, target) => {
+    if (!isRelativeMdTarget(target)) return match;
+    const url = problemResourceUrl(problem, target);
+    return url ? `${prefix}(${url})` : match;
+  });
+}
+
 function jsArg(value) {
   return esc(JSON.stringify(value));
 }
@@ -138,6 +183,12 @@ function renderMd(md) {
   t = t.replace(/^# (.*)$/gm, '<h1>$1</h1>');
   t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
   t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+    const safeSrc = safeMdSrc(src);
+    return safeSrc
+      ? `<img src="${safeSrc}" alt="${esc(alt)}" class="md-image" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />`
+      : esc(alt || '');
+  });
   
   // Render lists: match consecutive lines starting with - or * and format as <ul><li>
   t = t.replace(/((?:^\s*[-*]\s+.*(?:\n|$))+)/gm, (match) => {
@@ -158,6 +209,80 @@ function renderMd(md) {
   t = t.replace(/\n{2,}/g, '</p><p>');
   t = t.replace(/\n/g, '<br>');
   return `<div class="md-content"><p>${t}</p></div>`;
+}
+
+function problemStatementAssets(problem) {
+  const assets = problem && typeof problem.statement_assets === 'object' ? problem.statement_assets : {};
+  const markdowns = Array.isArray(assets.markdowns) ? assets.markdowns.filter(item => item && item.content) : [];
+  const pdfs = Array.isArray(assets.pdfs) ? assets.pdfs.filter(Boolean) : [];
+  const defaultId = assets.default_language || markdowns[0]?.id || 'default';
+  return { markdowns, pdfs, defaultId };
+}
+
+function problemActiveStatement(problem = state.currentProblem) {
+  const assets = problemStatementAssets(problem);
+  if (assets.markdowns.length === 0) return null;
+  const activeId = state.activeProblemStatementId || assets.defaultId;
+  return assets.markdowns.find(item => item.id === activeId) || assets.markdowns[0];
+}
+
+function renderProblemStatementSwitcher(problem = state.currentProblem) {
+  const assets = problemStatementAssets(problem);
+  if (assets.markdowns.length <= 1) return '';
+  const active = problemActiveStatement(problem);
+  return `
+    <div class="tabs" id="problemStatementSwitch" style="margin-bottom: var(--space-md); flex-wrap: wrap;">
+      ${assets.markdowns.map(item => `
+        <button class="tab ${active && active.id === item.id ? 'active' : ''}" onclick="switchProblemStatement(${jsArg(item.id)})">
+          ${esc(item.label || item.language || item.id)}
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function renderProblemStatementDownloads(problem = state.currentProblem) {
+  const assets = problemStatementAssets(problem);
+  const actions = [];
+  if (problem && problem.has_public_resources) {
+    actions.push(`
+      <a href="/api/problems/${esc(problem.slug)}/resources" target="_blank" class="btn btn-secondary btn-sm">
+        公共资源 ZIP
+      </a>
+    `);
+  }
+  assets.pdfs.forEach(item => {
+    actions.push(`
+      <a href="${esc(item.download_url)}" target="_blank" class="btn btn-secondary btn-sm">
+        PDF · ${esc(item.label || item.language || item.id)}
+      </a>
+    `);
+  });
+  if (actions.length === 0) return '';
+  return `<div class="row gap-sm" style="flex-wrap: wrap; margin-bottom: var(--space-md);">${actions.join('')}</div>`;
+}
+
+function renderProblemStatementBody(problem = state.currentProblem) {
+  const active = problemActiveStatement(problem);
+  if (!active) {
+    return emptyBox('该题当前仅提供 PDF 题面，请使用上方下载入口查看。');
+  }
+  return renderMd(rewriteProblemMarkdownAssets(active.content || '', problem));
+}
+
+function switchProblemStatement(statementId) {
+  state.activeProblemStatementId = statementId;
+  const switcher = $('problemStatementSwitchWrap');
+  if (switcher) switcher.innerHTML = renderProblemStatementSwitcher(state.currentProblem);
+  const body = $('problemStatementBody');
+  if (body) body.innerHTML = renderProblemStatementBody(state.currentProblem);
+}
+
+function problemSampleSubmissionLabel(problem) {
+  const name = String(problem?.sample_submission_filename || '').trim();
+  if (!name) return '下载示例提交';
+  const ext = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+  return ext ? `下载示例提交 (${ext})` : `下载示例提交 (${name})`;
 }
 
 function statusPill(s) {
@@ -953,6 +1078,8 @@ async function renderProblemDetail(slug, contestSlug = null) {
       loadProblemSubmissions(slug, contestSlug),
     ]);
     const subs = subsData.items || [];
+    state.currentProblem = problem;
+    state.activeProblemStatementId = problemStatementAssets(problem).defaultId;
 
     setPage(problem.title);
 
@@ -974,7 +1101,9 @@ async function renderProblemDetail(slug, contestSlug = null) {
           <div class="tab-panel active" id="tab-statement">
             <div class="card glass">
               <div class="card-body">
-                ${renderMd(problem.statement_md)}
+                <div id="problemStatementSwitchWrap">${renderProblemStatementSwitcher(problem)}</div>
+                ${renderProblemStatementDownloads(problem)}
+                <div id="problemStatementBody">${renderProblemStatementBody(problem)}</div>
               </div>
             </div>
           </div>
@@ -1097,8 +1226,13 @@ async function renderProblemDetail(slug, contestSlug = null) {
             <h3 class="card-title" style="margin-bottom: var(--space-sm); font-size: 13.5px; color: var(--text-secondary);">1. 研发阶段：下载解答包范例</h3>
             <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;">下载评测要求的目录规范与数据接口，用于本地编写预测算法。</p>
             <a href="/api/problems/${esc(slug)}/sample-submission" target="_blank" class="btn btn-secondary btn-sm full-width">
-              📥 下载示例提交 (.csv)
+              📥 ${esc(problemSampleSubmissionLabel(problem))}
             </a>
+            ${problem.has_public_resources ? `
+              <a href="/api/problems/${esc(slug)}/resources" target="_blank" class="btn btn-secondary btn-sm full-width mt-sm">
+                🗂 下载公共资源包
+              </a>
+            ` : ''}
           </div>
 
           <!-- Step 2: Upload Solution -->
@@ -2293,7 +2427,7 @@ async function renderSubmissionDetail(id) {
             ` : ''}
             ${sub.problem_slug ? `<a href="/problems/${esc(sub.problem_slug)}" class="btn btn-secondary w-full" data-link>回到题目工作区</a>` : ''}
             <button class="btn btn-secondary w-full" onclick="downloadSubmissionArtifact(${Number(id)}, 'source')">下载提交源码 (.zip)</button>
-            <button class="btn btn-primary w-full" onclick="downloadSubmissionArtifact(${Number(id)}, 'output')">📥 下载预测输出 (.csv)</button>
+            <button class="btn btn-primary w-full" onclick="downloadSubmissionArtifact(${Number(id)}, 'output')">📥 下载预测输出</button>
           </div>
         </div>
       </div>
@@ -2338,7 +2472,9 @@ async function downloadSubmissionArtifact(id, kind) {
     const a = document.createElement('a');
     const objectUrl = URL.createObjectURL(blob);
     a.href = objectUrl;
-    a.download = kind === 'source' ? `submission-${id}-source.zip` : `submission-${id}-output.csv`;
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/i);
+    a.download = match?.[1] || (kind === 'source' ? `submission-${id}-source.zip` : `submission-${id}-output.csv`);
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -3827,7 +3963,8 @@ async function renderProblemAdmin() {
           <h3 class="card-title">导入/更新题目压缩包</h3>
         </div>
         <div class="card-body">
-          <p class="text-muted" style="font-size: 13.5px; margin-bottom: 12px;">上传标准 ZIP 题目包，包内需包含 problem.yaml、statement.md、public 文件夹（包含公开评测资源）和 private 文件夹（包含最终测试资源）。</p>
+          <p class="text-muted" style="font-size: 13.5px; margin-bottom: 12px;">上传标准 ZIP 题目包。基础格式包含 <code>problem.yaml</code>、<code>public/</code>、<code>private/</code>；题面可放 <code>statement.md</code> 或 <code>statements/*.md|*.pdf</code>。</p>
+          <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">artifact 题包请将运行期输入放到 <code>private/input/</code>，将仅评分器可见的隐藏材料放到 <code>private/scoring/</code>。</p>
           <div class="row gap-md" style="flex-wrap: wrap;">
             <input type="file" id="problemZip" accept=".zip" style="width: auto; max-width: 320px;" />
             <button class="btn btn-primary" onclick="importProblem()">执行题包部署</button>

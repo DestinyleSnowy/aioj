@@ -5,11 +5,15 @@ import os
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 from sqlalchemy import text
 
-from app.storage import S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_text
+from app.services.problem_assets import normalize_output_files
+from app.storage import S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_bytes, get_text
+
+SCORER_TIMEOUT_SEC = int(os.environ.get("AIOJ_SCORER_TIMEOUT_SEC", "900"))
 
 
 def scorer_subprocess_env(temp_dir: Path) -> dict[str, str]:
@@ -20,6 +24,19 @@ def scorer_subprocess_env(temp_dir: Path) -> dict[str, str]:
         "TEMP": str(temp_dir),
         "TMP": str(temp_dir),
     }
+    passthrough_keys = (
+        "HF_HOME",
+        "HF_TOKEN",
+        "HUGGINGFACE_HUB_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
+    )
+    for key in passthrough_keys:
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
     # Windows Python startup needs SystemRoot; keep only non-secret runtime basics.
     if os.name == "nt" and os.environ.get("SystemRoot"):
         env["SystemRoot"] = os.environ["SystemRoot"]
@@ -93,12 +110,51 @@ def default_accuracy_score(prediction_csv: str, label_csv: str) -> dict:
     }
 
 
-def run_custom_scorer(scorer_code: str, prediction_csv: str, label_csv: str) -> dict:
+def _extract_zip_bytes(zip_bytes: bytes, dest: Path) -> None:
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+        archive.extractall(dest)
+
+
+def _copy_output_to_dir(root: Path, output_files: list[str], submission_artifact: bytes) -> Path:
+    submission_dir = root / "submission"
+    submission_dir.mkdir(parents=True, exist_ok=True)
+    if len(output_files) == 1:
+        (submission_dir / output_files[0]).parent.mkdir(parents=True, exist_ok=True)
+        (submission_dir / output_files[0]).write_bytes(submission_artifact)
+        return submission_dir
+
+    _extract_zip_bytes(submission_artifact, submission_dir)
+    return submission_dir
+
+
+def run_custom_scorer(
+    scorer_code: str,
+    prediction_csv: str | None = None,
+    label_csv: str | None = None,
+    *,
+    submission_artifact: bytes | None = None,
+    private_bundle: bytes | None = None,
+    public_bundle: bytes | None = None,
+    output_files: list[str] | None = None,
+) -> dict:
     with tempfile.TemporaryDirectory(prefix="aioj_scorer_") as td:
         root = Path(td)
         (root / "scorer.py").write_text(scorer_code, encoding="utf-8")
-        (root / "prediction.csv").write_text(prediction_csv, encoding="utf-8")
-        (root / "labels.csv").write_text(label_csv, encoding="utf-8")
+        if prediction_csv is not None:
+            (root / "prediction.csv").write_text(prediction_csv, encoding="utf-8")
+        if label_csv is not None:
+            (root / "labels.csv").write_text(label_csv, encoding="utf-8")
+        output_files = normalize_output_files(output_files)
+        if submission_artifact is not None:
+            _copy_output_to_dir(root, output_files, submission_artifact)
+        if private_bundle is not None:
+            private_dir = root / "private"
+            private_dir.mkdir(parents=True, exist_ok=True)
+            _extract_zip_bytes(private_bundle, private_dir)
+        if public_bundle is not None:
+            public_dir = root / "public"
+            public_dir.mkdir(parents=True, exist_ok=True)
+            _extract_zip_bytes(public_bundle, public_dir)
 
         runner = root / "run_scorer.py"
         runner.write_text(
@@ -111,10 +167,23 @@ spec = importlib.util.spec_from_file_location("scorer", "scorer.py")
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
-if not hasattr(mod, "score"):
-    raise RuntimeError("scorer.py must define score(prediction_csv, label_csv)")
+submission_dir = Path("submission").resolve()
+private_dir = Path("private").resolve()
+public_dir = Path("public").resolve()
+prediction_csv = Path("prediction.csv").resolve()
+labels_csv = Path("labels.csv").resolve()
 
-result = mod.score(str(Path("prediction.csv").resolve()), str(Path("labels.csv").resolve()))
+if submission_dir.exists() and hasattr(mod, "score_artifact"):
+    result = mod.score_artifact(
+        str(submission_dir),
+        str(private_dir) if private_dir.exists() else None,
+        str(public_dir) if public_dir.exists() else None,
+    )
+elif hasattr(mod, "score"):
+    result = mod.score(str(prediction_csv), str(labels_csv))
+else:
+    raise RuntimeError("scorer.py must define score(...) or score_artifact(...)")
+
 if not isinstance(result, dict):
     raise RuntimeError("score() must return a dict")
 
@@ -129,7 +198,7 @@ print(json.dumps(result, ensure_ascii=False))
             env=scorer_subprocess_env(root),
             text=True,
             capture_output=True,
-            timeout=20,
+            timeout=SCORER_TIMEOUT_SEC,
         )
 
         if proc.returncode != 0:
@@ -230,6 +299,11 @@ def evaluate_submission(conn, submission_id: int) -> None:
                 s.problem_id,
                 s.output_object_key,
                 pv.label_object_key,
+                pv.test_input_bundle_object_key,
+                pv.public_bundle_object_key,
+                pv.private_bundle_object_key,
+                pv.sample_bundle_object_key,
+                pv.output_files,
                 pv.scorer_object_key,
                 p.metric
             from submissions s
@@ -246,17 +320,50 @@ def evaluate_submission(conn, submission_id: int) -> None:
     if not row["output_object_key"]:
         raise ValueError("Submission has no output object")
 
-    prediction_csv = get_text(S3_BUCKET_SUBMISSIONS, row["output_object_key"])
-    label_csv = get_text(S3_BUCKET_PROBLEMS, row["label_object_key"])
+    output_files = normalize_output_files(row.get("output_files"))
+    artifact_mode = bool(
+        row.get("test_input_bundle_object_key")
+        or
+        row.get("public_bundle_object_key")
+        or row.get("private_bundle_object_key")
+        or row.get("sample_bundle_object_key")
+        or output_files != ["submission.csv"]
+        or str(row["output_object_key"]).endswith(".zip")
+    )
 
-    if row["scorer_object_key"]:
+    if artifact_mode and row["scorer_object_key"]:
+        submission_artifact = get_bytes(S3_BUCKET_SUBMISSIONS, row["output_object_key"])
+        private_bundle = (
+            get_bytes(S3_BUCKET_PROBLEMS, row["private_bundle_object_key"])
+            if row.get("private_bundle_object_key")
+            else None
+        )
+        public_bundle = (
+            get_bytes(S3_BUCKET_PROBLEMS, row["public_bundle_object_key"])
+            if row.get("public_bundle_object_key")
+            else None
+        )
         scorer_code = get_text(S3_BUCKET_PROBLEMS, row["scorer_object_key"])
-        result = run_custom_scorer(scorer_code, prediction_csv, label_csv)
+        result = run_custom_scorer(
+            scorer_code,
+            submission_artifact=submission_artifact,
+            private_bundle=private_bundle,
+            public_bundle=public_bundle,
+            output_files=output_files,
+        )
         result["metrics"].setdefault("metric", row["metric"])
-        result["metrics"].setdefault("scorer", "custom")
+        result["metrics"].setdefault("scorer", "custom_artifact")
     else:
-        result = default_accuracy_score(prediction_csv, label_csv)
-        result["metrics"].setdefault("scorer", "default_accuracy")
+        prediction_csv = get_text(S3_BUCKET_SUBMISSIONS, row["output_object_key"])
+        label_csv = get_text(S3_BUCKET_PROBLEMS, row["label_object_key"])
+        if row["scorer_object_key"]:
+            scorer_code = get_text(S3_BUCKET_PROBLEMS, row["scorer_object_key"])
+            result = run_custom_scorer(scorer_code, prediction_csv, label_csv)
+            result["metrics"].setdefault("metric", row["metric"])
+            result["metrics"].setdefault("scorer", "custom")
+        else:
+            result = default_accuracy_score(prediction_csv, label_csv)
+            result["metrics"].setdefault("scorer", "default_accuracy")
 
     # Check if this is a test run
     job_row = conn.execute(

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.dependencies import get_optional_user, require_admin, require_user
 from app.rate_limit import check_rate_limit, client_key
+from app.services.problem_assets import has_artifact_mode, normalize_output_files
 from app.services.problems import latest_problem_version
 from app.settings import settings
 from app.storage import S3_BUCKET_LOGS, S3_BUCKET_PROBLEMS, S3_BUCKET_SUBMISSIONS, get_bytes, get_text, put_bytes
@@ -148,8 +149,16 @@ async def create_submission(
         if not pv:
             raise HTTPException(status_code=404, detail="Problem not found")
 
+        output_files = normalize_output_files(pv.get("output_files"))
+        artifact_mode = has_artifact_mode(
+            test_input_bundle_object_key=pv.get("test_input_bundle_object_key"),
+            public_bundle_object_key=pv.get("public_bundle_object_key"),
+            private_bundle_object_key=pv.get("private_bundle_object_key"),
+            sample_bundle_object_key=pv.get("sample_bundle_object_key"),
+            output_files=output_files,
+        )
         source_key = "pending/source.zip"
-        output_key = "pending/output/submission.csv"
+        output_key = "pending/output/result.zip" if artifact_mode else "pending/output/submission.csv"
         log_key = "pending/logs/run.log"
 
         init_status = "TEST_QUEUED" if is_test_run else "QUEUED"
@@ -181,7 +190,7 @@ async def create_submission(
 
         submission_id = submission["id"]
         source_key = f"submissions/{submission_id}/source/source.zip"
-        output_key = f"submissions/{submission_id}/output/submission.csv"
+        output_key = f"submissions/{submission_id}/output/result.zip" if artifact_mode else f"submissions/{submission_id}/output/submission.csv"
         log_key = f"submissions/{submission_id}/logs/run.log"
 
         put_bytes(S3_BUCKET_SUBMISSIONS, source_key, data, "application/zip")
@@ -225,6 +234,13 @@ async def create_submission(
             "log_object_key": log_key,
             "test_input_bucket": S3_BUCKET_PROBLEMS,
             "test_input_object_key": pv["test_input_object_key"],
+            "test_input_bundle_bucket": S3_BUCKET_PROBLEMS if pv.get("test_input_bundle_object_key") else None,
+            "test_input_bundle_object_key": pv.get("test_input_bundle_object_key"),
+            "public_bundle_bucket": S3_BUCKET_PROBLEMS if pv.get("public_bundle_object_key") else None,
+            "public_bundle_object_key": pv.get("public_bundle_object_key"),
+            "private_bundle_bucket": S3_BUCKET_PROBLEMS if pv.get("private_bundle_object_key") else None,
+            "private_bundle_object_key": pv.get("private_bundle_object_key"),
+            "output_files": output_files,
             "is_test_run": is_test_run,
         }
 
@@ -414,16 +430,24 @@ def submission_output(submission_id: int, user=Depends(get_optional_user)):
     submission = _get_submission_detail(submission_id, user)
     if not submission.get("output_object_key"):
         raise HTTPException(status_code=404, detail="Submission has no output file")
+    key = str(submission["output_object_key"])
     try:
-        content = get_text(S3_BUCKET_SUBMISSIONS, submission["output_object_key"])
+        if key.endswith(".zip"):
+            content = get_bytes(S3_BUCKET_SUBMISSIONS, key)
+            return Response(
+                content=content,
+                media_type="application/zip",
+                headers={"Content-Disposition": f'attachment; filename="submission-{submission_id}-output.zip"'},
+            )
+
+        content = get_text(S3_BUCKET_SUBMISSIONS, key)
+        return Response(
+            content=content,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="submission-{submission_id}-output.csv"'},
+        )
     except Exception as exc:
         raise HTTPException(status_code=404, detail=f"Output file not found: {exc}") from exc
-
-    return Response(
-        content=content,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="submission-{submission_id}-output.csv"'},
-    )
 
 
 @router.get("/api/submissions/{submission_id}/source")

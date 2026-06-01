@@ -201,9 +201,10 @@ def run_job(job):
 
     workspace = run_dir / "workspace"
     input_dir = run_dir / "input"
+    public_dir = run_dir / "public"
     output_dir = run_dir / "output"
     logs_dir = run_dir / "logs"
-    for p in [workspace, input_dir, output_dir, logs_dir]:
+    for p in [workspace, input_dir, public_dir, output_dir, logs_dir]:
         p.mkdir(parents=True, exist_ok=True)
 
     os.chmod(run_dir, 0o755)
@@ -213,6 +214,8 @@ def run_job(job):
     log_path = logs_dir / "run.log"
     source_zip = run_dir / "source.zip"
     test_csv = input_dir / "test.csv"
+    public_bundle_zip = run_dir / "public_bundle.zip"
+    private_bundle_zip = run_dir / "private_bundle.zip"
 
     s3 = s3_client()
 
@@ -229,7 +232,18 @@ def run_job(job):
             write("downloading source and test input...")
 
             download_object(s3, spec["source_bucket"], spec["source_object_key"], source_zip)
-            download_object(s3, spec["test_input_bucket"], spec["test_input_object_key"], test_csv)
+            if spec.get("test_input_bundle_object_key"):
+                download_object(s3, spec["test_input_bundle_bucket"], spec["test_input_bundle_object_key"], private_bundle_zip)
+                safe_extract(private_bundle_zip, input_dir)
+            elif spec.get("private_bundle_object_key"):
+                download_object(s3, spec["private_bundle_bucket"], spec["private_bundle_object_key"], private_bundle_zip)
+                safe_extract(private_bundle_zip, input_dir)
+            else:
+                download_object(s3, spec["test_input_bucket"], spec["test_input_object_key"], test_csv)
+
+            if spec.get("public_bundle_object_key"):
+                download_object(s3, spec["public_bundle_bucket"], spec["public_bundle_object_key"], public_bundle_zip)
+                safe_extract(public_bundle_zip, public_dir)
 
             write("extracting source.zip...")
             safe_extract(source_zip, workspace)
@@ -279,6 +293,8 @@ def run_job(job):
                     "-v",
                     f"{docker_bind_path(input_dir)}:/input:ro",
                     "-v",
+                    f"{docker_bind_path(public_dir)}:/public:ro",
+                    "-v",
                     f"{docker_bind_path(output_dir)}:/output",
                     runner_image,
                     *run_command,
@@ -310,16 +326,18 @@ def run_job(job):
                 is_windows = (os.name == "nt")
                 ws_link = Path("/workspace")
                 in_link = Path("/input")
+                pub_link = Path("/public")
                 out_link = Path("/output")
                 
                 if is_windows:
                     drive = workspace.anchor
                     ws_link = Path(drive) / "workspace"
                     in_link = Path(drive) / "input"
+                    pub_link = Path(drive) / "public"
                     out_link = Path(drive) / "output"
                 
                 # Setup links
-                for link, target in [(ws_link, workspace), (in_link, input_dir), (out_link, output_dir)]:
+                for link, target in [(ws_link, workspace), (in_link, input_dir), (pub_link, public_dir), (out_link, output_dir)]:
                     if link.exists() or (not is_windows and link.is_symlink()):
                         try:
                             if is_windows:
@@ -349,6 +367,10 @@ def run_job(job):
                         local_cmd.append(str(input_dir / arg[len("/input/"):]))
                     elif arg == "/input":
                         local_cmd.append(str(input_dir))
+                    elif arg.startswith("/public/"):
+                        local_cmd.append(str(public_dir / arg[len("/public/"):]))
+                    elif arg == "/public":
+                        local_cmd.append(str(public_dir))
                     elif arg.startswith("/output/"):
                         local_cmd.append(str(output_dir / arg[len("/output/"):]))
                     elif arg == "/output":
@@ -373,7 +395,7 @@ def run_job(job):
                     )
                 finally:
                     # Clean up links
-                    for link in [ws_link, in_link, out_link]:
+                    for link in [ws_link, in_link, pub_link, out_link]:
                         if link.exists() or (not is_windows and link.is_symlink()):
                             try:
                                 if is_windows:
@@ -399,18 +421,39 @@ def run_job(job):
             if proc.stderr and not proc.stderr.endswith("\n"):
                 log.write("\n")
 
-            output_file = output_dir / "submission.csv"
             if proc.returncode != 0:
                 raise RuntimeError(f"process exited with code {proc.returncode}")
 
-            if not output_file.exists():
-                raise RuntimeError("output/submission.csv was not created")
+            expected_output_files = spec.get("output_files") or ["submission.csv"]
+            missing_outputs = []
+            for relative_path in expected_output_files:
+                if not (output_dir / relative_path).exists():
+                    missing_outputs.append(relative_path)
+            if missing_outputs:
+                raise RuntimeError("Missing output files: " + ", ".join(missing_outputs))
 
-            if output_file.stat().st_size > output_limit_mb * 1024 * 1024:
+            artifact_mode = bool(
+                spec.get("public_bundle_object_key")
+                or spec.get("private_bundle_object_key")
+                or expected_output_files != ["submission.csv"]
+                or str(spec.get("output_object_key") or "").endswith(".zip")
+            )
+            output_file = output_dir / "submission.csv"
+            upload_path = output_file
+            upload_type = "text/csv"
+            if artifact_mode:
+                upload_path = run_dir / "result.zip"
+                with zipfile.ZipFile(upload_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for child in sorted(output_dir.rglob("*")):
+                        if child.is_file():
+                            archive.write(child, arcname=child.relative_to(output_dir).as_posix())
+                upload_type = "application/zip"
+
+            if upload_path.stat().st_size > output_limit_mb * 1024 * 1024:
                 raise RuntimeError(f"output too large; limit is {output_limit_mb} MB")
 
             write("uploading output and logs...")
-            upload_object(s3, spec["output_bucket"], spec["output_object_key"], output_file, "text/csv")
+            upload_object(s3, spec["output_bucket"], spec["output_object_key"], upload_path, upload_type)
             upload_object(s3, spec["log_bucket"], spec["log_object_key"], log_path, "text/plain")
 
             result = finish_job(job_id, "RUN_FINISHED", attempt=attempt, runtime_ms=runtime_ms)

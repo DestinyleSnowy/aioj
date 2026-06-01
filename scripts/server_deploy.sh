@@ -27,6 +27,11 @@ if [ -f "judge-images/python-basic/Dockerfile" ]; then
   docker build -t aioj-python-basic:latest judge-images/python-basic
 fi
 
+if [ -f "judge-images/python-ioai-cpu/Dockerfile" ]; then
+  echo "[deploy] building IOAI CPU judge image..."
+  docker build -t aioj-python-ioai-cpu:latest judge-images/python-ioai-cpu
+fi
+
 echo "[deploy] starting stateful dependencies..."
 docker compose up -d postgres redis minio
 

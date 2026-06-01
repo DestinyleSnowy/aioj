@@ -3,8 +3,9 @@ from typing import Any
 
 from sqlalchemy import text
 
+from app.services.problem_assets import normalize_output_files, parse_statement_assets
 from app.services.evaluation import default_accuracy_score, run_custom_scorer
-from app.storage import S3_BUCKET_PROBLEMS, get_text
+from app.storage import S3_BUCKET_PROBLEMS, get_bytes, get_text
 
 VERSION_STATUSES = {"DRAFT", "ACTIVE", "ARCHIVED"}
 SELF_TEST_STATUSES = {"PENDING", "PASSED", "FAILED"}
@@ -46,6 +47,8 @@ def problem_version_summary(row) -> dict[str, Any]:
     data["run_command"] = parse_jsonish(data.get("run_command"), [])
     data["required_tags"] = list(data.get("required_tags") or [])
     data["self_test_result"] = parse_jsonish(data.get("self_test_result"), None)
+    data["statement_assets_json"] = parse_statement_assets(parse_jsonish(data.get("statement_assets_json"), {}))
+    data["output_files"] = normalize_output_files(parse_jsonish(data.get("output_files"), ["submission.csv"]))
     data["is_active"] = data.get("active_version_id") == data.get("id")
     return data
 
@@ -93,14 +96,34 @@ def run_problem_version_self_test(conn, slug: str, version_id: int) -> dict[str,
     private_score = None
 
     try:
-        sample_submission_csv = get_text(S3_BUCKET_PROBLEMS, row["sample_submission_object_key"])
-        label_csv = get_text(S3_BUCKET_PROBLEMS, row["label_object_key"])
+        output_files = normalize_output_files(parse_jsonish(row.get("output_files"), ["submission.csv"]))
 
-        if row.get("scorer_object_key"):
+        if row.get("sample_bundle_object_key"):
+            sample_bundle = get_bytes(S3_BUCKET_PROBLEMS, row["sample_bundle_object_key"])
+            private_bundle = get_bytes(S3_BUCKET_PROBLEMS, row["private_bundle_object_key"])
+            public_bundle = (
+                get_bytes(S3_BUCKET_PROBLEMS, row["public_bundle_object_key"])
+                if row.get("public_bundle_object_key")
+                else None
+            )
+            scorer_code = get_text(S3_BUCKET_PROBLEMS, row["scorer_object_key"])
+            score_result = run_custom_scorer(
+                scorer_code,
+                submission_artifact=sample_bundle,
+                private_bundle=private_bundle,
+                public_bundle=public_bundle,
+                output_files=output_files,
+            )
+            checks["scorer_mode"] = "custom_artifact"
+        elif row.get("scorer_object_key"):
+            sample_submission_csv = get_text(S3_BUCKET_PROBLEMS, row["sample_submission_object_key"])
+            label_csv = get_text(S3_BUCKET_PROBLEMS, row["label_object_key"])
             scorer_code = get_text(S3_BUCKET_PROBLEMS, row["scorer_object_key"])
             score_result = run_custom_scorer(scorer_code, sample_submission_csv, label_csv)
             checks["scorer_mode"] = "custom"
         else:
+            sample_submission_csv = get_text(S3_BUCKET_PROBLEMS, row["sample_submission_object_key"])
+            label_csv = get_text(S3_BUCKET_PROBLEMS, row["label_object_key"])
             score_result = default_accuracy_score(sample_submission_csv, label_csv)
             checks["scorer_mode"] = "default_accuracy"
 
