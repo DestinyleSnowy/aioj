@@ -84,7 +84,10 @@ async function api(path, options = {}) {
     const detail = typeof payload === 'object'
       ? (payload.detail || payload.message || JSON.stringify(payload))
       : payload;
-    throw new Error(detail || `${res.status} ${res.statusText}`);
+    const err = new Error(detail || `${res.status} ${res.statusText}`);
+    err.status = res.status;
+    err.payload = payload;
+    throw err;
   }
   return payload;
 }
@@ -92,7 +95,12 @@ async function api(path, options = {}) {
 async function tryApi(paths, options = {}) {
   let lastErr;
   for (const p of paths) {
-    try { return await api(p, options); } catch (e) { lastErr = e; }
+    try {
+      return await api(p, options);
+    } catch (e) {
+      lastErr = e;
+      if ((e?.status || 0) !== 404) throw e;
+    }
   }
   throw lastErr || new Error('No API candidates');
 }
@@ -4232,6 +4240,9 @@ async function renderContestAdmin() {
                     <div class="row gap-xs" style="justify-content: flex-end; flex-wrap: wrap;">
                       <a href="/contests/${esc(c.slug)}" class="btn btn-secondary btn-sm" data-link>前台页</a>
                       <button class="btn btn-secondary btn-sm" onclick="showContestSettingsModal('${esc(c.slug)}')">规则设置</button>
+                      <button class="btn btn-secondary btn-sm" onclick="setContestStatus('${esc(c.slug)}', 'PUBLIC')">发布公开</button>
+                      <button class="btn btn-secondary btn-sm" onclick="setContestStatus('${esc(c.slug)}', 'DRAFT')">草稿锁定</button>
+                      <button class="btn btn-danger btn-sm" onclick="setContestStatus('${esc(c.slug)}', 'ARCHIVED')">封存归档</button>
                       <button class="btn btn-secondary btn-sm" onclick="showRegistrationModal('${esc(c.slug)}')">选手审核</button>
                       <button class="btn btn-secondary btn-sm" onclick="showAnnouncementModal('${esc(c.slug)}')">发公告</button>
                       <button class="btn btn-ghost btn-sm" style="color: var(--color-primary);" onclick="window.open('/api/admin/contests/${esc(c.slug)}/registrations.csv')">选手CSV</button>
@@ -4274,6 +4285,14 @@ function showCreateContestModal() {
           <label for="cEnd">竞赛封榜/结束时间</label>
           <input type="datetime-local" id="cEnd" />
         </div>
+        <div class="form-group" style="flex: 1; min-width: 220px;">
+          <label for="cStatus">竞赛发布状态</label>
+          <select id="cStatus">
+            <option value="PUBLIC">PUBLIC (立即可见)</option>
+            <option value="DRAFT">DRAFT (仅后台可见)</option>
+            <option value="ARCHIVED">ARCHIVED (封存)</option>
+          </select>
+        </div>
       </div>
       <div class="form-group">
         <label for="cProblems">绑定赛题标识 (用半角逗号“,”或换行分隔，题目需先在题库部署完成)</label>
@@ -4298,6 +4317,7 @@ async function createContest() {
   if (!slug || !title) { toast('请填写竞赛 Slug 和显示名称！', 'warning'); return; }
   const startAt = $('cStart')?.value ? new Date($('cStart').value).toISOString() : undefined;
   const endAt = $('cEnd')?.value ? new Date($('cEnd').value).toISOString() : undefined;
+  const status = ($('cStatus')?.value || 'PUBLIC').trim().toUpperCase();
   const problemSlugs = ($('cProblems')?.value || '').split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
   const desc = $('cDesc')?.value || '';
   try {
@@ -4305,7 +4325,7 @@ async function createContest() {
       method: 'POST',
       headers: { ...authHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        slug, title, description_md: desc,
+        slug, title, status, description_md: desc,
         start_at: startAt, end_at: endAt,
         problem_slugs: problemSlugs,
       }),
@@ -4316,6 +4336,20 @@ async function createContest() {
   } catch (err) {
     const el = $('createContestError');
     if (el) { el.style.display = ''; el.textContent = err.message; }
+  }
+}
+
+async function setContestStatus(slug, status) {
+  try {
+    await api(`/api/admin/contests/${slug}/status`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    });
+    toast(`竞赛状态已切换为 ${status}`, 'success');
+    renderContestAdmin();
+  } catch (err) {
+    toast(err.message, 'error');
   }
 }
 
@@ -5274,7 +5308,7 @@ Object.assign(window, {
   toggleUserRole, toggleUserDisabled,
   importProblem, setProblemStatus, showProblemVersionsModal, rerunProblemVersionSelfTest,
   activateProblemVersion, setProblemVersionStatus,
-  showCreateContestModal, createContest,
+  showCreateContestModal, createContest, setContestStatus,
   showContestSettingsModal, saveContestSettings,
   showRegistrationModal, setRegStatus, bulkAddUsers,
   showAnnouncementModal, publishAnnouncement,

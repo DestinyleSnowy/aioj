@@ -7,11 +7,14 @@ import shutil
 import textwrap
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
+from urllib.request import urlopen
 
 import numpy as np
 
 
 RUNNER_IMAGE = "aioj-python-ioai-cpu:latest"
+PIXEL_REF_DATASET = "IOAI-official/IOAI-2025-Pixel-ref"
 STOP_HEADINGS = {
     "### data loading",
     "### dependencies and config variables",
@@ -534,14 +537,14 @@ def pixel_scorer() -> str:
         DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
-        def read_masks(mask_file_path: Path) -> dict[int, list[list[int]]]:
+        def read_masks(mask_file_path: Path) -> dict[str, list[list[int]]]:
             masks = {}
             with mask_file_path.open("r", encoding="utf-8") as handle:
                 for line in handle:
                     if not line.strip():
                         continue
                     data = json.loads(line)
-                    masks[int(data["idx"])] = data["coordinates"]
+                    masks[str(data["idx"])] = data["coordinates"]
             return masks
 
 
@@ -614,7 +617,7 @@ def pixel_scorer() -> str:
                 correct = 0
                 total = 0
                 for item in items:
-                    coordinates = masks.get(int(item["idx"]))
+                    coordinates = masks.get(str(item["idx"]))
                     total += 1
                     if not coordinates or not valid_coordinates(coordinates):
                         continue
@@ -669,7 +672,7 @@ TASKS = [
         "title": "IOAI 2025 - Chicken Counting",
         "metric": "density_similarity",
         "higher_is_better": True,
-        "time_limit_sec": 5400,
+        "time_limit_sec": 3600,
         "memory_limit_mb": 12288,
         "cpu_count": 4,
         "output_limit_mb": 256,
@@ -691,7 +694,7 @@ TASKS = [
         "title": "IOAI 2025 - Concepts",
         "metric": "guess_score",
         "higher_is_better": True,
-        "time_limit_sec": 5400,
+        "time_limit_sec": 3600,
         "memory_limit_mb": 8192,
         "cpu_count": 4,
         "output_limit_mb": 128,
@@ -831,8 +834,40 @@ def build_antique(task_dir: Path, package_dir: Path) -> None:
     copy_file(task_dir / "Scoring" / "label.csv", package_dir / "private" / "scoring" / "label.csv")
 
 
+_pixel_ref_ids_cache: list[str] | None = None
+
+
+def fetch_pixel_ref_ids() -> list[str]:
+    global _pixel_ref_ids_cache
+    if _pixel_ref_ids_cache is not None:
+        return _pixel_ref_ids_cache
+    rows: list[str] = []
+    page_size = 100
+    dataset = quote(PIXEL_REF_DATASET, safe="")
+    offset = 0
+    while True:
+        url = (
+            "https://datasets-server.huggingface.co/rows"
+            f"?dataset={dataset}&config=default&split=ref&offset={offset}&length={page_size}"
+        )
+        with urlopen(url, timeout=30) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        batch = [str(item["row"]["idx"]) for item in payload.get("rows", [])]
+        if not batch:
+            break
+        rows.extend(batch)
+        total = int(payload.get("num_rows_total") or len(rows))
+        offset += len(batch)
+        if offset >= total:
+            break
+    if not rows:
+        raise RuntimeError("Unable to fetch Pixel reference ids for sample submission generation.")
+    _pixel_ref_ids_cache = rows
+    return rows
+
+
 def build_pixel(task_dir: Path, package_dir: Path) -> None:
-    sample_rows = [{"idx": idx, "coordinates": [[0, 0], [14, 14]]} for idx in range(100)]
+    sample_rows = [{"idx": idx, "coordinates": [[0, 0], [14, 14]]} for idx in fetch_pixel_ref_ids()]
     write_jsonl(package_dir / "public" / "sample_submission.jsonl", sample_rows)
     ensure_placeholder(package_dir / "private" / "input", "Pixel uses hidden Hugging Face evaluation data at runtime.")
     ensure_placeholder(package_dir / "private" / "scoring", "No local scoring assets are bundled; scorer downloads the official model and dataset.")
