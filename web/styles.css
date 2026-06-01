@@ -2391,6 +2391,14 @@ tr:last-child td {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+  position: relative;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.message-composer.dragover,
+.message-modal-dropzone.dragover {
+  background: hsla(var(--hue-accent), 85%, 63%, 0.08);
+  box-shadow: inset 0 0 0 1px hsla(var(--hue-accent), 85%, 63%, 0.32);
 }
 
 .message-composer textarea {
@@ -2398,8 +2406,36 @@ tr:last-child td {
   min-height: 84px;
 }
 
+.message-composer-hint {
+  font-size: 12px;
+}
+
 .message-file-button {
   cursor: pointer;
+}
+
+.message-modal-dropzone {
+  position: relative;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.message-drop-banner {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px dashed hsla(var(--hue-accent), 85%, 63%, 0.32);
+  border-radius: var(--radius-md);
+  background: hsla(var(--hue-accent), 85%, 63%, 0.06);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.message-composer.dragover .message-drop-banner,
+.message-modal-dropzone.dragover .message-drop-banner {
+  display: flex;
 }
 
 .message-empty-panel {

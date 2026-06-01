@@ -34,9 +34,11 @@ const state = {
   messageUnreadCount: 0,
   messageRefreshTimer: null,
   messageRefreshInFlight: false,
+  newMessagePendingFiles: [],
 };
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
+const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
 
 function setPage(title) {
   $('pageTitle').textContent = title || 'AIOJ';
@@ -2475,6 +2477,117 @@ function formatFileSize(bytes) {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function normalizeMessageFiles(files) {
+  return Array.from(files || []).filter((file) => file && typeof file.size === 'number');
+}
+
+function extractMessageFiles(transfer) {
+  const directFiles = normalizeMessageFiles(transfer?.files);
+  if (directFiles.length) return directFiles;
+  return Array.from(transfer?.items || [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+}
+
+function summarizeMessageFiles(files) {
+  const selectedFiles = normalizeMessageFiles(files);
+  if (!selectedFiles.length) return '';
+  if (selectedFiles.length === 1) {
+    const [file] = selectedFiles;
+    return `${file.name || '未命名文件'} (${formatFileSize(file.size) || '0 B'})`;
+  }
+  const totalBytes = selectedFiles.reduce((sum, file) => sum + Number(file.size || 0), 0);
+  return `已选择 ${selectedFiles.length} 个文件 (${formatFileSize(totalBytes) || '0 B'})`;
+}
+
+function getInvalidMessageFile(files) {
+  return normalizeMessageFiles(files).find((file) => !isAllowedMessageFile(file));
+}
+
+function messageFileValidationError(files) {
+  const invalidFile = getInvalidMessageFile(files);
+  if (!invalidFile) return '';
+  if (invalidFile.size <= 0) return `文件 ${invalidFile.name || '未命名文件'} 为空。`;
+  if (invalidFile.size > MESSAGE_FILE_SIZE_LIMIT_BYTES) return `文件 ${invalidFile.name || '未命名文件'} 超过 20 MB。`;
+  return '请选择 20 MB 以内的文件。';
+}
+
+function setInputFiles(input, files) {
+  if (!input) return;
+  try {
+    const dt = new DataTransfer();
+    normalizeMessageFiles(files).forEach((file) => dt.items.add(file));
+    input.files = dt.files;
+  } catch {
+    // Older browsers may not allow synthetic FileList assignment.
+  }
+}
+
+function bindMessageDropZone(element, onFiles) {
+  if (!element) return;
+  let dragDepth = 0;
+  const show = () => element.classList.add('dragover');
+  const hide = () => element.classList.remove('dragover');
+
+  element.addEventListener('dragenter', (event) => {
+    const files = extractMessageFiles(event.dataTransfer);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth += 1;
+    show();
+  });
+
+  element.addEventListener('dragover', (event) => {
+    const files = extractMessageFiles(event.dataTransfer);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    show();
+  });
+
+  element.addEventListener('dragleave', (event) => {
+    if (!event.dataTransfer) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) hide();
+  });
+
+  element.addEventListener('drop', (event) => {
+    const files = extractMessageFiles(event.dataTransfer);
+    if (!files.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragDepth = 0;
+    hide();
+    onFiles(files);
+  });
+}
+
+async function uploadDirectMessageFiles({ recipientId = null, recipient = '', body = '', files = [] }) {
+  const selectedFiles = normalizeMessageFiles(files);
+  if (!selectedFiles.length) throw new Error('请选择要发送的文件。');
+
+  let lastResponse = null;
+  for (const [index, file] of selectedFiles.entries()) {
+    const fd = new FormData();
+    if (recipientId) {
+      fd.append('recipient_id', String(recipientId));
+    } else {
+      fd.append('recipient', recipient);
+    }
+    fd.append('body_md', index === 0 ? body : '');
+    fd.append('file', file);
+    lastResponse = await api('/api/messages/files', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+  }
+  return lastResponse;
+}
+
 function messagePreview(text, limit = 96, attachmentContentType = '') {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
   const attachmentLabel = attachmentContentType
@@ -2629,6 +2742,10 @@ async function renderMessages(peerId = null, options = {}) {
       </div>
     `;
 
+    if (selectedPeerId && activePeer) {
+      initMessageComposerInteractions(selectedPeerId);
+    }
+
     setTimeout(() => {
       restoreMessageViewState(viewState);
       hydrateMessageAttachments();
@@ -2690,13 +2807,14 @@ function renderMessageThread(peer, messages) {
       }).join('')}
     </div>
 
-    <div class="message-composer">
+    <div class="message-composer" id="messageComposerWrap">
       <textarea id="messageComposer" rows="3" maxlength="4000" placeholder="输入私信内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${peerId})"></textarea>
+      <div class="message-drop-banner">松开以上传文件</div>
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
-        <span class="text-muted" style="font-size: 12px;">最长 4000 字符</span>
+        <span class="text-muted message-composer-hint">最长 4000 字符 · 支持拖拽或粘贴文件，单个最大 20 MB</span>
         <div class="row gap-sm" style="flex-wrap: wrap;">
           <label class="btn btn-secondary message-file-button" for="messageFileInput">文件</label>
-          <input type="file" id="messageFileInput" style="display:none" onchange="sendFileToPeer(${peerId}, this)" />
+          <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${peerId}, this)" />
           <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${peerId})">发送</button>
         </div>
       </div>
@@ -2797,6 +2915,7 @@ function handleMessageComposerKeydown(event, peerId) {
 }
 
 function showNewMessageModal() {
+  state.newMessagePendingFiles = [];
   const body = `
     <input type="hidden" id="newMessageRecipientId" />
     <div class="form-group">
@@ -2808,10 +2927,11 @@ function showNewMessageModal() {
       <label for="newMessageBody">私信内容</label>
       <textarea id="newMessageBody" rows="6" maxlength="4000" placeholder="请输入要发送的内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleNewMessageKeydown(event)"></textarea>
     </div>
-    <div class="form-group">
+    <div class="form-group message-modal-dropzone" id="newMessageDropZone">
       <label for="newMessageFile">文件</label>
-      <input type="file" id="newMessageFile" onchange="updateNewMessageFileLabel(this)" />
-      <div id="newMessageFileLabel" class="text-muted" style="font-size: 12px; margin-top: 6px;">支持任意文件，最大 20 MB；图片会直接预览。</div>
+      <input type="file" id="newMessageFile" multiple onchange="updateNewMessageFileLabel(this)" />
+      <div id="newMessageFileLabel" class="text-muted" style="font-size: 12px; margin-top: 6px;">支持任意文件，最大 20 MB；可拖拽到此处，或在输入框里粘贴文件。</div>
+      <div class="message-drop-banner">松开以附加文件</div>
     </div>
     <div id="newMessageError" class="notice error" style="display:none"></div>
   `;
@@ -2820,14 +2940,18 @@ function showNewMessageModal() {
     <button class="btn btn-primary" id="newMessageSendBtn" onclick="sendNewMessage()">发送私信</button>
   `;
   openModal({ title: '写私信', body, footer });
-  setTimeout(() => $('messageRecipient')?.focus(), 50);
+  setTimeout(() => {
+    $('messageRecipient')?.focus();
+    initNewMessageComposerInteractions();
+  }, 50);
 }
 
-function updateNewMessageFileLabel(input) {
+function updateNewMessageFileLabel(input, explicitFiles = null) {
   const label = $('newMessageFileLabel');
-  const file = input?.files?.[0];
-  if (!label || !file) return;
-  label.textContent = `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
+  const files = normalizeMessageFiles(explicitFiles || input?.files);
+  state.newMessagePendingFiles = files;
+  if (!label) return;
+  label.textContent = summarizeMessageFiles(files) || '支持任意文件，最大 20 MB；可拖拽到此处，或在输入框里粘贴文件。';
 }
 
 function handleNewMessageKeydown(event) {
@@ -2890,37 +3014,31 @@ async function sendNewMessage() {
   const recipientId = $('newMessageRecipientId')?.value;
   const recipient = $('messageRecipient')?.value.trim();
   const body = $('newMessageBody')?.value.trim();
-  const attachedFile = $('newMessageFile')?.files?.[0];
+  const attachedFiles = normalizeMessageFiles(state.newMessagePendingFiles.length ? state.newMessagePendingFiles : $('newMessageFile')?.files);
 
   if (!recipient && !recipientId) {
     if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写收件人。'; }
     return;
   }
-  if (!body && !attachedFile) {
+  if (!body && !attachedFiles.length) {
     if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写私信内容或选择文件。'; }
     return;
   }
-  if (attachedFile && !isAllowedMessageFile(attachedFile)) {
-    if (errEl) { errEl.style.display = ''; errEl.textContent = '请选择 20 MB 以内的文件。'; }
+  const fileError = messageFileValidationError(attachedFiles);
+  if (fileError) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = fileError; }
     return;
   }
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
     let data;
-    if (attachedFile) {
-      const fd = new FormData();
-      fd.append('body_md', body || '');
-      fd.append('file', attachedFile);
-      if (recipientId) {
-        fd.append('recipient_id', recipientId);
-      } else {
-        fd.append('recipient', recipient);
-      }
-      data = await api('/api/messages/files', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
+    if (attachedFiles.length) {
+      data = await uploadDirectMessageFiles({
+        recipientId: recipientId ? Number(recipientId) : null,
+        recipient,
+        body: body || '',
+        files: attachedFiles,
       });
     } else {
       const payload = { body_md: body };
@@ -2936,6 +3054,7 @@ async function sendNewMessage() {
       });
     }
     closeModal();
+    state.newMessagePendingFiles = [];
     toast('私信已发送', 'success');
     const peerId = data.peer?.id || data.message?.recipient_id;
     openMessageConversation(peerId);
@@ -2973,35 +3092,86 @@ async function sendMessageToPeer(peerId) {
 
 function isAllowedMessageFile(file) {
   if (!file) return false;
-  return file.size > 0 && file.size <= 20 * 1024 * 1024;
+  return file.size > 0 && file.size <= MESSAGE_FILE_SIZE_LIMIT_BYTES;
 }
 
 async function sendFileToPeer(peerId, input) {
-  const file = input?.files?.[0];
-  if (!file) return;
-  if (!isAllowedMessageFile(file)) {
+  const files = normalizeMessageFiles(input?.files);
+  if (!files.length) return;
+  const fileError = messageFileValidationError(files);
+  if (fileError) {
     input.value = '';
-    toast('请选择 20 MB 以内的文件。', 'warning');
+    toast(fileError, 'warning');
+    return;
+  }
+
+  await sendFilesToPeer(peerId, files, { input });
+}
+
+function initMessageComposerInteractions(peerId) {
+  const composer = $('messageComposer');
+  const composerWrap = $('messageComposerWrap');
+  if (!composer || !composerWrap) return;
+
+  composer.addEventListener('paste', (event) => {
+    const files = extractMessageFiles(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    void sendFilesToPeer(peerId, files);
+  });
+
+  bindMessageDropZone(composerWrap, (files) => {
+    void sendFilesToPeer(peerId, files);
+  });
+}
+
+function initNewMessageComposerInteractions() {
+  const composer = $('newMessageBody');
+  const dropZone = $('newMessageDropZone');
+  const input = $('newMessageFile');
+  if (!composer || !dropZone || !input) return;
+
+  composer.addEventListener('paste', (event) => {
+    const files = extractMessageFiles(event.clipboardData);
+    if (!files.length) return;
+    event.preventDefault();
+    setInputFiles(input, files);
+    updateNewMessageFileLabel(input, files);
+  });
+
+  bindMessageDropZone(dropZone, (files) => {
+    setInputFiles(input, files);
+    updateNewMessageFileLabel(input, files);
+  });
+}
+
+async function sendFilesToPeer(peerId, files, options = {}) {
+  const selectedFiles = normalizeMessageFiles(files);
+  if (!selectedFiles.length) return;
+  const fileError = messageFileValidationError(selectedFiles);
+  if (fileError) {
+    if (options.input) options.input.value = '';
+    toast(fileError, 'warning');
     return;
   }
 
   const textarea = $('messageComposer');
   const btn = $('sendMessageBtn');
+  const input = options.input || $('messageFileInput');
   const caption = textarea?.value.trim() || '';
-  const fd = new FormData();
-  fd.append('recipient_id', String(peerId));
-  fd.append('body_md', caption);
-  fd.append('file', file);
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
-    await api('/api/messages/files', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: fd,
+    await uploadDirectMessageFiles({
+      recipientId: Number(peerId),
+      body: caption,
+      files: selectedFiles,
     });
     if (textarea) textarea.value = '';
-    input.value = '';
+    if (input) input.value = '';
+    if (selectedFiles.length > 1) {
+      toast(`已发送 ${selectedFiles.length} 个文件`, 'success');
+    }
     await refreshMessages(peerId);
   } catch (err) {
     toast(`文件发送失败: ${err.message}`, 'error');
