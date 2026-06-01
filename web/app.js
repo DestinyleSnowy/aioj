@@ -34,6 +34,8 @@ const state = {
   messageUnreadCount: 0,
   messageRefreshTimer: null,
   messageRefreshInFlight: false,
+  messageRenderKey: '',
+  messageRenderPeerId: 0,
   newMessagePendingFiles: [],
 };
 
@@ -253,6 +255,8 @@ function stopMessageAutoRefresh() {
     state.messageRefreshTimer = null;
   }
   state.messageRefreshInFlight = false;
+  state.messageRenderKey = '';
+  state.messageRenderPeerId = 0;
 }
 
 function updateNav() {
@@ -2603,6 +2607,39 @@ function messagePeerInitial(name) {
   return esc(String(name || '?').slice(0, 1).toUpperCase());
 }
 
+function buildMessageRenderKey(conversations, selectedPeerId, threadItems = []) {
+  const conversationKey = (conversations || []).map((item) => [
+    item.peer_id || '',
+    item.last_sender_id || '',
+    item.last_created_at || '',
+    item.unread_count || 0,
+    item.last_has_attachment ? 1 : 0,
+    item.last_attachment_content_type || '',
+    String(item.last_body_md || '').slice(0, 64),
+  ].join(':')).join('|');
+
+  const threadKey = (threadItems || []).map((item) => [
+    item.id || '',
+    item.sender_id || '',
+    item.created_at || '',
+    item.has_attachment ? 1 : 0,
+    item.attachment_filename || '',
+    item.attachment_size_bytes || 0,
+    String(item.body_md || '').slice(0, 64),
+  ].join(':')).join('|');
+
+  return `${selectedPeerId || 0}#${conversationKey}#${threadKey}`;
+}
+
+function shouldPauseMessageAutoRefresh() {
+  const composer = $('messageComposer');
+  if (composer) {
+    const draft = String(composer.value || '');
+    if (document.activeElement === composer || draft.length > 0) return true;
+  }
+  return $('modalRoot')?.classList.contains('open');
+}
+
 function captureMessageViewState() {
   const composer = $('messageComposer');
   const list = $('messageThreadList');
@@ -2649,6 +2686,7 @@ function ensureMessageAutoRefresh() {
       return;
     }
     if (state.messageRefreshInFlight) return;
+    if (shouldPauseMessageAutoRefresh()) return;
 
     const match = location.pathname.match(/^\/messages\/(\d+)$/);
     const peerId = match ? Number(match[1]) : null;
@@ -2670,7 +2708,6 @@ async function renderMessages(peerId = null, options = {}) {
   }
 
   const silent = !!options.silent || !!app.querySelector('.messages-layout');
-  const viewState = silent ? captureMessageViewState() : null;
   if (!silent) {
     app.innerHTML = `
       <div class="loading-overlay">
@@ -2692,6 +2729,14 @@ async function renderMessages(peerId = null, options = {}) {
     }
 
     const activePeer = thread?.peer || conversations.find(c => Number(c.peer_id) === selectedPeerId);
+    const threadItems = thread?.items || [];
+    const renderKey = buildMessageRenderKey(conversations, selectedPeerId, threadItems);
+    if (options.auto && state.messageRenderPeerId === selectedPeerId && state.messageRenderKey === renderKey) {
+      ensureMessageAutoRefresh();
+      return;
+    }
+
+    const viewState = silent ? captureMessageViewState() : null;
     app.innerHTML = `
       <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
         <div>
@@ -2732,7 +2777,7 @@ async function renderMessages(peerId = null, options = {}) {
         </aside>
 
         <section class="message-thread-panel">
-          ${selectedPeerId && activePeer ? renderMessageThread(activePeer, thread?.items || []) : `
+          ${selectedPeerId && activePeer ? renderMessageThread(activePeer, threadItems) : `
             <div class="message-empty-panel">
               <div class="empty-icon">✉</div>
               <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信。</div>
@@ -2745,6 +2790,8 @@ async function renderMessages(peerId = null, options = {}) {
     if (selectedPeerId && activePeer) {
       initMessageComposerInteractions(selectedPeerId);
     }
+    state.messageRenderPeerId = selectedPeerId;
+    state.messageRenderKey = renderKey;
 
     setTimeout(() => {
       restoreMessageViewState(viewState);
