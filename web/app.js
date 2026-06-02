@@ -35,6 +35,7 @@ const state = {
   messageRefreshTimer: null,
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
+  messageAttachmentCache: new Map(),
   newMessagePendingFiles: [],
   currentProblem: null,
   activeProblemStatementId: '',
@@ -76,6 +77,7 @@ async function api(path, options = {}) {
   }
   if (!res.ok) {
     if (res.status === 401 && state.token) {
+      clearMessageAttachmentCache();
       state.token = '';
       localStorage.removeItem('aioj_token');
       state.user = null;
@@ -664,6 +666,7 @@ async function checkHealth() {
 // ─── Auth Module ────────────────────────────────────────────────────────────
 async function loadMe() {
   if (!state.token) {
+    clearMessageAttachmentCache();
     state.user = null;
     state.notificationUnreadCount = 0;
     state.messageUnreadCount = 0;
@@ -676,6 +679,7 @@ async function loadMe() {
     await Promise.allSettled([refreshNotificationCount(), refreshMessageCount()]);
     updateNav();
   } catch {
+    clearMessageAttachmentCache();
     state.token = '';
     localStorage.removeItem('aioj_token');
     state.user = null;
@@ -827,6 +831,7 @@ async function submitAuth() {
 }
 
 function logout() {
+  clearMessageAttachmentCache();
   state.token = '';
   state.user = null;
   state.notificationUnreadCount = 0;
@@ -2947,6 +2952,69 @@ function scrollMessageThreadToBottom() {
   if (list) list.scrollTop = list.scrollHeight;
 }
 
+function clearMessageAttachmentCache() {
+  for (const entry of state.messageAttachmentCache.values()) {
+    if (entry?.url) URL.revokeObjectURL(entry.url);
+  }
+  state.messageAttachmentCache.clear();
+}
+
+function getMessageAttachmentCacheEntry(attachmentId) {
+  const normalizedId = Number(attachmentId || 0);
+  if (!normalizedId) return null;
+  return state.messageAttachmentCache.get(normalizedId) || null;
+}
+
+async function loadMessageAttachmentUrl(attachmentId) {
+  const normalizedId = Number(attachmentId || 0);
+  if (!normalizedId) throw new Error('Missing attachment id');
+
+  const cached = getMessageAttachmentCacheEntry(normalizedId);
+  if (cached?.url) return cached.url;
+  if (cached?.promise) return cached.promise;
+
+  const promise = (async () => {
+    const res = await fetch(`/api/messages/${normalizedId}/attachment`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    state.messageAttachmentCache.set(normalizedId, { url });
+    return url;
+  })();
+
+  state.messageAttachmentCache.set(normalizedId, { promise });
+
+  try {
+    return await promise;
+  } catch (err) {
+    if (state.messageAttachmentCache.get(normalizedId)?.promise === promise) {
+      state.messageAttachmentCache.delete(normalizedId);
+    }
+    throw err;
+  }
+}
+
+function waitForImageReady(img) {
+  if (!img) return Promise.resolve();
+  if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const onLoad = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error('Image load failed'));
+    };
+    const cleanup = () => {
+      img.removeEventListener('load', onLoad);
+      img.removeEventListener('error', onError);
+    };
+    img.addEventListener('load', onLoad, { once: true });
+    img.addEventListener('error', onError, { once: true });
+  });
+}
+
 async function pollMessageUnreadState() {
   const [countData, conversationData] = await Promise.all([
     api('/api/messages/unread-count', { headers: authHeaders() }),
@@ -3219,10 +3287,11 @@ function renderMessageAttachment(message) {
       </button>
     `;
   }
+  const cachedUrl = getMessageAttachmentCacheEntry(attachmentId)?.url || '';
   return `
     <div class="message-image-frame" data-message-attachment-frame="${attachmentId}">
-      <div class="message-image-placeholder">图片加载中...</div>
-      <img class="message-image" data-message-attachment-id="${attachmentId}" alt="${esc(filename)}" hidden onclick="openMessageImage(this.src)" />
+      <div class="message-image-placeholder"${cachedUrl ? ' style="display:none"' : ''}>图片加载中...</div>
+      <img class="message-image" data-message-attachment-id="${attachmentId}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImage(this.src)" />
     </div>
   `;
 }
@@ -3236,11 +3305,9 @@ async function hydrateMessageAttachments() {
     const frame = img.closest('.message-image-frame');
     const placeholder = frame?.querySelector('.message-image-placeholder');
     try {
-      const res = await fetch(`/api/messages/${attachmentId}/attachment`, { headers: authHeaders() });
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      const url = await loadMessageAttachmentUrl(attachmentId);
       img.src = url;
+      await waitForImageReady(img);
       img.hidden = false;
       img.dataset.loaded = '1';
       if (placeholder) placeholder.style.display = 'none';
