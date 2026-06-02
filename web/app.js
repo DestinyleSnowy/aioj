@@ -3150,6 +3150,48 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
   textarea.setSelectionRange(cursor, cursor);
 }
 
+function closeMessageContextMenu() {
+  const menu = $('messageContextMenu');
+  if (!menu) return;
+  menu.hidden = true;
+  menu.dataset.messageId = '';
+  menu.dataset.sender = '';
+  menu.dataset.body = '';
+  menu.dataset.attachmentLabel = '';
+}
+
+function positionMessageContextMenu(menu, clientX, clientY) {
+  menu.hidden = false;
+  menu.style.left = '0px';
+  menu.style.top = '0px';
+  const padding = 12;
+  const rect = menu.getBoundingClientRect();
+  const left = Math.max(padding, Math.min(clientX, window.innerWidth - rect.width - padding));
+  const top = Math.max(padding, Math.min(clientY, window.innerHeight - rect.height - padding));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+}
+
+function openMessageContextMenu(event, row, sender, body = '', attachmentLabel = '') {
+  const menu = $('messageContextMenu');
+  if (!event || !menu) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  menu.dataset.messageId = row?.dataset.messageId || '';
+  menu.dataset.sender = String(sender || '');
+  menu.dataset.body = String(body || '');
+  menu.dataset.attachmentLabel = String(attachmentLabel || '');
+  positionMessageContextMenu(menu, event.clientX || 0, event.clientY || 0);
+  return false;
+}
+
+function quoteMessageFromContextMenu() {
+  const menu = $('messageContextMenu');
+  if (!menu) return;
+  quoteMessage(menu.dataset.sender || '', menu.dataset.body || '', menu.dataset.attachmentLabel || '');
+  closeMessageContextMenu();
+}
+
 function renderMessageThread(peer, messages) {
   const peerId = peer.id || peer.peer_id;
   return `
@@ -3174,12 +3216,11 @@ function renderMessageThread(peer, messages) {
         const attachmentLabel = messageAttachmentQuoteLabel(m);
         return `
           <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(m.id)}">
-            <div class="message-bubble">
+            <div class="message-bubble" oncontextmenu="return openMessageContextMenu(event, this.closest('.message-row'), ${jsArg(senderLabel)}, ${jsArg(m.body_md || '')}, ${jsArg(attachmentLabel)})">
               ${m.has_attachment ? renderMessageAttachment(m) : ''}
               ${m.body_md ? renderMd(m.body_md) : ''}
               <div class="message-meta">
                 <span>${esc(senderLabel)} · ${formatDate(m.created_at)}</span>
-                <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(m.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
               </div>
             </div>
           </div>
@@ -3198,6 +3239,10 @@ function renderMessageThread(peer, messages) {
           <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${peerId})">发送</button>
         </div>
       </div>
+    </div>
+
+    <div class="message-context-menu" id="messageContextMenu" role="menu" aria-label="消息操作" hidden>
+      <button class="message-context-menu-item" type="button" onclick="quoteMessageFromContextMenu()">引用</button>
     </div>
   `;
 }
@@ -5356,7 +5401,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', () => {
     const container = $('userDropdownContainer');
     if (container) container.classList.remove('active');
+    closeMessageContextMenu();
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeMessageContextMenu();
+  });
+  document.addEventListener('scroll', closeMessageContextMenu, true);
+  window.addEventListener('resize', closeMessageContextMenu);
 
   // Mobile drawer trigger
   $('menuBtn').addEventListener('click', () => {
@@ -5986,7 +6037,7 @@ Object.assign(window, {
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, downloadMessageFile,
-  refreshMessageThreadNow, quoteMessage,
+  refreshMessageThreadNow, quoteMessage, openMessageContextMenu, quoteMessageFromContextMenu,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });
