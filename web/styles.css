@@ -2643,14 +2643,7 @@ tr:last-child td {
   overflow: hidden;
   border: var(--border-light);
   border-radius: var(--radius-md);
-  background:
-    linear-gradient(45deg, hsla(0, 0%, 100%, 0.035) 25%, transparent 25%),
-    linear-gradient(-45deg, hsla(0, 0%, 100%, 0.035) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, hsla(0, 0%, 100%, 0.035) 75%),
-    linear-gradient(-45deg, transparent 75%, hsla(0, 0%, 100%, 0.035) 75%),
-    hsla(0, 0%, 0%, 0.18);
-  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-  background-size: 20px 20px;
+  background: var(--bg-card-solid);
   cursor: grab;
   touch-action: none;
   user-select: none;
