@@ -38,6 +38,7 @@ const state = {
   messageActivePeerId: 0,
   messageAttachmentCache: new Map(),
   messageLayoutCleanup: null,
+  messageImagePreview: null,
   newMessagePendingFiles: [],
   currentProblem: null,
   activeProblemStatementId: '',
@@ -55,6 +56,9 @@ const MESSAGE_SIDEBAR_MIN_WIDTH_PX = 260;
 const MESSAGE_SIDEBAR_MAX_WIDTH_PX = 520;
 const MESSAGE_THREAD_MIN_WIDTH_PX = 520;
 const MESSAGE_RESIZER_TRACK_PX = 16;
+const MESSAGE_IMAGE_PREVIEW_MIN_SCALE = 0.001;
+const MESSAGE_IMAGE_PREVIEW_MAX_SCALE = 12;
+const MESSAGE_IMAGE_PREVIEW_ZOOM_STEP = 1.18;
 const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
 const SIDEBAR_MODE_COLLAPSED = 'collapsed';
 const SIDEBAR_MODE_EXPANDED = 'expanded';
@@ -555,6 +559,7 @@ function toast(message, type = 'info', duration = 4000) {
 
 // ─── Modal ──────────────────────────────────────────────────────────────────
 function openModal({ title, body, footer = '', wide = false, image = false }) {
+  destroyMessageImagePreview();
   $('modalTitle').textContent = title || '';
   $('modalBody').innerHTML = body || '';
   $('modalFooter').innerHTML = footer || '';
@@ -566,6 +571,7 @@ function openModal({ title, body, footer = '', wide = false, image = false }) {
 }
 
 function closeModal() {
+  destroyMessageImagePreview();
   $('modalRoot').classList.remove('open');
   $('modalBody').innerHTML = '';
   $('modalFooter').innerHTML = '';
@@ -3587,14 +3593,252 @@ async function downloadMessageFile(attachmentId, filename = 'attachment') {
   }
 }
 
+function clampMessageImagePreviewValue(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function destroyMessageImagePreview() {
+  const preview = state.messageImagePreview;
+  if (!preview) return;
+  if (typeof preview.cleanup === 'function') preview.cleanup();
+  document.body.classList.remove('message-image-panning');
+  state.messageImagePreview = null;
+}
+
+function getMessageImagePreviewFitScale(preview = state.messageImagePreview) {
+  if (!preview?.stage || !preview.naturalWidth || !preview.naturalHeight) return 1;
+  const stageWidth = preview.stage.clientWidth || 1;
+  const stageHeight = preview.stage.clientHeight || 1;
+  const fitScale = Math.min(
+    stageWidth / preview.naturalWidth,
+    stageHeight / preview.naturalHeight,
+    1,
+  );
+  return Math.max(MESSAGE_IMAGE_PREVIEW_MIN_SCALE, fitScale || 1);
+}
+
+function getMessageImagePreviewScaleBounds(preview = state.messageImagePreview) {
+  const fitScale = preview?.fitScale || getMessageImagePreviewFitScale(preview);
+  return {
+    min: Math.max(MESSAGE_IMAGE_PREVIEW_MIN_SCALE, Math.min(0.25, fitScale * 0.5)),
+    max: Math.max(MESSAGE_IMAGE_PREVIEW_MAX_SCALE, fitScale * 16, 1),
+  };
+}
+
+function clampMessageImagePreviewOffset(preview = state.messageImagePreview) {
+  if (!preview?.stage || !preview.naturalWidth || !preview.naturalHeight) return;
+  const stageWidth = preview.stage.clientWidth || 1;
+  const stageHeight = preview.stage.clientHeight || 1;
+  const scaledWidth = preview.naturalWidth * preview.scale;
+  const scaledHeight = preview.naturalHeight * preview.scale;
+  const maxOffsetX = Math.max(0, (scaledWidth - stageWidth) / 2);
+  const maxOffsetY = Math.max(0, (scaledHeight - stageHeight) / 2);
+  preview.offsetX = maxOffsetX
+    ? clampMessageImagePreviewValue(preview.offsetX, -maxOffsetX, maxOffsetX)
+    : 0;
+  preview.offsetY = maxOffsetY
+    ? clampMessageImagePreviewValue(preview.offsetY, -maxOffsetY, maxOffsetY)
+    : 0;
+}
+
+function renderMessageImagePreviewTransform(preview = state.messageImagePreview) {
+  if (!preview?.img || !preview.stage || !preview.naturalWidth || !preview.naturalHeight) return;
+  clampMessageImagePreviewOffset(preview);
+  const stageWidth = preview.stage.clientWidth || 1;
+  const stageHeight = preview.stage.clientHeight || 1;
+  const x = (stageWidth - preview.naturalWidth * preview.scale) / 2 + preview.offsetX;
+  const y = (stageHeight - preview.naturalHeight * preview.scale) / 2 + preview.offsetY;
+  preview.img.style.width = `${preview.naturalWidth}px`;
+  preview.img.style.height = `${preview.naturalHeight}px`;
+  preview.img.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${preview.scale})`;
+  preview.stage.classList.toggle('is-zoomed', preview.scale > (preview.fitScale || 1) * 1.02);
+  if (preview.zoomLabel) {
+    preview.zoomLabel.textContent = `${Math.round(preview.scale * 100)}%`;
+  }
+}
+
+function setMessageImagePreviewScale(scale, anchor = null) {
+  const preview = state.messageImagePreview;
+  if (!preview?.naturalWidth || !preview.naturalHeight) return;
+
+  const oldScale = preview.scale || preview.fitScale || 1;
+  const bounds = getMessageImagePreviewScaleBounds(preview);
+  const nextScale = clampMessageImagePreviewValue(scale, bounds.min, bounds.max);
+  const stageWidth = preview.stage.clientWidth || 1;
+  const stageHeight = preview.stage.clientHeight || 1;
+  const anchorX = Number.isFinite(anchor?.x) ? anchor.x : stageWidth / 2;
+  const anchorY = Number.isFinite(anchor?.y) ? anchor.y : stageHeight / 2;
+  const oldImageX = (anchorX - ((stageWidth - preview.naturalWidth * oldScale) / 2 + preview.offsetX)) / oldScale;
+  const oldImageY = (anchorY - ((stageHeight - preview.naturalHeight * oldScale) / 2 + preview.offsetY)) / oldScale;
+
+  preview.scale = nextScale;
+  preview.offsetX = anchorX - (stageWidth - preview.naturalWidth * nextScale) / 2 - oldImageX * nextScale;
+  preview.offsetY = anchorY - (stageHeight - preview.naturalHeight * nextScale) / 2 - oldImageY * nextScale;
+  renderMessageImagePreviewTransform(preview);
+}
+
+function fitMessageImagePreview() {
+  const preview = state.messageImagePreview;
+  if (!preview?.naturalWidth || !preview.naturalHeight) return;
+  preview.fitScale = getMessageImagePreviewFitScale(preview);
+  preview.scale = preview.fitScale;
+  preview.offsetX = 0;
+  preview.offsetY = 0;
+  renderMessageImagePreviewTransform(preview);
+}
+
+function zoomMessageImagePreview(direction) {
+  const preview = state.messageImagePreview;
+  if (!preview?.naturalWidth || !preview.naturalHeight) return;
+  const factor = direction > 0 ? MESSAGE_IMAGE_PREVIEW_ZOOM_STEP : 1 / MESSAGE_IMAGE_PREVIEW_ZOOM_STEP;
+  setMessageImagePreviewScale(preview.scale * factor);
+}
+
+function initMessageImagePreview() {
+  const stage = $('messageImageStage');
+  const img = $('messageImagePreview');
+  if (!stage || !img) return;
+
+  const preview = {
+    stage,
+    img,
+    loading: $('messageImageLoading'),
+    zoomLabel: $('messageImageZoomLabel'),
+    naturalWidth: 0,
+    naturalHeight: 0,
+    fitScale: 1,
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    pointerId: null,
+    dragStartX: 0,
+    dragStartY: 0,
+    dragStartOffsetX: 0,
+    dragStartOffsetY: 0,
+  };
+  state.messageImagePreview = preview;
+
+  const stopPan = () => {
+    if (preview.pointerId !== null) {
+      try {
+        preview.stage.releasePointerCapture(preview.pointerId);
+      } catch {
+        // Pointer capture may already be released by the browser.
+      }
+    }
+    preview.pointerId = null;
+    preview.stage.classList.remove('is-panning');
+    document.body.classList.remove('message-image-panning');
+  };
+
+  const onWheel = (event) => {
+    if (!preview.naturalWidth || !preview.naturalHeight) return;
+    event.preventDefault();
+    const rect = preview.stage.getBoundingClientRect();
+    const factor = Math.exp(-event.deltaY * 0.0016);
+    setMessageImagePreviewScale(preview.scale * factor, {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+  };
+
+  const onPointerDown = (event) => {
+    if (event.button !== 0 || !preview.naturalWidth || !preview.naturalHeight) return;
+    event.preventDefault();
+    preview.pointerId = event.pointerId;
+    preview.dragStartX = event.clientX;
+    preview.dragStartY = event.clientY;
+    preview.dragStartOffsetX = preview.offsetX;
+    preview.dragStartOffsetY = preview.offsetY;
+    preview.stage.setPointerCapture(event.pointerId);
+    preview.stage.classList.add('is-panning');
+    document.body.classList.add('message-image-panning');
+  };
+
+  const onPointerMove = (event) => {
+    if (event.pointerId !== preview.pointerId) return;
+    event.preventDefault();
+    preview.offsetX = preview.dragStartOffsetX + event.clientX - preview.dragStartX;
+    preview.offsetY = preview.dragStartOffsetY + event.clientY - preview.dragStartY;
+    renderMessageImagePreviewTransform(preview);
+  };
+
+  const onPointerUp = (event) => {
+    if (event.pointerId === preview.pointerId) stopPan();
+  };
+
+  const onResize = () => {
+    if (!preview.naturalWidth || !preview.naturalHeight) return;
+    const oldFitScale = preview.fitScale;
+    const wasFitToWindow = Math.abs(preview.scale - oldFitScale) < 0.01;
+    preview.fitScale = getMessageImagePreviewFitScale(preview);
+    if (wasFitToWindow || preview.scale < preview.fitScale) {
+      preview.scale = preview.fitScale;
+      preview.offsetX = 0;
+      preview.offsetY = 0;
+    }
+    renderMessageImagePreviewTransform(preview);
+  };
+
+  preview.cleanup = () => {
+    stopPan();
+    preview.stage.removeEventListener('wheel', onWheel);
+    preview.stage.removeEventListener('pointerdown', onPointerDown);
+    preview.stage.removeEventListener('pointermove', onPointerMove);
+    preview.stage.removeEventListener('pointerup', onPointerUp);
+    preview.stage.removeEventListener('pointercancel', onPointerUp);
+    preview.stage.removeEventListener('lostpointercapture', stopPan);
+    window.removeEventListener('resize', onResize);
+  };
+
+  preview.stage.addEventListener('wheel', onWheel, { passive: false });
+  preview.stage.addEventListener('pointerdown', onPointerDown);
+  preview.stage.addEventListener('pointermove', onPointerMove);
+  preview.stage.addEventListener('pointerup', onPointerUp);
+  preview.stage.addEventListener('pointercancel', onPointerUp);
+  preview.stage.addEventListener('lostpointercapture', stopPan);
+  window.addEventListener('resize', onResize);
+
+  waitForImageReady(img)
+    .then(() => {
+      if (state.messageImagePreview !== preview) return;
+      preview.naturalWidth = img.naturalWidth || 1;
+      preview.naturalHeight = img.naturalHeight || 1;
+      if (preview.loading) preview.loading.style.display = 'none';
+      img.hidden = false;
+      fitMessageImagePreview();
+    })
+    .catch(() => {
+      if (state.messageImagePreview !== preview) return;
+      if (preview.loading) preview.loading.textContent = '图片加载失败';
+    });
+}
+
 function openMessageImage(src) {
   if (!src) return;
   openModal({
     title: '图片消息',
-    body: `<img src="${esc(src)}" alt="图片消息" class="message-image-preview" />`,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">关闭</button>`,
+    body: `
+      <div class="message-image-preview-shell">
+        <div class="message-image-stage" id="messageImageStage" aria-label="图片预览" tabindex="0">
+          <div class="message-image-loading" id="messageImageLoading">图片加载中...</div>
+          <img id="messageImagePreview" src="${esc(src)}" alt="图片消息" class="message-image-preview" draggable="false" hidden />
+        </div>
+      </div>
+    `,
+    footer: `
+      <div class="message-image-toolbar" aria-label="图片缩放控制">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="fitMessageImagePreview()">适应窗口</button>
+        <button class="btn btn-secondary btn-sm message-image-zoom-btn" type="button" aria-label="缩小" title="缩小" onclick="zoomMessageImagePreview(-1)">-</button>
+        <span class="message-image-zoom-label" id="messageImageZoomLabel">--</span>
+        <button class="btn btn-secondary btn-sm message-image-zoom-btn" type="button" aria-label="放大" title="放大" onclick="zoomMessageImagePreview(1)">+</button>
+        <button class="btn btn-secondary btn-sm" type="button" onclick="setMessageImagePreviewScale(1)">1:1</button>
+      </div>
+      <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+    `,
     image: true,
   });
+  initMessageImagePreview();
 }
 
 function insertTextareaNewline(textarea) {
