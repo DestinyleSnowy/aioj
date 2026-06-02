@@ -39,6 +39,7 @@ const state = {
   newMessagePendingFiles: [],
   currentProblem: null,
   activeProblemStatementId: '',
+  markdownConfigured: false,
 };
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
@@ -183,40 +184,122 @@ function formatDate(v) {
   return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
-function renderMd(md) {
-  let t = esc(md || '');
-  t = t.replace(/```([\s\S]*?)```/g, (_, code) => `<pre><code>${code.trim()}</code></pre>`);
-  t = t.replace(/^### (.*)$/gm, '<h3>$1</h3>');
-  t = t.replace(/^## (.*)$/gm, '<h2>$1</h2>');
-  t = t.replace(/^# (.*)$/gm, '<h1>$1</h1>');
-  t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
-  t = t.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
-    const safeSrc = safeMdSrc(src);
-    return safeSrc
-      ? `<img src="${safeSrc}" alt="${esc(alt)}" class="md-image" loading="lazy" style="max-width: 100%; height: auto; border-radius: 8px;" />`
-      : esc(alt || '');
+function configureMarkdownRenderer() {
+  if (state.markdownConfigured || !window.marked || typeof window.marked.setOptions !== 'function') return;
+  window.marked.setOptions({
+    gfm: true,
+    breaks: true,
+    headerIds: false,
+    mangle: false,
   });
-  
-  // Render lists: match consecutive lines starting with - or * and format as <ul><li>
-  t = t.replace(/((?:^\s*[-*]\s+.*(?:\n|$))+)/gm, (match) => {
-    let listItems = match.trim().split('\n').map(line => {
-      let content = line.replace(/^\s*[-*]\s+/, '');
-      return `<li>${content}</li>`;
-    }).join('');
-    return `<ul>${listItems}</ul>`;
+  state.markdownConfigured = true;
+}
+
+function renderLatexToHtml(expr, displayMode = false) {
+  const source = String(expr || '').trim();
+  if (!source) return '';
+  if (window.katex && typeof window.katex.renderToString === 'function') {
+    try {
+      return window.katex.renderToString(source, {
+        displayMode,
+        throwOnError: false,
+        strict: 'ignore',
+        output: 'htmlAndMathml',
+      });
+    } catch {
+      // Fall through to escaped fallback text.
+    }
+  }
+  const wrapped = displayMode ? `$$\n${source}\n$$` : `$${source}$`;
+  return `<code class="latex-fallback">${esc(wrapped)}</code>`;
+}
+
+function extractMarkdownMath(md) {
+  const mathTokens = [];
+  const pushMathToken = (expr, displayMode) => {
+    const token = `@@AIOJ_MATH_TOKEN_${mathTokens.length}@@`;
+    mathTokens.push({ expr, displayMode });
+    return token;
+  };
+
+  const segments = String(md || '')
+    .replace(/\r\n/g, '\n')
+    .split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+
+  const prepared = segments.map((segment) => {
+    if (segment.startsWith('```') || segment.startsWith('`')) return segment;
+    let out = segment;
+    out = out.replace(/\\\[([\s\S]+?)\\\]/g, (_, expr) => `\n\n${pushMathToken(expr, true)}\n\n`);
+    out = out.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => `\n\n${pushMathToken(expr, true)}\n\n`);
+    out = out.replace(/\\\(([\s\S]+?)\\\)/g, (_, expr) => pushMathToken(expr, false));
+    out = out.replace(/(^|[^\\$])\$([^\n$](?:[^$]*?[^\s$])?)\$/g, (match, prefix, expr) => `${prefix}${pushMathToken(expr, false)}`);
+    return out;
+  }).join('');
+
+  return { prepared, mathTokens };
+}
+
+function finalizeMarkdownHtml(html) {
+  if (typeof DOMParser === 'undefined') return html;
+  const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
+
+  doc.body.querySelectorAll('a[href]').forEach((anchor) => {
+    const safeHref = safeMdHref(anchor.getAttribute('href'));
+    anchor.setAttribute('href', safeHref);
+    anchor.classList.add('text-primary');
+    anchor.style.textDecoration = 'underline';
+    if (!safeHref.startsWith('/') && !safeHref.startsWith('#')) {
+      anchor.setAttribute('target', '_blank');
+      anchor.setAttribute('rel', 'noopener noreferrer');
+    } else {
+      anchor.removeAttribute('target');
+      anchor.removeAttribute('rel');
+    }
   });
 
-  // Render links with a conservative protocol allow-list.
-  t = t.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
-    const safeHref = safeMdHref(href);
-    const target = safeHref.startsWith('/') || safeHref.startsWith('#') ? '' : ' target="_blank" rel="noopener noreferrer"';
-    return `<a href="${safeHref}"${target} class="text-primary" style="text-decoration: underline;">${label}</a>`;
+  doc.body.querySelectorAll('img[src]').forEach((img) => {
+    const safeSrc = safeMdSrc(img.getAttribute('src'));
+    if (!safeSrc) {
+      img.remove();
+      return;
+    }
+    img.setAttribute('src', safeSrc);
+    img.setAttribute('loading', 'lazy');
+    img.classList.add('md-image');
   });
-  
-  t = t.replace(/\n{2,}/g, '</p><p>');
-  t = t.replace(/\n/g, '<br>');
-  return `<div class="md-content"><p>${t}</p></div>`;
+
+  doc.body.querySelectorAll('table').forEach((table) => {
+    table.classList.add('md-table');
+  });
+
+  return doc.body.innerHTML;
+}
+
+function restoreMarkdownMath(html, mathTokens) {
+  return String(html || '').replace(/@@AIOJ_MATH_TOKEN_(\d+)@@/g, (_, idx) => {
+    const token = mathTokens[Number(idx)];
+    if (!token) return '';
+    const rendered = renderLatexToHtml(token.expr, token.displayMode);
+    return token.displayMode
+      ? `<div class="md-math md-math-block">${rendered}</div>`
+      : `<span class="md-math md-math-inline">${rendered}</span>`;
+  });
+}
+
+function renderMd(md) {
+  configureMarkdownRenderer();
+  const source = String(md || '');
+
+  if (window.marked && typeof window.marked.parse === 'function' && window.DOMPurify) {
+    const { prepared, mathTokens } = extractMarkdownMath(source);
+    const rawHtml = window.marked.parse(prepared);
+    const sanitizedHtml = window.DOMPurify.sanitize(rawHtml);
+    const finalizedHtml = finalizeMarkdownHtml(sanitizedHtml);
+    return `<div class="md-content">${restoreMarkdownMath(finalizedHtml, mathTokens)}</div>`;
+  }
+
+  const fallback = esc(source).replace(/\n/g, '<br>');
+  return `<div class="md-content"><p>${fallback}</p></div>`;
 }
 
 function problemStatementAssets(problem) {

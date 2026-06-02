@@ -2087,6 +2087,31 @@ tr:last-child td {
   margin: var(--space-lg) 0 var(--space-sm);
 }
 
+.md-content ul,
+.md-content ol {
+  margin: 0 0 var(--space-md) 1.4rem;
+  padding: 0;
+}
+
+.md-content li {
+  margin-bottom: 0.35rem;
+}
+
+.md-content blockquote {
+  margin: 0 0 var(--space-md);
+  padding: 0.75rem 1rem;
+  border-left: 3px solid hsla(var(--hue-accent), 70%, 60%, 0.75);
+  background: hsla(0, 0%, 100%, 0.03);
+  border-radius: 0 8px 8px 0;
+  color: var(--text-secondary);
+}
+
+.md-content hr {
+  border: 0;
+  border-top: var(--border-light);
+  margin: var(--space-lg) 0;
+}
+
 .md-content pre {
   background: hsla(0, 0%, 0%, 0.3);
   border: var(--border-light);
@@ -2109,6 +2134,54 @@ tr:last-child td {
   background: none;
   padding: 0;
   color: inherit;
+}
+
+.md-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0 0 var(--space-md);
+  display: block;
+  overflow-x: auto;
+}
+
+.md-content th,
+.md-content td {
+  border: var(--border-light);
+  padding: 0.65rem 0.8rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-content th {
+  color: var(--text-main);
+  background: hsla(0, 0%, 100%, 0.04);
+}
+
+.md-content .md-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 0 0 var(--space-md);
+}
+
+.md-content .md-math {
+  color: var(--text-main);
+}
+
+.md-content .md-math-block {
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin: 0 0 var(--space-md);
+  padding: 0.25rem 0;
+}
+
+.md-content .katex-display {
+  margin: 0.35rem 0 0;
+}
+
+.md-content .latex-fallback {
+  white-space: pre-wrap;
 }
 
 /* ─── Direct Messages ────────────────────────────────────────────────────── */
