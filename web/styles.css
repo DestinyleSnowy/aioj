@@ -1035,6 +1035,19 @@ tr:last-child td {
   max-width: 760px;
 }
 
+.modal.image-modal {
+  width: min(96vw, 1440px);
+  max-width: min(96vw, 1440px);
+  max-height: 94vh;
+}
+
+.modal.image-modal .modal-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -2344,8 +2357,34 @@ tr:last-child td {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
+  padding-right: calc(var(--space-lg) + 42px);
   border-bottom: var(--border-light);
   background: hsla(0, 0%, 100%, 0.018);
+  position: relative;
+}
+
+.message-thread-unread-badge {
+  position: absolute;
+  top: 50%;
+  right: var(--space-lg);
+  transform: translateY(-50%);
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  border: 2px solid var(--bg-card);
+  border-radius: 999px;
+  background: var(--color-danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 8px 20px hsla(0, 76%, 50%, 0.28);
+}
+
+.message-thread-unread-badge[hidden] {
+  display: none;
 }
 
 .message-thread-list {
@@ -2415,8 +2454,8 @@ tr:last-child td {
 
 .message-image-preview {
   display: block;
-  max-width: 100%;
-  max-height: 72vh;
+  max-width: calc(96vw - 48px);
+  max-height: calc(94vh - 132px);
   object-fit: contain;
   margin: 0 auto;
   border-radius: var(--radius-md);
@@ -2489,6 +2528,25 @@ tr:last-child td {
   margin-top: 6px;
   color: var(--text-muted);
   font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.message-quote-btn {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0;
+}
+
+.message-quote-btn:hover {
+  color: var(--color-accent);
 }
 
 .message-composer {

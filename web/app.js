@@ -34,8 +34,7 @@ const state = {
   messageUnreadCount: 0,
   messageRefreshTimer: null,
   messageRefreshInFlight: false,
-  messageRenderKey: '',
-  messageRenderPeerId: 0,
+  messageActivePeerId: 0,
   newMessagePendingFiles: [],
   currentProblem: null,
   activeProblemStatementId: '',
@@ -532,12 +531,14 @@ function toast(message, type = 'info', duration = 4000) {
 }
 
 // ─── Modal ──────────────────────────────────────────────────────────────────
-function openModal({ title, body, footer = '', wide = false }) {
+function openModal({ title, body, footer = '', wide = false, image = false }) {
   $('modalTitle').textContent = title || '';
   $('modalBody').innerHTML = body || '';
   $('modalFooter').innerHTML = footer || '';
   const root = $('modalRoot');
-  root.querySelector('.modal').classList.toggle('wide', !!wide);
+  const modal = root.querySelector('.modal');
+  modal.classList.toggle('wide', !!wide);
+  modal.classList.toggle('image-modal', !!image);
   root.classList.add('open');
 }
 
@@ -564,8 +565,7 @@ function stopMessageAutoRefresh() {
     state.messageRefreshTimer = null;
   }
   state.messageRefreshInFlight = false;
-  state.messageRenderKey = '';
-  state.messageRenderPeerId = 0;
+  state.messageActivePeerId = 0;
 }
 
 function updateNav() {
@@ -2929,90 +2929,38 @@ function messagePeerInitial(name) {
   return esc(String(name || '?').slice(0, 1).toUpperCase());
 }
 
-function buildMessageRenderKey(conversations, selectedPeerId, threadItems = []) {
-  const conversationKey = (conversations || []).map((item) => [
-    item.peer_id || '',
-    item.last_sender_id || '',
-    item.last_created_at || '',
-    item.unread_count || 0,
-    item.last_has_attachment ? 1 : 0,
-    item.last_attachment_content_type || '',
-    String(item.last_body_md || '').slice(0, 64),
-  ].join(':')).join('|');
-
-  const threadKey = (threadItems || []).map((item) => [
-    item.id || '',
-    item.sender_id || '',
-    item.created_at || '',
-    item.has_attachment ? 1 : 0,
-    item.attachment_filename || '',
-    item.attachment_size_bytes || 0,
-    String(item.body_md || '').slice(0, 64),
-  ].join(':')).join('|');
-
-  return `${selectedPeerId || 0}#${conversationKey}#${threadKey}`;
+function currentMessagePeerId() {
+  const match = location.pathname.match(/^\/messages\/(\d+)$/);
+  return match ? Number(match[1]) : Number(state.messageActivePeerId || 0);
 }
 
-function shouldPauseMessageAutoRefresh() {
-  const composer = $('messageComposer');
-  if (composer) {
-    const draft = String(composer.value || '');
-    if (document.activeElement === composer || draft.length > 0) return true;
-  }
-  return $('modalRoot')?.classList.contains('open');
+function updateMessageThreadUnreadBadge(count) {
+  const badge = $('messageThreadUnreadBadge');
+  if (!badge) return;
+  const unread = Number(count || 0);
+  badge.hidden = unread <= 0;
+  badge.textContent = unread > 99 ? '99+' : String(unread);
 }
 
-function captureMessageViewState() {
-  const composer = $('messageComposer');
+function scrollMessageThreadToBottom() {
   const list = $('messageThreadList');
-  const scrollGap = list ? list.scrollHeight - list.scrollTop - list.clientHeight : 0;
-  const rows = list ? Array.from(list.querySelectorAll('.message-row[data-message-id]')) : [];
-  const anchor = rows.find((row) => row.offsetTop + row.offsetHeight > list.scrollTop);
-  const anchorOffset = anchor ? Math.max(0, list.scrollTop - anchor.offsetTop) : 0;
-  return {
-    draft: composer ? composer.value : '',
-    composerFocused: document.activeElement === composer,
-    selectionStart: composer ? composer.selectionStart : 0,
-    selectionEnd: composer ? composer.selectionEnd : 0,
-    scrollTop: list ? list.scrollTop : 0,
-    anchorMessageId: anchor?.dataset.messageId || '',
-    anchorOffset,
-    wasNearBottom: !list || scrollGap < 80,
-  };
+  if (list) list.scrollTop = list.scrollHeight;
 }
 
-function restoreMessageViewState(viewState) {
-  const list = $('messageThreadList');
-  if (list) {
-    if (!viewState || viewState.wasNearBottom) {
-      list.scrollTop = list.scrollHeight;
-    } else if (viewState.anchorMessageId) {
-      const selectorId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-        ? CSS.escape(viewState.anchorMessageId)
-        : String(viewState.anchorMessageId).replace(/"/g, '\\"');
-      const anchor = list.querySelector(`.message-row[data-message-id="${selectorId}"]`);
-      if (anchor) {
-        list.scrollTop = Math.max(0, anchor.offsetTop + (viewState.anchorOffset || 0));
-      } else {
-        list.scrollTop = Math.min(viewState.scrollTop, list.scrollHeight);
-      }
-    } else {
-      list.scrollTop = Math.min(viewState.scrollTop, list.scrollHeight);
-    }
-  }
+async function pollMessageUnreadState() {
+  const [countData, conversationData] = await Promise.all([
+    api('/api/messages/unread-count', { headers: authHeaders() }),
+    api('/api/messages/conversations?limit=100', { headers: authHeaders() }),
+  ]);
 
-  const composer = $('messageComposer');
-  if (composer && viewState) {
-    composer.value = viewState.draft || '';
-    if (viewState.composerFocused) {
-      composer.focus();
-      const start = Math.min(viewState.selectionStart || 0, composer.value.length);
-      const end = Math.min(viewState.selectionEnd || start, composer.value.length);
-      composer.setSelectionRange(start, end);
-    }
-  } else if (composer && !viewState) {
-    composer.focus();
-  }
+  state.messageUnreadCount = Number(countData.unread_count || 0);
+  updateNav();
+
+  const peerId = currentMessagePeerId();
+  if (!peerId) return;
+  const conversations = conversationData.items || [];
+  const active = conversations.find(c => Number(c.peer_id) === Number(peerId));
+  updateMessageThreadUnreadBadge(Number(active?.unread_count || 0));
 }
 
 function ensureMessageAutoRefresh() {
@@ -3023,13 +2971,12 @@ function ensureMessageAutoRefresh() {
       return;
     }
     if (state.messageRefreshInFlight) return;
-    if (shouldPauseMessageAutoRefresh()) return;
 
-    const match = location.pathname.match(/^\/messages\/(\d+)$/);
-    const peerId = match ? Number(match[1]) : null;
     state.messageRefreshInFlight = true;
     try {
-      await renderMessages(peerId, { silent: true, auto: true });
+      await pollMessageUnreadState();
+    } catch {
+      // Keep the timer quiet; normal navigation or manual actions will surface errors.
     } finally {
       state.messageRefreshInFlight = false;
     }
@@ -3062,18 +3009,15 @@ async function renderMessages(peerId = null, options = {}) {
 
     if (selectedPeerId) {
       thread = await api(`/api/messages/conversations/${selectedPeerId}?limit=120`, { headers: authHeaders() });
+      conversations.forEach((item) => {
+        if (Number(item.peer_id) === Number(selectedPeerId)) item.unread_count = 0;
+      });
       await refreshMessageCount();
     }
 
     const activePeer = thread?.peer || conversations.find(c => Number(c.peer_id) === selectedPeerId);
     const threadItems = thread?.items || [];
-    const renderKey = buildMessageRenderKey(conversations, selectedPeerId, threadItems);
-    if (options.auto && state.messageRenderPeerId === selectedPeerId && state.messageRenderKey === renderKey) {
-      ensureMessageAutoRefresh();
-      return;
-    }
 
-    const viewState = silent ? captureMessageViewState() : null;
     app.innerHTML = `
       <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
         <div>
@@ -3127,11 +3071,11 @@ async function renderMessages(peerId = null, options = {}) {
     if (selectedPeerId && activePeer) {
       initMessageComposerInteractions(selectedPeerId);
     }
-    state.messageRenderPeerId = selectedPeerId;
-    state.messageRenderKey = renderKey;
+    state.messageActivePeerId = selectedPeerId;
 
-    restoreMessageViewState(viewState);
-    hydrateMessageAttachments(viewState);
+    updateMessageThreadUnreadBadge(0);
+    scrollMessageThreadToBottom();
+    hydrateMessageAttachments();
     ensureMessageAutoRefresh();
   } catch (err) {
     if (silent) {
@@ -3156,6 +3100,56 @@ function refreshMessages(peerId) {
   return renderMessages(peerId, { silent: true });
 }
 
+async function refreshMessageThreadNow(peerId = null) {
+  const targetPeerId = Number(peerId || currentMessagePeerId() || 0);
+  if (!targetPeerId) return;
+  await refreshMessages(targetPeerId);
+  updateMessageThreadUnreadBadge(0);
+}
+
+function messageAttachmentQuoteLabel(message) {
+  if (!message?.has_attachment) return '';
+  const filename = message.attachment_filename || '附件';
+  const contentType = message.attachment_content_type || '';
+  return isImageAttachment(contentType) ? `[图片：${filename}]` : `[文件：${filename}]`;
+}
+
+function buildQuotedMessage(sender, body = '', attachmentLabel = '') {
+  const senderLabel = String(sender || '用户').trim() || '用户';
+  const bodyText = String(body || '').trim();
+  const pieces = [attachmentLabel, bodyText].filter(Boolean);
+  const quoteBody = (pieces.join('\n') || '空消息').slice(0, 900);
+  const clipped = quoteBody.length < pieces.join('\n').length ? `${quoteBody}...` : quoteBody;
+  const lines = clipped.split(/\r?\n/);
+  return [`> ${senderLabel}：${lines.shift() || ''}`, ...lines.map(line => `> ${line}`)].join('\n');
+}
+
+function quoteMessage(sender, body = '', attachmentLabel = '') {
+  const textarea = $('messageComposer');
+  if (!textarea) return;
+
+  const quote = buildQuotedMessage(sender, body, attachmentLabel);
+  const value = textarea.value || '';
+  const start = textarea.selectionStart ?? value.length;
+  const end = textarea.selectionEnd ?? value.length;
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const beforeGap = !before ? '' : (before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n');
+  const afterGap = !after ? '' : (after.startsWith('\n') ? '' : '\n');
+  const insert = `${beforeGap}${quote}\n\n`;
+  const nextValue = `${before}${insert}${afterGap}${after}`;
+
+  if (nextValue.length > Number(textarea.maxLength || 4000)) {
+    toast('引用后内容会超过 4000 字符', 'warning');
+    return;
+  }
+
+  textarea.value = nextValue;
+  textarea.focus();
+  const cursor = before.length + insert.length;
+  textarea.setSelectionRange(cursor, cursor);
+}
+
 function renderMessageThread(peer, messages) {
   const peerId = peer.id || peer.peer_id;
   return `
@@ -3165,6 +3159,7 @@ function renderMessageThread(peer, messages) {
         <div style="font-weight: 700; color: var(--text-main);">${esc(peer.username || peer.peer_username)}</div>
         <div class="text-muted" style="font-size: 12px;">${esc(peer.role || peer.peer_role || 'USER')}</div>
       </div>
+      <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${peerId})" aria-label="查看新消息">0</button>
     </div>
 
     <div class="message-thread-list" id="messageThreadList">
@@ -3175,13 +3170,16 @@ function renderMessageThread(peer, messages) {
         </div>
       ` : messages.map(m => {
         const mine = Number(m.sender_id) === Number(state.user.id);
+        const senderLabel = mine ? '我' : (m.sender_username || '用户');
+        const attachmentLabel = messageAttachmentQuoteLabel(m);
         return `
           <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(m.id)}">
             <div class="message-bubble">
               ${m.has_attachment ? renderMessageAttachment(m) : ''}
               ${m.body_md ? renderMd(m.body_md) : ''}
               <div class="message-meta">
-                ${mine ? '我' : esc(m.sender_username)} · ${formatDate(m.created_at)}
+                <span>${esc(senderLabel)} · ${formatDate(m.created_at)}</span>
+                <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(m.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
               </div>
             </div>
           </div>
@@ -3229,8 +3227,10 @@ function renderMessageAttachment(message) {
   `;
 }
 
-async function hydrateMessageAttachments(viewState = null) {
+async function hydrateMessageAttachments() {
   const images = Array.from(document.querySelectorAll('img[data-message-attachment-id]:not([data-loaded])'));
+  const list = $('messageThreadList');
+  const stickToBottom = !list || (list.scrollHeight - list.scrollTop - list.clientHeight < 80);
   for (const img of images) {
     const attachmentId = img.dataset.messageAttachmentId;
     const frame = img.closest('.message-image-frame');
@@ -3244,10 +3244,10 @@ async function hydrateMessageAttachments(viewState = null) {
       img.hidden = false;
       img.dataset.loaded = '1';
       if (placeholder) placeholder.style.display = 'none';
-      restoreMessageViewState(viewState);
+      if (stickToBottom) scrollMessageThreadToBottom();
     } catch {
       if (placeholder) placeholder.textContent = '图片加载失败';
-      restoreMessageViewState(viewState);
+      if (stickToBottom) scrollMessageThreadToBottom();
     }
   }
 }
@@ -3276,7 +3276,7 @@ function openMessageImage(src) {
     title: '图片消息',
     body: `<img src="${esc(src)}" alt="图片消息" class="message-image-preview" />`,
     footer: `<button class="btn btn-secondary" onclick="closeModal()">关闭</button>`,
-    wide: true,
+    image: true,
   });
 }
 
@@ -5986,6 +5986,7 @@ Object.assign(window, {
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, downloadMessageFile,
+  refreshMessageThreadNow, quoteMessage,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });
