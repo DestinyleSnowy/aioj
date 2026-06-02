@@ -1,10 +1,11 @@
 import io
 import json
+import re
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import text
 
 from app.db import engine
@@ -23,7 +24,10 @@ from app.services.problem_assets import (
 from app.services.problems import latest_problem_version
 from app.services.problem_versions import (
     activate_problem_version,
+    create_problem_draft,
     list_problem_versions,
+    problem_row,
+    problem_version_row,
     run_problem_version_self_test,
     set_problem_version_status,
 )
@@ -89,6 +93,174 @@ def _problem_api_payload(row) -> dict:
     ):
         data.pop(key, None)
     return data
+
+
+def _statement_assets_for_row(row) -> dict:
+    statement_assets = parse_statement_assets(_parse_jsonish(row.get("statement_assets_json"), {}))
+    if not statement_assets["markdowns"] and str(row.get("statement_md") or "").strip():
+        statement_assets["markdowns"].append(
+            {
+                "id": "default",
+                "language": statement_assets["default_language"],
+                "label": "Default",
+                "filename": "statement.md",
+                "content": str(row.get("statement_md") or ""),
+            }
+        )
+    return statement_assets
+
+
+def _statement_asset_id(value: str) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(value or "").strip().lower()).strip("-_.")
+    return normalized
+
+
+def _normalize_statement_assets_for_storage(statement_assets: dict, *, fallback_statement_md: str = "") -> tuple[dict, str]:
+    parsed = parse_statement_assets(statement_assets)
+    markdowns = []
+    seen_markdowns = set()
+    for item in parsed["markdowns"]:
+        item_id = _statement_asset_id(item.get("id") or item.get("language") or "default")
+        content = str(item.get("content") or "")
+        if not item_id or not content.strip() or item_id in seen_markdowns:
+            continue
+        seen_markdowns.add(item_id)
+        markdowns.append(
+            {
+                "id": item_id,
+                "language": str(item.get("language") or item_id),
+                "label": str(item.get("label") or item.get("language") or item_id),
+                "filename": str(item.get("filename") or f"{item_id}.md"),
+                "content": content,
+            }
+        )
+
+    pdfs = []
+    seen_pdfs = set()
+    for item in parsed["pdfs"]:
+        item_id = _statement_asset_id(item.get("id") or item.get("language") or item.get("filename") or "")
+        object_key = str(item.get("object_key") or "")
+        if not item_id or not object_key or item_id in seen_pdfs:
+            continue
+        seen_pdfs.add(item_id)
+        filename = str(item.get("filename") or f"{item_id}.pdf")
+        pdfs.append(
+            {
+                "id": item_id,
+                "language": str(item.get("language") or item_id),
+                "label": str(item.get("label") or filename),
+                "filename": filename,
+                "object_key": object_key,
+            }
+        )
+
+    default_language = str(parsed.get("default_language") or "").strip()
+    markdown_default = next(
+        (item for item in markdowns if item["id"] == default_language or item["language"] == default_language),
+        markdowns[0] if markdowns else None,
+    )
+    if markdown_default:
+        default_language = markdown_default["id"]
+        statement_md = markdown_default["content"]
+    else:
+        statement_md = fallback_statement_md
+        if not default_language:
+            default_language = markdowns[0]["id"] if markdowns else (pdfs[0]["language"] if pdfs else "default")
+
+    return {
+        "default_language": default_language or "default",
+        "markdowns": markdowns,
+        "pdfs": pdfs,
+    }, statement_md
+
+
+def _persist_problem_statement_assets(conn, slug: str, version_id: int, statement_assets: dict):
+    row = problem_version_row(conn, slug, version_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Problem version not found")
+
+    normalized_assets, statement_md = _normalize_statement_assets_for_storage(
+        statement_assets,
+        fallback_statement_md=str(row.get("statement_md") or ""),
+    )
+    conn.execute(
+        text(
+            """
+            update problem_versions
+            set statement_md = :statement_md,
+                statement_assets_json = cast(:statement_assets_json as jsonb)
+            where id = :version_id
+            """
+        ),
+        {
+            "version_id": version_id,
+            "statement_md": statement_md,
+            "statement_assets_json": json.dumps(normalized_assets),
+        },
+    )
+    if row.get("active_version_id") == version_id:
+        conn.execute(
+            text(
+                """
+                update problems
+                set statement_md = :statement_md,
+                    updated_at = now()
+                where slug = :slug
+                """
+            ),
+            {"slug": slug, "statement_md": statement_md},
+        )
+    return problem_version_row(conn, slug, version_id)
+
+
+def _editor_version_payload(version_row_or_summary, slug: str) -> dict | None:
+    if not version_row_or_summary:
+        return None
+    summary = dict(version_row_or_summary)
+    assets = _statement_assets_for_row(summary)
+    return {
+        "id": summary.get("id"),
+        "version": summary.get("version"),
+        "status": summary.get("status"),
+        "self_test_status": summary.get("self_test_status"),
+        "is_active": bool(summary.get("is_active") or summary.get("active_version_id") == summary.get("id")),
+        "created_at": summary.get("created_at"),
+        "activated_at": summary.get("activated_at"),
+        "last_self_tested_at": summary.get("last_self_tested_at"),
+        "statement_assets": sanitize_statement_assets_for_api(assets, slug),
+    }
+
+
+def _admin_problem_editor_payload(conn, slug: str) -> dict:
+    base = problem_row(conn, slug)
+    if not base:
+        raise HTTPException(status_code=404, detail="Problem not found")
+    versions = list_problem_versions(conn, slug)
+    active_version = next((item for item in versions if item.get("is_active")), None)
+    draft_version = next((item for item in versions if str(item.get("status") or "").upper() == "DRAFT"), None)
+    editable_version = draft_version or active_version or (versions[0] if versions else None)
+    return {
+        "problem": {
+            "id": base["id"],
+            "slug": base["slug"],
+            "title": base["title"],
+            "status": base["status"],
+            "active_version_id": base.get("active_version_id"),
+        },
+        "active_version": _editor_version_payload(active_version, slug),
+        "draft_version": _editor_version_payload(draft_version, slug),
+        "editable_version": _editor_version_payload(editable_version, slug),
+        "versions": [
+            {
+                "id": item.get("id"),
+                "version": item.get("version"),
+                "status": item.get("status"),
+                "self_test_status": item.get("self_test_status"),
+                "is_active": bool(item.get("is_active")),
+            }
+            for item in versions
+        ],
+    }
 
 
 @router.get("/api/problems")
@@ -311,6 +483,226 @@ def admin_problem_status(slug: str, payload: dict, user=Depends(require_admin)):
     if not row:
         raise HTTPException(status_code=404, detail="Problem not found")
     return {"ok": True, **dict(row)}
+
+
+@router.get("/api/admin/problems/{slug}/editor")
+def admin_problem_editor(slug: str, user=Depends(require_admin)):
+    slug = safe_slug(slug)
+    with engine.connect() as conn:
+        return _admin_problem_editor_payload(conn, slug)
+
+
+@router.post("/api/admin/problems/{slug}/draft")
+def admin_problem_create_draft(slug: str, payload: dict | None = None, user=Depends(require_admin)):
+    slug = safe_slug(slug)
+    source_version_id = (payload or {}).get("source_version_id")
+    with engine.begin() as conn:
+        try:
+            draft = create_problem_draft(conn, slug, int(source_version_id) if source_version_id is not None else None)
+        except ValueError as exc:
+            detail = str(exc)
+            status_code = 404 if "not found" in detail.lower() else 400
+            raise HTTPException(status_code=status_code, detail=detail) from exc
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem.draft.create",
+            resource_type="problem",
+            resource_id=slug,
+            metadata={"version_id": draft["id"], "version": draft["version"]},
+        )
+        response = _admin_problem_editor_payload(conn, slug)
+    return {"ok": True, **response}
+
+
+@router.post("/api/admin/problems/{slug}/meta")
+def admin_problem_editor_meta(slug: str, payload: dict, user=Depends(require_admin)):
+    slug = safe_slug(slug)
+    version_id = int(payload.get("version_id") or 0)
+    if version_id <= 0:
+        raise HTTPException(status_code=400, detail="version_id is required")
+
+    title = str(payload.get("title") or "").strip()
+    default_language = str(payload.get("default_language") or "").strip()
+    with engine.begin() as conn:
+        row = problem_version_row(conn, slug, version_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Problem version not found")
+        if title:
+            conn.execute(
+                text(
+                    """
+                    update problems
+                    set title = :title,
+                        updated_at = now()
+                    where slug = :slug
+                    """
+                ),
+                {"slug": slug, "title": title},
+            )
+        if default_language:
+            assets = _statement_assets_for_row(row)
+            assets["default_language"] = _statement_asset_id(default_language) or default_language
+            _persist_problem_statement_assets(conn, slug, version_id, assets)
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem.meta.update",
+            resource_type="problem",
+            resource_id=slug,
+            metadata={"version_id": version_id, "title": title or None, "default_language": default_language or None},
+        )
+        response = _admin_problem_editor_payload(conn, slug)
+    return {"ok": True, **response}
+
+
+@router.post("/api/admin/problems/{slug}/versions/{version_id}/statement-markdowns/{asset_id}")
+def admin_problem_statement_markdown_upsert(
+    slug: str,
+    version_id: int,
+    asset_id: str,
+    payload: dict,
+    user=Depends(require_admin),
+):
+    slug = safe_slug(slug)
+    normalized_asset_id = _statement_asset_id(asset_id)
+    if not normalized_asset_id:
+        raise HTTPException(status_code=400, detail="Invalid statement asset id")
+
+    content = str(payload.get("content") or "")
+    if not content.strip():
+        raise HTTPException(status_code=400, detail="Markdown content cannot be empty")
+
+    with engine.begin() as conn:
+        row = problem_version_row(conn, slug, version_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Problem version not found")
+        assets = _statement_assets_for_row(row)
+        assets["markdowns"] = [
+            item for item in assets["markdowns"]
+            if _statement_asset_id(item.get("id") or item.get("language") or "") != normalized_asset_id
+        ]
+        assets["markdowns"].append(
+            {
+                "id": normalized_asset_id,
+                "language": str(payload.get("language") or normalized_asset_id),
+                "label": str(payload.get("label") or payload.get("language") or normalized_asset_id),
+                "filename": str(payload.get("filename") or f"{normalized_asset_id}.md"),
+                "content": content,
+            }
+        )
+        if bool(payload.get("make_default")) or not str(assets.get("default_language") or "").strip():
+            assets["default_language"] = normalized_asset_id
+        _persist_problem_statement_assets(conn, slug, version_id, assets)
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem.statement_markdown.upsert",
+            resource_type="problem_version",
+            resource_id=version_id,
+            metadata={"slug": slug, "asset_id": normalized_asset_id},
+        )
+        response = _admin_problem_editor_payload(conn, slug)
+    return {"ok": True, **response}
+
+
+@router.post("/api/admin/problems/{slug}/versions/{version_id}/statement-pdfs")
+async def admin_problem_statement_pdf_upload(
+    slug: str,
+    version_id: int,
+    file: UploadFile = File(...),
+    asset_id: str = Form(...),
+    language: str = Form(""),
+    label: str = Form(""),
+    user=Depends(require_admin),
+):
+    slug = safe_slug(slug)
+    normalized_asset_id = _statement_asset_id(asset_id or language or Path(file.filename or "").stem)
+    if not normalized_asset_id:
+        raise HTTPException(status_code=400, detail="Invalid statement asset id")
+
+    filename = Path(file.filename or f"{normalized_asset_id}.pdf").name
+    if Path(filename).suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are supported for statement language packs")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty")
+
+    with engine.begin() as conn:
+        row = problem_version_row(conn, slug, version_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Problem version not found")
+        object_key = f"problems/{slug}/{row['version']}/statements/{normalized_asset_id}/{filename}"
+        put_bytes(S3_BUCKET_PROBLEMS, object_key, content, guess_content_type(filename, "application/pdf"))
+        assets = _statement_assets_for_row(row)
+        assets["pdfs"] = [
+            item for item in assets["pdfs"]
+            if _statement_asset_id(item.get("id") or item.get("language") or item.get("filename") or "") != normalized_asset_id
+        ]
+        assets["pdfs"].append(
+            {
+                "id": normalized_asset_id,
+                "language": str(language or normalized_asset_id),
+                "label": str(label or language or filename),
+                "filename": filename,
+                "object_key": object_key,
+            }
+        )
+        if not str(assets.get("default_language") or "").strip():
+            assets["default_language"] = str(language or normalized_asset_id)
+        _persist_problem_statement_assets(conn, slug, version_id, assets)
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem.statement_pdf.upload",
+            resource_type="problem_version",
+            resource_id=version_id,
+            metadata={"slug": slug, "asset_id": normalized_asset_id, "filename": filename},
+        )
+        response = _admin_problem_editor_payload(conn, slug)
+    return {"ok": True, **response}
+
+
+@router.delete("/api/admin/problems/{slug}/versions/{version_id}/statement-assets/{kind}/{asset_id}")
+def admin_problem_statement_asset_delete(
+    slug: str,
+    version_id: int,
+    kind: str,
+    asset_id: str,
+    user=Depends(require_admin),
+):
+    slug = safe_slug(slug)
+    normalized_asset_id = _statement_asset_id(asset_id)
+    bucket_key = "markdowns" if kind == "markdown" else "pdfs" if kind == "pdf" else None
+    if not bucket_key or not normalized_asset_id:
+        raise HTTPException(status_code=400, detail="Invalid statement asset target")
+
+    with engine.begin() as conn:
+        row = problem_version_row(conn, slug, version_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Problem version not found")
+        assets = _statement_assets_for_row(row)
+        before = len(assets[bucket_key])
+        assets[bucket_key] = [
+            item for item in assets[bucket_key]
+            if _statement_asset_id(item.get("id") or item.get("language") or item.get("filename") or "") != normalized_asset_id
+        ]
+        if len(assets[bucket_key]) == before:
+            raise HTTPException(status_code=404, detail="Statement asset not found")
+        if bucket_key == "markdowns" and str(assets.get("default_language") or "") == normalized_asset_id:
+            assets["default_language"] = assets["markdowns"][0]["id"] if assets["markdowns"] else assets.get("default_language") or "default"
+        _persist_problem_statement_assets(conn, slug, version_id, assets)
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.problem.statement_asset.delete",
+            resource_type="problem_version",
+            resource_id=version_id,
+            metadata={"slug": slug, "kind": kind, "asset_id": normalized_asset_id},
+        )
+        response = _admin_problem_editor_payload(conn, slug)
+    return {"ok": True, **response}
 
 
 def _statement_label(language: str, labels: dict) -> str:

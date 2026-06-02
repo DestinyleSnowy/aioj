@@ -42,6 +42,9 @@ const state = {
   markdownConfigured: false,
 };
 
+let problemEditorState = null;
+let problemEditorTempId = 0;
+
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
 
@@ -4188,6 +4191,7 @@ async function renderProblemAdmin() {
                     <td>
                       <div class="row gap-xs" style="justify-content: flex-end;">
                         <a href="/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" data-link>预览</a>
+                        <button class="btn btn-secondary btn-sm" onclick="showProblemEditorModal('${esc(p.slug)}')">可视化编辑</button>
                         <button class="btn btn-secondary btn-sm" onclick="showProblemVersionsModal('${esc(p.slug)}')">版本流水线</button>
                         <button class="btn btn-secondary btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'PUBLIC')">发布公开</button>
                         <button class="btn btn-secondary btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'DRAFT')">草稿锁定</button>
@@ -4236,6 +4240,489 @@ async function importProblem() {
     setTimeout(() => renderProblemAdmin(), 1800);
   } catch (err) {
     resultEl.innerHTML = `<div class="notice error">部署导入失败: ${esc(err.message)}</div>`;
+  }
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function problemEditorAssets() {
+  const assets = problemEditorState?.editableVersion?.statement_assets || {};
+  if (!Array.isArray(assets.markdowns)) assets.markdowns = [];
+  if (!Array.isArray(assets.pdfs)) assets.pdfs = [];
+  if (!assets.default_language) assets.default_language = 'default';
+  return assets;
+}
+
+function problemEditorCanEdit() {
+  return !!problemEditorState?.editableVersion && String(problemEditorState.editableVersion.status || '').toUpperCase() === 'DRAFT';
+}
+
+function problemEditorVariantKey(kind, item) {
+  return `${kind}:${item?._draftKey || item?.id || 'new'}`;
+}
+
+function problemEditorVariants() {
+  const assets = problemEditorAssets();
+  return [
+    ...assets.markdowns.map(item => ({ kind: 'markdown', item })),
+    ...assets.pdfs.map(item => ({ kind: 'pdf', item })),
+  ];
+}
+
+function problemEditorCurrentAsset() {
+  const key = problemEditorState?.selectedKey || '';
+  return problemEditorVariants().find(entry => problemEditorVariantKey(entry.kind, entry.item) === key) || null;
+}
+
+function problemEditorEnsureSelection(preferred = null) {
+  const variants = problemEditorVariants();
+  if (variants.length === 0) {
+    problemEditorState.selectedKey = '';
+    return;
+  }
+  if (preferred?.kind && preferred?.id) {
+    const match = variants.find(entry => entry.kind === preferred.kind && ((entry.item.id || '') === preferred.id || (entry.item._draftKey || '') === preferred.id));
+    if (match) {
+      problemEditorState.selectedKey = problemEditorVariantKey(match.kind, match.item);
+      return;
+    }
+  }
+  const current = problemEditorCurrentAsset();
+  if (current) return;
+  problemEditorState.selectedKey = problemEditorVariantKey(variants[0].kind, variants[0].item);
+}
+
+function loadProblemEditorState(data, preferred = null) {
+  const editableVersion = data?.editable_version ? cloneJson(data.editable_version) : null;
+  if (editableVersion?.statement_assets) {
+    editableVersion.statement_assets.markdowns = (editableVersion.statement_assets.markdowns || []).map(item => ({ ...item }));
+    editableVersion.statement_assets.pdfs = (editableVersion.statement_assets.pdfs || []).map(item => ({ ...item }));
+  }
+  problemEditorState = {
+    slug: data?.problem?.slug || '',
+    problem: cloneJson(data?.problem || {}),
+    activeVersion: cloneJson(data?.active_version || null),
+    draftVersion: cloneJson(data?.draft_version || null),
+    editableVersion,
+    versions: cloneJson(data?.versions || []),
+    selectedKey: '',
+  };
+  problemEditorEnsureSelection(preferred);
+}
+
+function captureProblemEditorCurrentAsset() {
+  const current = problemEditorCurrentAsset();
+  if (!current) return null;
+  const item = current.item;
+  const idInput = $('problemEditorAssetId');
+  const languageInput = $('problemEditorAssetLanguage');
+  const labelInput = $('problemEditorAssetLabel');
+  const filenameInput = $('problemEditorAssetFilename');
+  const makeDefaultInput = $('problemEditorAssetMakeDefault');
+  if (idInput) item.id = idInput.value.trim();
+  if (languageInput) item.language = languageInput.value.trim();
+  if (labelInput) item.label = labelInput.value.trim();
+  if (filenameInput) item.filename = filenameInput.value.trim();
+  if (current.kind === 'markdown') {
+    const contentInput = $('problemEditorMarkdownContent');
+    if (contentInput) item.content = contentInput.value;
+  }
+  item._makeDefault = !!makeDefaultInput?.checked;
+  return current;
+}
+
+function problemEditorMarkdownPreviewHtml(content) {
+  const slug = problemEditorState?.problem?.slug || '';
+  return renderMd(rewriteProblemMarkdownAssets(content || '', { slug }));
+}
+
+function syncProblemEditorMarkdownPreview() {
+  const preview = $('problemEditorMarkdownPreview');
+  const content = $('problemEditorMarkdownContent')?.value || '';
+  if (preview) preview.innerHTML = problemEditorMarkdownPreviewHtml(content);
+}
+
+function renderProblemEditorModalContent() {
+  if (!problemEditorState) return;
+  problemEditorEnsureSelection();
+  const canEdit = problemEditorCanEdit();
+  const assets = problemEditorAssets();
+  const variants = problemEditorVariants();
+  const current = problemEditorCurrentAsset();
+  const selectedItem = current?.item || null;
+  const currentDefaultLanguage = String(assets.default_language || '');
+  const defaultLanguageOptions = (assets.markdowns || []).length
+    ? assets.markdowns.map(item => `
+        <option value="${esc(item.id || item.language || '')}" ${(item.id || item.language || '') === currentDefaultLanguage ? 'selected' : ''}>
+          ${esc(item.label || item.language || item.id || 'Markdown')}
+        </option>
+      `).join('')
+    : `<option value="${esc(currentDefaultLanguage || 'default')}">${esc(currentDefaultLanguage || 'default')}</option>`;
+  const disabledAttr = canEdit ? '' : 'disabled';
+  const sidebarButtons = `
+    <div class="row gap-xs" style="flex-wrap: wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="addProblemEditorMarkdownAsset()" ${disabledAttr}>+ Markdown</button>
+      <button class="btn btn-secondary btn-sm" onclick="addProblemEditorPdfAsset()" ${disabledAttr}>+ PDF 语言包</button>
+    </div>
+  `;
+  const sidebarItems = variants.length === 0
+    ? emptyBox('当前版本还没有题面资产')
+    : variants.map(entry => {
+        const active = current && problemEditorVariantKey(entry.kind, entry.item) === problemEditorState.selectedKey;
+        const title = entry.item.label || entry.item.language || entry.item.id || (entry.kind === 'markdown' ? 'Markdown' : 'PDF');
+        const meta = entry.kind === 'markdown'
+          ? `Markdown · ${entry.item.language || entry.item.id || 'default'}`
+          : `PDF · ${entry.item.language || entry.item.id || 'default'}`;
+        return `
+          <button
+            class="btn ${active ? 'btn-primary' : 'btn-secondary'}"
+            style="width: 100%; justify-content: flex-start; text-align: left; display: flex; flex-direction: column; align-items: flex-start; gap: 2px;"
+            onclick="selectProblemEditorAsset(${jsArg(problemEditorVariantKey(entry.kind, entry.item))})"
+          >
+            <strong>${esc(title)}</strong>
+            <span style="font-size: 11px; opacity: 0.85;">${esc(meta)}</span>
+          </button>
+        `;
+      }).join('');
+
+  let workspace = emptyBox('请选择或创建一个题面资产');
+  if (current && selectedItem) {
+    const itemId = selectedItem.id || '';
+    const itemLanguage = selectedItem.language || '';
+    const itemLabel = selectedItem.label || '';
+    const itemFilename = selectedItem.filename || (current.kind === 'markdown' ? 'statement.md' : `${itemId || 'statement'}.pdf`);
+    const isDefault = current.kind === 'markdown' && (itemId === currentDefaultLanguage || itemLanguage === currentDefaultLanguage);
+    if (current.kind === 'markdown') {
+      workspace = `
+        <div class="form-row" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-md); margin-bottom: var(--space-md);">
+          <div class="form-group">
+            <label for="problemEditorAssetId">资产 ID</label>
+            <input id="problemEditorAssetId" type="text" value="${esc(itemId)}" placeholder="如: en / zh-cn" ${disabledAttr} />
+          </div>
+          <div class="form-group">
+            <label for="problemEditorAssetLanguage">语言标识</label>
+            <input id="problemEditorAssetLanguage" type="text" value="${esc(itemLanguage)}" placeholder="如: English / zh-CN" ${disabledAttr} />
+          </div>
+          <div class="form-group">
+            <label for="problemEditorAssetLabel">显示名称</label>
+            <input id="problemEditorAssetLabel" type="text" value="${esc(itemLabel)}" placeholder="如: English / 简体中文" ${disabledAttr} />
+          </div>
+          <div class="form-group">
+            <label for="problemEditorAssetFilename">文件名</label>
+            <input id="problemEditorAssetFilename" type="text" value="${esc(itemFilename)}" placeholder="statement.md" ${disabledAttr} />
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-md); align-items: start;">
+          <div class="form-group" style="min-width: 0;">
+            <label for="problemEditorMarkdownContent">Markdown / LaTeX 题面</label>
+            <textarea id="problemEditorMarkdownContent" rows="22" oninput="syncProblemEditorMarkdownPreview()" ${disabledAttr}>${esc(selectedItem.content || '')}</textarea>
+          </div>
+          <div style="min-width: 0;">
+            <label style="display:block; margin-bottom: 6px; font-size: 12px; color: var(--text-secondary);">实时预览</label>
+            <div id="problemEditorMarkdownPreview" style="min-height: 520px; padding: var(--space-md); border: var(--border-light); border-radius: var(--radius-md); background: hsla(0, 0%, 0%, 0.08); overflow: auto;">
+              ${problemEditorMarkdownPreviewHtml(selectedItem.content || '')}
+            </div>
+          </div>
+        </div>
+        <div class="row gap-sm mt-md" style="flex-wrap: wrap;">
+          <label class="row gap-xs" style="font-size: 12px; color: var(--text-secondary);">
+            <input id="problemEditorAssetMakeDefault" type="checkbox" ${isDefault ? 'checked' : ''} ${disabledAttr} />
+            <span>保存后设为默认语言</span>
+          </label>
+          <button class="btn btn-primary btn-sm" onclick="saveProblemEditorMarkdownAsset()" ${disabledAttr}>保存 Markdown 题面</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteProblemEditorSelectedAsset()" ${disabledAttr}>删除此语言</button>
+        </div>
+      `;
+    } else {
+      workspace = `
+        <div class="form-row" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-md); margin-bottom: var(--space-md);">
+          <div class="form-group">
+            <label for="problemEditorAssetId">资产 ID</label>
+            <input id="problemEditorAssetId" type="text" value="${esc(itemId)}" placeholder="如: zh-cn-pdf" ${disabledAttr} />
+          </div>
+          <div class="form-group">
+            <label for="problemEditorAssetLanguage">语言标识</label>
+            <input id="problemEditorAssetLanguage" type="text" value="${esc(itemLanguage)}" placeholder="如: zh-CN" ${disabledAttr} />
+          </div>
+          <div class="form-group">
+            <label for="problemEditorAssetLabel">显示名称</label>
+            <input id="problemEditorAssetLabel" type="text" value="${esc(itemLabel)}" placeholder="如: 简体中文 PDF" ${disabledAttr} />
+          </div>
+          <div class="form-group">
+            <label for="problemEditorAssetFilename">文件名</label>
+            <input id="problemEditorAssetFilename" type="text" value="${esc(itemFilename)}" placeholder="statement.pdf" ${disabledAttr} />
+          </div>
+        </div>
+        <div class="row gap-sm mb-md" style="flex-wrap: wrap;">
+          <input id="problemEditorPdfFile" type="file" accept=".pdf,application/pdf" style="width: auto; max-width: 360px;" ${disabledAttr} />
+          <button class="btn btn-primary btn-sm" onclick="uploadProblemEditorPdf()" ${disabledAttr}>上传 / 替换 PDF</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteProblemEditorSelectedAsset()" ${disabledAttr}>删除此语言</button>
+          ${selectedItem.download_url ? `<a class="btn btn-secondary btn-sm" target="_blank" href="${esc(selectedItem.download_url)}">新标签打开</a>` : ''}
+        </div>
+        ${selectedItem.download_url ? `
+          <iframe
+            class="statement-pdf-frame"
+            src="${esc(selectedItem.download_url)}#view=FitH"
+            title="${esc(itemLabel || itemLanguage || itemId || 'PDF')} PDF"
+            loading="lazy"
+          ></iframe>
+        ` : `
+          <div class="empty-state">
+            <div class="loading-text">上传 PDF 后可在此页内预览</div>
+          </div>
+        `}
+      `;
+    }
+  }
+
+  $('modalBody').innerHTML = `
+    <div class="notice info">
+      ZIP 题包导入仍保留；这里用于基于现有版本做小改动，例如编辑 Markdown/LaTeX 题面，或单独上传某个语言包 PDF，而不必整包重传。
+    </div>
+    ${canEdit ? '' : `
+      <div class="notice warning">
+        当前只存在生效版本。为了避免小改动直接影响线上题面，请先创建一个草稿版本，再在草稿上增量编辑并通过现有版本流水线激活。
+      </div>
+    `}
+    <div style="display:grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 260px) minmax(220px, 260px); gap: var(--space-md); margin-bottom: var(--space-md);">
+      <div class="form-group">
+        <label for="problemEditorTitle">题目标题</label>
+        <input id="problemEditorTitle" type="text" value="${esc(problemEditorState.problem?.title || '')}" ${disabledAttr} />
+      </div>
+      <div class="form-group">
+        <label for="problemEditorDefaultLanguage">默认 Markdown 语言</label>
+        <select id="problemEditorDefaultLanguage" ${disabledAttr}>${defaultLanguageOptions}</select>
+      </div>
+      <div style="padding: 12px; border: var(--border-light); border-radius: var(--radius-md); background: hsla(0, 0%, 100%, 0.02);">
+        <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 6px;">当前编辑版本</div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <strong style="font-family: var(--font-mono);">${esc(problemEditorState.editableVersion?.version || '—')}</strong>
+          ${statusPill(problemEditorState.editableVersion?.status || 'UNKNOWN')}
+          ${statusPill(problemEditorState.editableVersion?.self_test_status || 'PENDING')}
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; gap: var(--space-md); align-items: flex-start; min-height: 560px;">
+      <div style="width: 260px; flex: 0 0 260px; display:flex; flex-direction:column; gap: var(--space-sm);">
+        ${sidebarButtons}
+        <div style="display:flex; flex-direction:column; gap: var(--space-sm); max-height: 620px; overflow: auto;">
+          ${sidebarItems}
+        </div>
+      </div>
+      <div style="flex: 1; min-width: 0; padding: var(--space-md); border: var(--border-light); border-radius: var(--radius-md); background: hsla(0, 0%, 100%, 0.02);">
+        ${workspace}
+      </div>
+    </div>
+  `;
+  $('modalFooter').innerHTML = `
+    <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+    <button class="btn btn-secondary" onclick="refreshProblemEditorModal()">刷新</button>
+    <button class="btn btn-secondary" onclick="showProblemVersionsModal(${jsArg(problemEditorState.slug)})">版本流水线</button>
+    ${canEdit
+      ? '<button class="btn btn-primary" onclick="saveProblemEditorMeta()">保存基本信息</button>'
+      : '<button class="btn btn-primary" onclick="createProblemEditorDraft()">创建编辑草稿</button>'}
+  `;
+}
+
+async function showProblemEditorModal(slug) {
+  problemEditorState = null;
+  openModal({
+    title: `题目可视化编辑器 — ${slug}`,
+    wide: true,
+    body: `
+      <div class="loading-overlay">
+        <div class="spinner-ring"></div>
+        <span class="loading-text">正在加载题目编辑上下文...</span>
+      </div>
+    `,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">关闭</button>`,
+  });
+  try {
+    const data = await api(`/api/admin/problems/${slug}/editor`, { headers: authHeaders() });
+    loadProblemEditorState(data);
+    renderProblemEditorModalContent();
+  } catch (err) {
+    $('modalBody').innerHTML = errorBox(err);
+  }
+}
+
+async function refreshProblemEditorModal() {
+  if (!problemEditorState?.slug) return;
+  const current = captureProblemEditorCurrentAsset();
+  const preferred = current ? { kind: current.kind, id: current.item.id || current.item._draftKey || '' } : null;
+  try {
+    const data = await api(`/api/admin/problems/${problemEditorState.slug}/editor`, { headers: authHeaders() });
+    loadProblemEditorState(data, preferred);
+    renderProblemEditorModalContent();
+  } catch (err) {
+    toast(`刷新题目编辑器失败: ${err.message}`, 'error');
+  }
+}
+
+function selectProblemEditorAsset(key) {
+  captureProblemEditorCurrentAsset();
+  problemEditorState.selectedKey = key;
+  renderProblemEditorModalContent();
+}
+
+function addProblemEditorMarkdownAsset() {
+  if (!problemEditorCanEdit()) return;
+  captureProblemEditorCurrentAsset();
+  const tempKey = `tmp-md-${++problemEditorTempId}`;
+  problemEditorAssets().markdowns.push({
+    _draftKey: tempKey,
+    _localOnly: true,
+    id: '',
+    language: '',
+    label: '',
+    filename: 'statement.md',
+    content: '',
+  });
+  problemEditorState.selectedKey = `markdown:${tempKey}`;
+  renderProblemEditorModalContent();
+}
+
+function addProblemEditorPdfAsset() {
+  if (!problemEditorCanEdit()) return;
+  captureProblemEditorCurrentAsset();
+  const tempKey = `tmp-pdf-${++problemEditorTempId}`;
+  problemEditorAssets().pdfs.push({
+    _draftKey: tempKey,
+    _localOnly: true,
+    id: '',
+    language: '',
+    label: '',
+    filename: 'statement.pdf',
+    download_url: '',
+  });
+  problemEditorState.selectedKey = `pdf:${tempKey}`;
+  renderProblemEditorModalContent();
+}
+
+async function createProblemEditorDraft() {
+  if (!problemEditorState?.slug) return;
+  try {
+    const data = await api(`/api/admin/problems/${problemEditorState.slug}/draft`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    loadProblemEditorState(data);
+    renderProblemEditorModalContent();
+    renderProblemAdmin();
+    toast('已基于当前版本生成可编辑草稿', 'success');
+  } catch (err) {
+    toast(`创建编辑草稿失败: ${err.message}`, 'error');
+  }
+}
+
+async function saveProblemEditorMeta() {
+  if (!problemEditorCanEdit()) return;
+  const versionId = problemEditorState?.editableVersion?.id;
+  if (!versionId) return;
+  try {
+    const data = await api(`/api/admin/problems/${problemEditorState.slug}/meta`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version_id: versionId,
+        title: $('problemEditorTitle')?.value?.trim() || '',
+        default_language: $('problemEditorDefaultLanguage')?.value || '',
+      }),
+    });
+    loadProblemEditorState(data, problemEditorCurrentAsset() ? { kind: problemEditorCurrentAsset().kind, id: problemEditorCurrentAsset().item.id || '' } : null);
+    renderProblemEditorModalContent();
+    renderProblemAdmin();
+    toast('题目基本信息已保存', 'success');
+  } catch (err) {
+    toast(`保存题目基本信息失败: ${err.message}`, 'error');
+  }
+}
+
+async function saveProblemEditorMarkdownAsset() {
+  if (!problemEditorCanEdit()) return;
+  const current = captureProblemEditorCurrentAsset();
+  if (!current || current.kind !== 'markdown') return;
+  const item = current.item;
+  const assetId = (item.id || '').trim();
+  if (!assetId) { toast('请填写 Markdown 语言资产 ID', 'warning'); return; }
+  if (!(item.content || '').trim()) { toast('Markdown 题面不能为空', 'warning'); return; }
+  try {
+    const data = await api(`/api/admin/problems/${problemEditorState.slug}/versions/${problemEditorState.editableVersion.id}/statement-markdowns/${encodeURIComponent(assetId)}`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        language: item.language || assetId,
+        label: item.label || item.language || assetId,
+        filename: item.filename || `${assetId}.md`,
+        content: item.content || '',
+        make_default: !!item._makeDefault,
+      }),
+    });
+    loadProblemEditorState(data, { kind: 'markdown', id: assetId });
+    renderProblemEditorModalContent();
+    renderProblemAdmin();
+    toast('Markdown 题面已保存', 'success');
+  } catch (err) {
+    toast(`保存 Markdown 题面失败: ${err.message}`, 'error');
+  }
+}
+
+async function uploadProblemEditorPdf() {
+  if (!problemEditorCanEdit()) return;
+  const current = captureProblemEditorCurrentAsset();
+  if (!current || current.kind !== 'pdf') return;
+  const item = current.item;
+  const assetId = (item.id || '').trim();
+  const fileInput = $('problemEditorPdfFile');
+  if (!assetId) { toast('请填写 PDF 语言资产 ID', 'warning'); return; }
+  if (!fileInput || !fileInput.files.length) { toast('请先选择 PDF 文件', 'warning'); return; }
+  try {
+    const fd = new FormData();
+    fd.append('asset_id', assetId);
+    fd.append('language', item.language || assetId);
+    fd.append('label', item.label || item.language || assetId);
+    fd.append('file', fileInput.files[0]);
+    const data = await api(`/api/admin/problems/${problemEditorState.slug}/versions/${problemEditorState.editableVersion.id}/statement-pdfs`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    loadProblemEditorState(data, { kind: 'pdf', id: assetId });
+    renderProblemEditorModalContent();
+    toast('PDF 语言包已上传', 'success');
+  } catch (err) {
+    toast(`上传 PDF 语言包失败: ${err.message}`, 'error');
+  }
+}
+
+async function deleteProblemEditorSelectedAsset() {
+  const current = captureProblemEditorCurrentAsset();
+  if (!current) return;
+  if (!confirm(`确认删除当前${current.kind === 'markdown' ? ' Markdown 题面' : ' PDF 语言包'}吗？`)) return;
+  if (current.item._localOnly) {
+    const bucket = current.kind === 'markdown' ? problemEditorAssets().markdowns : problemEditorAssets().pdfs;
+    const idx = bucket.findIndex(item => (item._draftKey || item.id) === (current.item._draftKey || current.item.id));
+    if (idx >= 0) bucket.splice(idx, 1);
+    problemEditorEnsureSelection();
+    renderProblemEditorModalContent();
+    return;
+  }
+  if (!problemEditorCanEdit()) return;
+  const assetId = (current.item.id || '').trim();
+  if (!assetId) return;
+  try {
+    const data = await api(`/api/admin/problems/${problemEditorState.slug}/versions/${problemEditorState.editableVersion.id}/statement-assets/${current.kind === 'markdown' ? 'markdown' : 'pdf'}/${encodeURIComponent(assetId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    loadProblemEditorState(data);
+    renderProblemEditorModalContent();
+    toast('题面资产已删除', 'success');
+  } catch (err) {
+    toast(`删除题面资产失败: ${err.message}`, 'error');
   }
 }
 
@@ -5486,6 +5973,10 @@ Object.assign(window, {
   renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
   toggleUserRole, toggleUserDisabled,
   importProblem, setProblemStatus, showProblemVersionsModal, rerunProblemVersionSelfTest,
+  showProblemEditorModal, refreshProblemEditorModal, selectProblemEditorAsset,
+  addProblemEditorMarkdownAsset, addProblemEditorPdfAsset, createProblemEditorDraft,
+  saveProblemEditorMeta, saveProblemEditorMarkdownAsset, uploadProblemEditorPdf,
+  deleteProblemEditorSelectedAsset, syncProblemEditorMarkdownPreview,
   activateProblemVersion, setProblemVersionStatus,
   showCreateContestModal, createContest, setContestStatus,
   showContestSettingsModal, saveContestSettings,

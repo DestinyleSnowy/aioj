@@ -22,6 +22,19 @@ def parse_jsonish(value: Any, fallback):
     return value
 
 
+def problem_row(conn, slug: str):
+    return conn.execute(
+        text(
+            """
+            select id, slug, title, status, active_version_id
+            from problems
+            where slug = :slug
+            """
+        ),
+        {"slug": slug},
+    ).mappings().first()
+
+
 def problem_version_row(conn, slug: str, version_id: int):
     return conn.execute(
         text(
@@ -39,6 +52,29 @@ def problem_version_row(conn, slug: str, version_id: int):
             """
         ),
         {"slug": slug, "version_id": version_id},
+    ).mappings().first()
+
+
+def latest_problem_draft_row(conn, slug: str):
+    return conn.execute(
+        text(
+            """
+            select
+                p.id as problem_id,
+                p.slug,
+                p.title,
+                p.status as problem_status,
+                p.active_version_id,
+                pv.*
+            from problems p
+            join problem_versions pv on pv.problem_id = p.id
+            where p.slug = :slug
+              and pv.status = 'DRAFT'
+            order by pv.created_at desc, pv.id desc
+            limit 1
+            """
+        ),
+        {"slug": slug},
     ).mappings().first()
 
 
@@ -73,6 +109,125 @@ def list_problem_versions(conn, slug: str) -> list[dict[str, Any]]:
         {"slug": slug},
     ).mappings().all()
     return [problem_version_summary(row) for row in rows]
+
+
+def next_problem_version_name(conn, problem_id: int) -> str:
+    rows = conn.execute(
+        text("select version from problem_versions where problem_id = :problem_id"),
+        {"problem_id": problem_id},
+    ).mappings().all()
+    existing = {str(row.get("version") or "").strip() for row in rows}
+    number = max(1, len(existing) + 1)
+    candidate = f"v{number}"
+    while candidate in existing:
+        number += 1
+        candidate = f"v{number}"
+    return candidate
+
+
+def create_problem_draft(conn, slug: str, source_version_id: int | None = None) -> dict[str, Any]:
+    draft = latest_problem_draft_row(conn, slug)
+    if draft and source_version_id is None:
+        return problem_version_summary(draft)
+
+    problem = problem_row(conn, slug)
+    if not problem:
+        raise ValueError("Problem not found")
+
+    if source_version_id is not None:
+        source = problem_version_row(conn, slug, source_version_id)
+    elif problem.get("active_version_id"):
+        source = problem_version_row(conn, slug, int(problem["active_version_id"]))
+    else:
+        versions = list_problem_versions(conn, slug)
+        source = versions[0] if versions else None
+
+    if not source:
+        raise ValueError("Problem has no source version to clone")
+
+    source_summary = problem_version_summary(source)
+    new_version = next_problem_version_name(conn, int(problem["id"]))
+    inserted = conn.execute(
+        text(
+            """
+            insert into problem_versions (
+                problem_id,
+                version,
+                statement_md,
+                statement_assets_json,
+                test_input_object_key,
+                test_input_bundle_object_key,
+                label_object_key,
+                sample_submission_object_key,
+                public_bundle_object_key,
+                private_bundle_object_key,
+                sample_bundle_object_key,
+                sample_bundle_filename,
+                output_files,
+                scorer_object_key,
+                runner_image,
+                run_command,
+                required_tags,
+                status,
+                self_test_status,
+                self_test_result,
+                last_self_tested_at
+            )
+            values (
+                :problem_id,
+                :version,
+                :statement_md,
+                cast(:statement_assets_json as jsonb),
+                :test_input_object_key,
+                :test_input_bundle_object_key,
+                :label_object_key,
+                :sample_submission_object_key,
+                :public_bundle_object_key,
+                :private_bundle_object_key,
+                :sample_bundle_object_key,
+                :sample_bundle_filename,
+                cast(:output_files as jsonb),
+                :scorer_object_key,
+                :runner_image,
+                cast(:run_command as jsonb),
+                :required_tags,
+                'DRAFT',
+                :self_test_status,
+                cast(:self_test_result as jsonb),
+                :last_self_tested_at
+            )
+            returning id
+            """
+        ),
+        {
+            "problem_id": problem["id"],
+            "version": new_version,
+            "statement_md": str(source_summary.get("statement_md") or ""),
+            "statement_assets_json": json.dumps(source_summary.get("statement_assets_json") or {}),
+            "test_input_object_key": source_summary.get("test_input_object_key"),
+            "test_input_bundle_object_key": source_summary.get("test_input_bundle_object_key"),
+            "label_object_key": source_summary.get("label_object_key"),
+            "sample_submission_object_key": source_summary.get("sample_submission_object_key"),
+            "public_bundle_object_key": source_summary.get("public_bundle_object_key"),
+            "private_bundle_object_key": source_summary.get("private_bundle_object_key"),
+            "sample_bundle_object_key": source_summary.get("sample_bundle_object_key"),
+            "sample_bundle_filename": source_summary.get("sample_bundle_filename"),
+            "output_files": json.dumps(source_summary.get("output_files") or ["submission.csv"]),
+            "scorer_object_key": source_summary.get("scorer_object_key"),
+            "runner_image": source_summary.get("runner_image"),
+            "run_command": json.dumps(source_summary.get("run_command") or []),
+            "required_tags": source_summary.get("required_tags") or [],
+            "self_test_status": source_summary.get("self_test_status") or "PENDING",
+            "self_test_result": json.dumps(source_summary.get("self_test_result")) if source_summary.get("self_test_result") is not None else None,
+            "last_self_tested_at": source_summary.get("last_self_tested_at"),
+        },
+    ).mappings().first()
+
+    if not inserted:
+        raise ValueError("Failed to create draft version")
+
+    created = problem_version_row(conn, slug, int(inserted["id"]))
+    return problem_version_summary(created)
 
 
 def run_problem_version_self_test(conn, slug: str, version_id: int) -> dict[str, Any]:

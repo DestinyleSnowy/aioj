@@ -13,6 +13,12 @@ def test_create_app_registers_core_routes():
     assert "/api/submissions/{submission_id}/cancel" in paths
     assert "/api/submissions/{submission_id}/source" in paths
     assert "/api/admin/problems/import" in paths
+    assert "/api/admin/problems/{slug}/editor" in paths
+    assert "/api/admin/problems/{slug}/draft" in paths
+    assert "/api/admin/problems/{slug}/meta" in paths
+    assert "/api/admin/problems/{slug}/versions/{version_id}/statement-markdowns/{asset_id}" in paths
+    assert "/api/admin/problems/{slug}/versions/{version_id}/statement-pdfs" in paths
+    assert "/api/admin/problems/{slug}/versions/{version_id}/statement-assets/{kind}/{asset_id}" in paths
     assert "/api/admin/audit-logs" in paths
     assert "/api/admin/problems/{slug}/versions" in paths
     assert "/api/admin/judge/overview" in paths

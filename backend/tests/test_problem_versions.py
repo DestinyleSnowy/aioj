@@ -124,3 +124,64 @@ def test_run_problem_version_self_test_passes_with_artifact_scorer(monkeypatch):
     assert calls["kwargs"]["private_bundle"] == b"scoring.zip"
     assert calls["kwargs"]["public_bundle"] == b"public.zip"
     assert calls["kwargs"]["output_files"] == ["submission_a.npy", "submission_b.npy"]
+
+
+def test_create_problem_draft_clones_active_version(monkeypatch):
+    class InsertConn(DummyConn):
+        def execute(self, statement, params=None):
+            self.calls.append((str(statement), params))
+            if "insert into problem_versions" in str(statement).lower():
+                return DummyResult({"id": 42})
+            return DummyResult()
+
+    conn = InsertConn()
+
+    monkeypatch.setattr(problem_versions_service, "latest_problem_draft_row", lambda conn, slug: None)
+    monkeypatch.setattr(
+        problem_versions_service,
+        "problem_row",
+        lambda conn, slug: {"id": 11, "slug": slug, "active_version_id": 7},
+    )
+    monkeypatch.setattr(problem_versions_service, "next_problem_version_name", lambda conn, problem_id: "v3")
+    monkeypatch.setattr(problem_versions_service, "problem_version_summary", lambda row: dict(row))
+
+    def fake_problem_version_row(conn, slug, version_id):
+        if version_id == 7:
+            return {
+                "id": 7,
+                "problem_id": 11,
+                "version": "v2",
+                "statement_md": "# Demo\n",
+                "statement_assets_json": {"default_language": "en", "markdowns": [], "pdfs": []},
+                "test_input_object_key": "test.csv",
+                "test_input_bundle_object_key": None,
+                "label_object_key": "labels.csv",
+                "sample_submission_object_key": "sample.csv",
+                "public_bundle_object_key": None,
+                "private_bundle_object_key": None,
+                "sample_bundle_object_key": None,
+                "sample_bundle_filename": None,
+                "output_files": ["submission.csv"],
+                "scorer_object_key": None,
+                "runner_image": "aioj-python-basic:latest",
+                "run_command": ["python", "/workspace/predict.py"],
+                "required_tags": ["cpu"],
+                "self_test_status": "PASSED",
+                "self_test_result": {"ok": True},
+                "last_self_tested_at": "2026-06-02T00:00:00Z",
+            }
+        if version_id == 42:
+            return {"id": 42, "version": "v3", "status": "DRAFT"}
+        return None
+
+    monkeypatch.setattr(problem_versions_service, "problem_version_row", fake_problem_version_row)
+
+    result = problem_versions_service.create_problem_draft(conn, "demo-problem")
+
+    assert result["id"] == 42
+    assert result["version"] == "v3"
+    insert_sql, insert_params = next(call for call in conn.calls if "insert into problem_versions" in call[0].lower())
+    assert "insert into problem_versions" in insert_sql.lower()
+    assert insert_params["problem_id"] == 11
+    assert insert_params["version"] == "v3"
+    assert insert_params["statement_md"] == "# Demo\n"
