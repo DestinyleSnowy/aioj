@@ -35,6 +35,7 @@ const state = {
   messageRefreshTimer: null,
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
+  messageContextQuote: null,
   newMessagePendingFiles: [],
   currentProblem: null,
   activeProblemStatementId: '',
@@ -3150,6 +3151,39 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
   textarea.setSelectionRange(cursor, cursor);
 }
 
+function closeMessageContextMenu() {
+  const menu = $('messageContextMenu');
+  if (menu) menu.hidden = true;
+  state.messageContextQuote = null;
+}
+
+function openMessageContextMenu(event, sender, body = '', attachmentLabel = '') {
+  event.preventDefault();
+  event.stopPropagation();
+
+  const menu = $('messageContextMenu');
+  if (!menu) return;
+
+  state.messageContextQuote = { sender, body, attachmentLabel };
+  menu.hidden = false;
+
+  const margin = 8;
+  const menuWidth = menu.offsetWidth || 120;
+  const menuHeight = menu.offsetHeight || 42;
+  const x = Math.min(event.clientX, window.innerWidth - menuWidth - margin);
+  const y = Math.min(event.clientY, window.innerHeight - menuHeight - margin);
+  menu.style.left = `${Math.max(margin, x)}px`;
+  menu.style.top = `${Math.max(margin, y)}px`;
+  menu.querySelector('button')?.focus({ preventScroll: true });
+}
+
+function quoteMessageFromContextMenu() {
+  const quote = state.messageContextQuote;
+  closeMessageContextMenu();
+  if (!quote) return;
+  quoteMessage(quote.sender, quote.body, quote.attachmentLabel);
+}
+
 function renderMessageThread(peer, messages) {
   const peerId = peer.id || peer.peer_id;
   return `
@@ -3174,17 +3208,20 @@ function renderMessageThread(peer, messages) {
         const attachmentLabel = messageAttachmentQuoteLabel(m);
         return `
           <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(m.id)}">
-            <div class="message-bubble">
+            <div class="message-bubble" title="右键引用此消息" oncontextmenu="openMessageContextMenu(event, ${jsArg(senderLabel)}, ${jsArg(m.body_md || '')}, ${jsArg(attachmentLabel)})">
               ${m.has_attachment ? renderMessageAttachment(m) : ''}
               ${m.body_md ? renderMd(m.body_md) : ''}
               <div class="message-meta">
                 <span>${esc(senderLabel)} · ${formatDate(m.created_at)}</span>
-                <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(m.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
               </div>
             </div>
           </div>
         `;
       }).join('')}
+    </div>
+
+    <div class="message-context-menu" id="messageContextMenu" hidden onclick="event.stopPropagation()">
+      <button class="message-context-item" type="button" onclick="quoteMessageFromContextMenu()">引用</button>
     </div>
 
     <div class="message-composer" id="messageComposerWrap">
@@ -5356,7 +5393,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('click', () => {
     const container = $('userDropdownContainer');
     if (container) container.classList.remove('active');
+    closeMessageContextMenu();
   });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeMessageContextMenu();
+  });
+  window.addEventListener('resize', closeMessageContextMenu);
+  window.addEventListener('scroll', closeMessageContextMenu, true);
 
   // Mobile drawer trigger
   $('menuBtn').addEventListener('click', () => {
@@ -5986,7 +6029,7 @@ Object.assign(window, {
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, downloadMessageFile,
-  refreshMessageThreadNow, quoteMessage,
+  refreshMessageThreadNow, quoteMessage, openMessageContextMenu, quoteMessageFromContextMenu,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });
