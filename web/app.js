@@ -36,6 +36,7 @@ const state = {
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
   messageAttachmentCache: new Map(),
+  messageLayoutCleanup: null,
   newMessagePendingFiles: [],
   currentProblem: null,
   activeProblemStatementId: '',
@@ -47,6 +48,12 @@ let problemEditorTempId = 0;
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
+const MESSAGE_LAYOUT_STACK_BREAKPOINT_PX = 960;
+const MESSAGE_SIDEBAR_STORAGE_KEY = 'aioj_message_sidebar_width';
+const MESSAGE_SIDEBAR_MIN_WIDTH_PX = 260;
+const MESSAGE_SIDEBAR_MAX_WIDTH_PX = 520;
+const MESSAGE_THREAD_MIN_WIDTH_PX = 520;
+const MESSAGE_RESIZER_TRACK_PX = 16;
 
 function setPage(title) {
   $('pageTitle').textContent = title || 'AIOJ';
@@ -556,6 +563,7 @@ function clearPageState() {
     clearInterval(state.countdownTimer);
     state.countdownTimer = null;
   }
+  destroyMessageLayoutInteractions();
   stopMessageAutoRefresh();
   $('sidebar').classList.remove('open');
   $('sidebarOverlay').classList.remove('open');
@@ -2959,6 +2967,179 @@ function clearMessageAttachmentCache() {
   state.messageAttachmentCache.clear();
 }
 
+function destroyMessageLayoutInteractions() {
+  document.body.classList.remove('message-layout-resizing');
+  if (typeof state.messageLayoutCleanup === 'function') {
+    state.messageLayoutCleanup();
+  }
+  state.messageLayoutCleanup = null;
+}
+
+function readStoredMessageSidebarWidth() {
+  const raw = Number(localStorage.getItem(MESSAGE_SIDEBAR_STORAGE_KEY));
+  return Number.isFinite(raw) && raw > 0 ? raw : null;
+}
+
+function clampMessageSidebarWidth(layout, width) {
+  const layoutWidth = Number(layout?.clientWidth || 0);
+  const safeWidth = Number(width || 0);
+  if (!layoutWidth || !safeWidth) return null;
+  const maxAllowed = Math.min(
+    MESSAGE_SIDEBAR_MAX_WIDTH_PX,
+    Math.max(
+      MESSAGE_SIDEBAR_MIN_WIDTH_PX,
+      layoutWidth - MESSAGE_THREAD_MIN_WIDTH_PX - MESSAGE_RESIZER_TRACK_PX,
+    ),
+  );
+  return Math.max(
+    MESSAGE_SIDEBAR_MIN_WIDTH_PX,
+    Math.min(maxAllowed, Math.round(safeWidth)),
+  );
+}
+
+function defaultMessageSidebarWidth(layout) {
+  return clampMessageSidebarWidth(layout, Number(layout?.clientWidth || 0) * 0.28) || 320;
+}
+
+function applyMessageSidebarWidth(layout, width, { persist = false } = {}) {
+  if (!layout || window.innerWidth <= MESSAGE_LAYOUT_STACK_BREAKPOINT_PX) {
+    layout?.style?.removeProperty('--message-sidebar-size');
+    delete layout?.dataset?.sidebarWidth;
+    return null;
+  }
+
+  const resolvedWidth = clampMessageSidebarWidth(layout, width || defaultMessageSidebarWidth(layout));
+  if (!resolvedWidth) return null;
+  layout.style.setProperty('--message-sidebar-size', `${resolvedWidth}px`);
+  layout.dataset.sidebarWidth = String(resolvedWidth);
+  if (persist) localStorage.setItem(MESSAGE_SIDEBAR_STORAGE_KEY, String(resolvedWidth));
+  return resolvedWidth;
+}
+
+function resetMessageSidebarWidth(layout) {
+  localStorage.removeItem(MESSAGE_SIDEBAR_STORAGE_KEY);
+  return applyMessageSidebarWidth(layout, defaultMessageSidebarWidth(layout));
+}
+
+function initMessageLayoutInteractions() {
+  destroyMessageLayoutInteractions();
+
+  const app = $('app');
+  const layout = app?.querySelector('.messages-layout');
+  const resizer = app?.querySelector('[data-message-layout-resizer]');
+  if (!app || !layout || !resizer) return;
+
+  const syncLayout = () => {
+    if (window.innerWidth <= MESSAGE_LAYOUT_STACK_BREAKPOINT_PX) {
+      layout.style.removeProperty('--message-sidebar-size');
+      delete layout.dataset.sidebarWidth;
+      resizer.tabIndex = -1;
+      resizer.setAttribute('aria-hidden', 'true');
+      return;
+    }
+
+    resizer.tabIndex = 0;
+    resizer.removeAttribute('aria-hidden');
+    const currentWidth = Number(layout.dataset.sidebarWidth || 0);
+    const targetWidth = currentWidth || readStoredMessageSidebarWidth() || defaultMessageSidebarWidth(layout);
+    const appliedWidth = applyMessageSidebarWidth(layout, targetWidth);
+    if (appliedWidth) {
+      resizer.setAttribute('aria-valuenow', String(appliedWidth));
+    }
+  };
+
+  let activePointerId = null;
+  let dragStartX = 0;
+  let dragStartWidth = 0;
+
+  const stopDrag = () => {
+    activePointerId = null;
+    document.body.classList.remove('message-layout-resizing');
+    resizer.classList.remove('is-dragging');
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    window.removeEventListener('pointercancel', onPointerUp);
+  };
+
+  const onPointerMove = (event) => {
+    if (event.pointerId !== activePointerId) return;
+    const resolvedWidth = applyMessageSidebarWidth(layout, dragStartWidth + event.clientX - dragStartX);
+    if (resolvedWidth) resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+  };
+
+  const onPointerUp = (event) => {
+    if (event.pointerId !== activePointerId) return;
+    const resolvedWidth = Number(layout.dataset.sidebarWidth || 0);
+    if (resolvedWidth > 0) {
+      localStorage.setItem(MESSAGE_SIDEBAR_STORAGE_KEY, String(resolvedWidth));
+      resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+    }
+    stopDrag();
+  };
+
+  const onPointerDown = (event) => {
+    if (event.button !== 0 || window.innerWidth <= MESSAGE_LAYOUT_STACK_BREAKPOINT_PX) return;
+    event.preventDefault();
+    activePointerId = event.pointerId;
+    dragStartX = event.clientX;
+    dragStartWidth = Number(layout.dataset.sidebarWidth || readStoredMessageSidebarWidth() || defaultMessageSidebarWidth(layout));
+    document.body.classList.add('message-layout-resizing');
+    resizer.classList.add('is-dragging');
+    resizer.setAttribute('aria-valuenow', String(dragStartWidth));
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', onPointerUp);
+  };
+
+  const onKeyDown = (event) => {
+    if (window.innerWidth <= MESSAGE_LAYOUT_STACK_BREAKPOINT_PX) return;
+    const currentWidth = Number(layout.dataset.sidebarWidth || readStoredMessageSidebarWidth() || defaultMessageSidebarWidth(layout));
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+      event.preventDefault();
+      const delta = event.key === 'ArrowLeft' ? -24 : 24;
+      const resolvedWidth = applyMessageSidebarWidth(layout, currentWidth + delta, { persist: true });
+      if (resolvedWidth) resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+      return;
+    }
+    if (event.key === 'Home') {
+      event.preventDefault();
+      const resolvedWidth = applyMessageSidebarWidth(layout, MESSAGE_SIDEBAR_MIN_WIDTH_PX, { persist: true });
+      if (resolvedWidth) resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+      return;
+    }
+    if (event.key === 'End') {
+      event.preventDefault();
+      const resolvedWidth = applyMessageSidebarWidth(layout, MESSAGE_SIDEBAR_MAX_WIDTH_PX, { persist: true });
+      if (resolvedWidth) resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+      return;
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      const resolvedWidth = resetMessageSidebarWidth(layout);
+      if (resolvedWidth) resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+    }
+  };
+
+  const onDoubleClick = () => {
+    const resolvedWidth = resetMessageSidebarWidth(layout);
+    if (resolvedWidth) resizer.setAttribute('aria-valuenow', String(resolvedWidth));
+  };
+
+  syncLayout();
+  window.addEventListener('resize', syncLayout);
+  resizer.addEventListener('pointerdown', onPointerDown);
+  resizer.addEventListener('keydown', onKeyDown);
+  resizer.addEventListener('dblclick', onDoubleClick);
+
+  state.messageLayoutCleanup = () => {
+    stopDrag();
+    window.removeEventListener('resize', syncLayout);
+    resizer.removeEventListener('pointerdown', onPointerDown);
+    resizer.removeEventListener('keydown', onKeyDown);
+    resizer.removeEventListener('dblclick', onDoubleClick);
+  };
+}
+
 function getMessageAttachmentCacheEntry(attachmentId) {
   const normalizedId = Number(attachmentId || 0);
   if (!normalizedId) return null;
@@ -3054,6 +3235,7 @@ function ensureMessageAutoRefresh() {
 async function renderMessages(peerId = null, options = {}) {
   setPage('私信');
   const app = $('app');
+  app.classList.add('messages-page');
   if (!state.user) {
     app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button> 使用私信。</div>`;
     return;
@@ -3087,7 +3269,7 @@ async function renderMessages(peerId = null, options = {}) {
     const threadItems = thread?.items || [];
 
     app.innerHTML = `
-      <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
+      <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
         <div>
           <h3 class="section-title">私信</h3>
           <div class="text-muted" style="font-size: 13px;">与站内用户一对一沟通，打开会话后会自动标记已读。</div>
@@ -3125,6 +3307,16 @@ async function renderMessages(peerId = null, options = {}) {
           }).join('')}
         </aside>
 
+        <div
+          class="message-layout-resizer"
+          data-message-layout-resizer
+          role="separator"
+          aria-label="调整会话列表宽度"
+          aria-orientation="vertical"
+          tabindex="0"
+          title="拖动调整会话列表宽度，双击恢复默认宽度"
+        ></div>
+
         <section class="message-thread-panel">
           ${selectedPeerId && activePeer ? renderMessageThread(activePeer, threadItems) : `
             <div class="message-empty-panel">
@@ -3136,6 +3328,7 @@ async function renderMessages(peerId = null, options = {}) {
       </div>
     `;
 
+    initMessageLayoutInteractions();
     if (selectedPeerId && activePeer) {
       initMessageComposerInteractions(selectedPeerId);
     }
