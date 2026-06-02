@@ -28,6 +28,7 @@ const state = {
   user: null,
   healthOk: false,
   currentRoute: '',
+  documentTitleBase: document.title || 'AIOJ — AI Olympiad Judge',
   countdownTimer: null,
   activeProblemTab: 'statement', // Default tab in problem detail
   notificationUnreadCount: 0,
@@ -55,13 +56,23 @@ const MESSAGE_SIDEBAR_MAX_WIDTH_PX = 520;
 const MESSAGE_THREAD_MIN_WIDTH_PX = 520;
 const MESSAGE_RESIZER_TRACK_PX = 16;
 
+function unreadDocumentTitlePrefix() {
+  const totalUnread = Number(state.notificationUnreadCount || 0) + Number(state.messageUnreadCount || 0);
+  return totalUnread > 0 ? `(${totalUnread}) ` : '';
+}
+
+function refreshDocumentTitle() {
+  document.title = `${unreadDocumentTitlePrefix()}${state.documentTitleBase || 'AIOJ — AI Olympiad Judge'}`;
+}
+
 function setPage(title) {
   $('pageTitle').textContent = title || 'AIOJ';
   if ($('pageSubtitle')) {
     $('pageSubtitle').textContent = '';
     $('pageSubtitle').style.display = 'none';
   }
-  document.title = title ? `${title} — AIOJ` : 'AIOJ — AI Olympiad Judge';
+  state.documentTitleBase = title ? `${title} — AIOJ` : 'AIOJ — AI Olympiad Judge';
+  refreshDocumentTitle();
 }
 
 function authHeaders() {
@@ -579,6 +590,7 @@ function stopMessageAutoRefresh() {
 }
 
 function updateNav() {
+  refreshDocumentTitle();
   const path = location.pathname || '/';
   document.querySelectorAll('.nav-link').forEach((a) => {
     const route = a.dataset.route || '/';
