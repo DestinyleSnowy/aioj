@@ -37,6 +37,7 @@ const state = {
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
   messageAttachmentCache: new Map(),
+  messageComposerDrafts: new Map(),
   messageLayoutCleanup: null,
   messageImagePreview: null,
   newMessagePendingFiles: [],
@@ -3010,6 +3011,78 @@ function currentMessagePeerId() {
   return match ? Number(match[1]) : Number(state.messageActivePeerId || 0);
 }
 
+function normalizeMessagePeerId(peerId) {
+  return Number(peerId || 0);
+}
+
+function saveMessageComposerDraft(peerId, value = '') {
+  const normalizedPeerId = normalizeMessagePeerId(peerId);
+  if (!normalizedPeerId) return;
+  const draft = String(value || '');
+  if (draft) {
+    state.messageComposerDrafts.set(normalizedPeerId, draft);
+  } else {
+    state.messageComposerDrafts.delete(normalizedPeerId);
+  }
+}
+
+function clearMessageComposerDraft(peerId) {
+  const normalizedPeerId = normalizeMessagePeerId(peerId);
+  if (normalizedPeerId) state.messageComposerDrafts.delete(normalizedPeerId);
+}
+
+function captureMessageComposerState() {
+  const composer = $('messageComposer');
+  if (!composer) return null;
+  const value = composer.value || '';
+  return {
+    peerId: normalizeMessagePeerId(composer.dataset.messageComposerPeerId || state.messageActivePeerId || currentMessagePeerId()),
+    value,
+    focused: document.activeElement === composer,
+    selectionStart: composer.selectionStart ?? value.length,
+    selectionEnd: composer.selectionEnd ?? value.length,
+    scrollTop: composer.scrollTop || 0,
+  };
+}
+
+function restoreMessageComposerState(peerId, snapshot = null, options = {}) {
+  const composer = $('messageComposer');
+  const normalizedPeerId = normalizeMessagePeerId(peerId);
+  if (!composer || !normalizedPeerId) return;
+
+  const preserve = options.preserve !== false;
+  const snapshotMatches = snapshot && normalizeMessagePeerId(snapshot.peerId) === normalizedPeerId;
+  const value = preserve
+    ? (snapshotMatches ? snapshot.value : (state.messageComposerDrafts.get(normalizedPeerId) || ''))
+    : '';
+
+  composer.value = value || '';
+  if (preserve) {
+    saveMessageComposerDraft(normalizedPeerId, composer.value);
+  } else {
+    clearMessageComposerDraft(normalizedPeerId);
+  }
+
+  const fallbackCursor = composer.value.length;
+  const selectionStart = snapshotMatches
+    ? Math.min(snapshot.selectionStart ?? fallbackCursor, fallbackCursor)
+    : fallbackCursor;
+  const selectionEnd = snapshotMatches
+    ? Math.min(snapshot.selectionEnd ?? selectionStart, fallbackCursor)
+    : fallbackCursor;
+
+  composer.setSelectionRange(selectionStart, selectionEnd);
+  if (snapshotMatches) composer.scrollTop = snapshot.scrollTop || 0;
+
+  if (options.focus) {
+    setTimeout(() => {
+      if (!document.body.contains(composer)) return;
+      composer.focus({ preventScroll: true });
+      composer.setSelectionRange(selectionStart, selectionEnd);
+    }, 0);
+  }
+}
+
 function updateMessageThreadUnreadBadge(count) {
   const badge = $('messageThreadUnreadBadge');
   if (!badge) return;
@@ -3305,6 +3378,10 @@ async function renderMessages(peerId = null, options = {}) {
   }
 
   const silent = !!options.silent || !!app.querySelector('.messages-layout');
+  const composerSnapshot = captureMessageComposerState();
+  if (composerSnapshot && options.preserveComposer !== false) {
+    saveMessageComposerDraft(composerSnapshot.peerId, composerSnapshot.value);
+  }
   if (!silent) {
     app.innerHTML = `
       <div class="loading-overlay">
@@ -3394,6 +3471,13 @@ async function renderMessages(peerId = null, options = {}) {
     initMessageLayoutInteractions();
     if (selectedPeerId && activePeer) {
       initMessageComposerInteractions(selectedPeerId);
+      restoreMessageComposerState(selectedPeerId, composerSnapshot, {
+        preserve: options.preserveComposer !== false,
+        focus: !!options.focusComposer || (
+          !!composerSnapshot?.focused &&
+          normalizeMessagePeerId(composerSnapshot.peerId) === normalizeMessagePeerId(selectedPeerId)
+        ),
+      });
     }
     state.messageActivePeerId = selectedPeerId;
 
@@ -3420,8 +3504,8 @@ function openMessageConversation(peerId) {
   renderMessages(peerId, { silent: true });
 }
 
-function refreshMessages(peerId) {
-  return renderMessages(peerId, { silent: true });
+function refreshMessages(peerId, options = {}) {
+  return renderMessages(peerId, { silent: true, ...options });
 }
 
 async function refreshMessageThreadNow(peerId = null) {
@@ -3472,6 +3556,7 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
   textarea.focus();
   const cursor = before.length + insert.length;
   textarea.setSelectionRange(cursor, cursor);
+  saveMessageComposerDraft(currentMessagePeerId(), textarea.value);
 }
 
 function renderMessageThread(peer, messages) {
@@ -3512,7 +3597,7 @@ function renderMessageThread(peer, messages) {
     </div>
 
     <div class="message-composer" id="messageComposerWrap">
-      <textarea id="messageComposer" rows="3" maxlength="4000" placeholder="输入私信内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${peerId})"></textarea>
+      <textarea id="messageComposer" rows="3" maxlength="4000" data-message-composer-peer-id="${esc(peerId)}" placeholder="输入私信内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${peerId})"></textarea>
       <div class="message-drop-banner">松开以上传文件</div>
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
         <span class="text-muted message-composer-hint">最长 4000 字符 · 支持拖拽或粘贴文件，单个最大 20 MB</span>
@@ -3846,6 +3931,9 @@ function insertTextareaNewline(textarea) {
   const end = textarea.selectionEnd ?? textarea.value.length;
   textarea.value = `${textarea.value.slice(0, start)}\n${textarea.value.slice(end)}`;
   textarea.selectionStart = textarea.selectionEnd = start + 1;
+  if (textarea.id === 'messageComposer') {
+    saveMessageComposerDraft(textarea.dataset.messageComposerPeerId || currentMessagePeerId(), textarea.value);
+  }
 }
 
 function handleMessageComposerKeydown(event, peerId) {
@@ -4027,9 +4115,11 @@ async function sendMessageToPeer(peerId) {
       body: JSON.stringify({ recipient_id: Number(peerId), body_md: body }),
     });
     if (textarea) textarea.value = '';
-    await refreshMessages(peerId);
+    clearMessageComposerDraft(peerId);
+    await refreshMessages(peerId, { preserveComposer: false, focusComposer: true });
   } catch (err) {
     toast(`发送失败: ${err.message}`, 'error');
+    textarea?.focus({ preventScroll: true });
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
   }
@@ -4057,6 +4147,10 @@ function initMessageComposerInteractions(peerId) {
   const composer = $('messageComposer');
   const composerWrap = $('messageComposerWrap');
   if (!composer || !composerWrap) return;
+
+  composer.addEventListener('input', () => {
+    saveMessageComposerDraft(peerId, composer.value);
+  });
 
   composer.addEventListener('paste', (event) => {
     const files = extractMessageFiles(event.clipboardData);
@@ -4114,12 +4208,14 @@ async function sendFilesToPeer(peerId, files, options = {}) {
     });
     if (textarea) textarea.value = '';
     if (input) input.value = '';
+    clearMessageComposerDraft(peerId);
     if (selectedFiles.length > 1) {
       toast(`已发送 ${selectedFiles.length} 个文件`, 'success');
     }
-    await refreshMessages(peerId);
+    await refreshMessages(peerId, { preserveComposer: false, focusComposer: true });
   } catch (err) {
     toast(`文件发送失败: ${err.message}`, 'error');
+    textarea?.focus({ preventScroll: true });
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
   }
