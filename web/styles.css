@@ -2530,47 +2530,23 @@ tr:last-child td {
   font-size: 11px;
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: var(--space-sm);
 }
 
-.message-context-menu {
-  position: fixed;
-  min-width: 120px;
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  border: var(--border-light);
-  border-radius: var(--radius-md);
-  background: var(--bg-card-solid);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: var(--shadow-lg), var(--shadow-accent-glow);
-  z-index: 220;
-}
-
-.message-context-menu[hidden] {
-  display: none;
-}
-
-.message-context-menu-item {
-  width: 100%;
+.message-quote-btn {
+  flex: 0 0 auto;
   border: 0;
-  border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--color-primary);
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
+  font-weight: 700;
   cursor: pointer;
-  padding: 8px 12px;
+  padding: 0;
 }
 
-.message-context-menu-item:hover {
-  background: hsla(var(--hue-primary), 90%, 60%, 0.1);
-  color: var(--text-main);
+.message-quote-btn:hover {
+  color: var(--color-accent);
 }
 
 .message-composer {
