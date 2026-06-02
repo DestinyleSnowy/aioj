@@ -216,7 +216,7 @@ def get_problem_statement_pdf(slug: str, asset_id: str):
     return Response(
         content=content,
         media_type=guess_content_type(filename, "application/pdf"),
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 

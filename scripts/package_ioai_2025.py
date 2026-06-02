@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import textwrap
+import unicodedata
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
@@ -140,6 +141,9 @@ def write_jsonl(path: Path, rows: list[object]) -> None:
 
 
 def write_problem_yaml(path: Path, cfg: dict) -> None:
+    statement_languages = cfg.get("statement_languages") if isinstance(cfg.get("statement_languages"), dict) else {"en": "English"}
+    if "en" not in statement_languages:
+        statement_languages = {"en": "English", **statement_languages}
     lines = [
         f"slug: {json.dumps(cfg['slug'], ensure_ascii=False)}",
         f"title: {json.dumps(cfg['title'], ensure_ascii=False)}",
@@ -154,10 +158,12 @@ def write_problem_yaml(path: Path, cfg: dict) -> None:
         f"sample_submission: {json.dumps(cfg['sample_submission'], ensure_ascii=False)}",
         "default_statement_language: en",
         "statement_languages:",
-        '  en: "English"',
-        f"activate_on_import: {'true' if cfg['activate_on_import'] else 'false'}",
-        "run_command:",
     ]
+    ordered_language_ids = ["en"] + sorted(lang_id for lang_id in statement_languages if lang_id != "en")
+    for language_id in ordered_language_ids:
+        lines.append(f"  {language_id}: {json.dumps(str(statement_languages[language_id]), ensure_ascii=False)}")
+    lines.append(f"activate_on_import: {'true' if cfg['activate_on_import'] else 'false'}")
+    lines.append("run_command:")
     for arg in cfg["run_command"]:
         lines.append(f"  - {json.dumps(arg, ensure_ascii=False)}")
     lines.append("output_files:")
@@ -178,6 +184,75 @@ def copy_figures(task_dir: Path, public_dir: Path) -> None:
     figs_dir = task_dir / "figs"
     if figs_dir.is_dir():
         copy_tree(figs_dir, public_dir / "figs")
+
+
+def statement_language_id(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", repair_mojibake(text))
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_text.lower()).strip("-") or "statement"
+
+
+def clean_translation_pdf_label(text: str) -> str:
+    cleaned = repair_mojibake(text).replace("_", " ")
+    cleaned = re.sub(r"(?i)\bindividual contest day[12]\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bgaite day[12]\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bteamleadertranslate\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bteamleadtranslate\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bmachinetranslate\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bteam leader translate\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bteam lead translate\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bmachine translate\b", " ", cleaned)
+    cleaned = re.sub(r"(?i)\bold\d*\b", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" -_")
+
+
+def translation_pdf_label(pdf_path: Path) -> str:
+    country = clean_translation_pdf_label(pdf_path.parent.name) or "Translation"
+    descriptor = clean_translation_pdf_label(pdf_path.stem)
+    if not descriptor:
+        return country
+    country_norm = re.sub(r"\s+", " ", country).casefold()
+    descriptor_norm = re.sub(r"\s+", " ", descriptor).casefold()
+    if descriptor_norm == country_norm:
+        return country
+    if country_norm and country_norm in descriptor_norm:
+        return descriptor
+    return f"{country} · {descriptor}"
+
+
+def copy_translation_pdfs(source_root: Path, package_dir: Path, cfg: dict) -> dict[str, str]:
+    translation_pack = str(cfg.get("translation_pack") or "").strip()
+    if not translation_pack:
+        return {}
+
+    translation_dir = source_root / "Translations" / translation_pack
+    if not translation_dir.is_dir():
+        return {}
+
+    expected_day = "day2" if "day2" in translation_pack.lower() else "day1"
+    labels: dict[str, str] = {}
+    used_ids = {"en"}
+    for pdf_path in sorted(translation_dir.rglob("*.pdf")):
+        if not pdf_path.is_file() or pdf_path.name.startswith("._"):
+            continue
+        normalized_name = repair_mojibake(pdf_path.name).casefold()
+        if expected_day == "day2" and "day1" in normalized_name:
+            continue
+        if expected_day == "day1" and "day2" in normalized_name:
+            continue
+        label = translation_pdf_label(pdf_path)
+        base_id = statement_language_id(label)
+        language_id = base_id
+        suffix = 2
+        while language_id in used_ids:
+            language_id = f"{base_id}-{suffix}"
+            suffix += 1
+        used_ids.add(language_id)
+        copy_file(pdf_path, package_dir / "statements" / language_id / pdf_path.name)
+        labels[language_id] = label
+
+    return labels
 
 
 def ensure_placeholder(dir_path: Path, message: str) -> None:
@@ -663,6 +738,7 @@ TASKS = [
         ],
         "output_files": ["output_validation.csv", "output_testing.csv"],
         "scorer": radar_scorer,
+        "translation_pack": "Individual-Contest-Day1",
     },
     {
         "key": "chicken-counting",
@@ -685,6 +761,7 @@ TASKS = [
         ],
         "output_files": ["submission.npz"],
         "scorer": chicken_scorer,
+        "translation_pack": "Individual-Contest-Day1",
     },
     {
         "key": "concepts",
@@ -707,6 +784,7 @@ TASKS = [
         ],
         "output_files": ["clues_a.jsonl", "clues_b.jsonl"],
         "scorer": concepts_scorer,
+        "translation_pack": "Individual-Contest-Day1",
     },
     {
         "key": "restroom",
@@ -729,6 +807,7 @@ TASKS = [
         ],
         "output_files": ["submission_a.npy", "submission_b.npy"],
         "scorer": restroom_scorer,
+        "translation_pack": "Individual-Contest-Day2",
     },
     {
         "key": "antique",
@@ -751,6 +830,7 @@ TASKS = [
         ],
         "output_files": ["submission.zip"],
         "scorer": antique_scorer,
+        "translation_pack": "Individual-Contest-Day2",
     },
     {
         "key": "pixel",
@@ -774,6 +854,7 @@ TASKS = [
         "output_files": ["submission.jsonl"],
         "scorer": pixel_scorer,
         "statement_pdf": "IOAI Task 6 - Behind the Pixels.pdf",
+        "translation_pack": "Individual-Contest-Day2",
     },
 ]
 
@@ -850,8 +931,15 @@ def fetch_pixel_ref_ids() -> list[str]:
             "https://datasets-server.huggingface.co/rows"
             f"?dataset={dataset}&config=default&split=ref&offset={offset}&length={page_size}"
         )
-        with urlopen(url, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with urlopen(url, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            if rows:
+                break
+            rows = [str(idx) for idx in range(64)]
+            print(f"Warning: failed to fetch Pixel reference ids ({exc}); using placeholder ids 0-63 instead.")
+            break
         batch = [str(item["row"]["idx"]) for item in payload.get("rows", [])]
         if not batch:
             break
@@ -892,6 +980,7 @@ def build_task(source_root: Path, output_root: Path, cfg: dict) -> Path:
     write_text(package_dir / "statement.md", statement_md)
     if cfg.get("statement_pdf"):
         copy_file(task_dir / cfg["statement_pdf"], package_dir / "statements" / "en.pdf")
+    translation_labels = copy_translation_pdfs(source_root, package_dir, cfg)
 
     copy_figures(task_dir, package_dir / "public")
     BUILDERS[cfg["key"]](task_dir, package_dir)
@@ -901,6 +990,11 @@ def build_task(source_root: Path, output_root: Path, cfg: dict) -> Path:
         {
             **cfg,
             "runner_image": RUNNER_IMAGE,
+            "statement_languages": {
+                "en": "English",
+                **(cfg.get("statement_languages") if isinstance(cfg.get("statement_languages"), dict) else {}),
+                **translation_labels,
+            },
         },
     )
 

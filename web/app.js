@@ -306,35 +306,101 @@ function problemStatementAssets(problem) {
   const assets = problem && typeof problem.statement_assets === 'object' ? problem.statement_assets : {};
   const markdowns = Array.isArray(assets.markdowns) ? assets.markdowns.filter(item => item && item.content) : [];
   const pdfs = Array.isArray(assets.pdfs) ? assets.pdfs.filter(Boolean) : [];
-  const defaultId = assets.default_language || markdowns[0]?.id || 'default';
+  const defaultId = assets.default_language || markdowns[0]?.id || pdfs[0]?.id || 'default';
   return { markdowns, pdfs, defaultId };
 }
 
-function problemActiveStatement(problem = state.currentProblem) {
+function problemStatementVariantKey(kind, id) {
+  return `${kind}:${id}`;
+}
+
+function problemStatementVariants(problem = state.currentProblem) {
   const assets = problemStatementAssets(problem);
-  if (assets.markdowns.length === 0) return null;
-  const activeId = state.activeProblemStatementId || assets.defaultId;
-  return assets.markdowns.find(item => item.id === activeId) || assets.markdowns[0];
+  const variants = [];
+  const seenKeys = new Set();
+  const markdownLanguages = new Set();
+
+  assets.markdowns.forEach((item) => {
+    const itemId = String(item.id || item.language || 'default');
+    const key = problemStatementVariantKey('md', itemId);
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    markdownLanguages.add(String(item.language || itemId));
+    variants.push({
+      key,
+      kind: 'markdown',
+      itemId,
+      language: String(item.language || itemId),
+      label: String(item.label || item.language || itemId),
+      content: String(item.content || ''),
+      source: item,
+    });
+  });
+
+  assets.pdfs.forEach((item) => {
+    const itemId = String(item.id || item.language || 'statement-pdf');
+    const key = problemStatementVariantKey('pdf', itemId);
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    const language = String(item.language || itemId);
+    const hasMarkdown = markdownLanguages.has(language);
+    const baseLabel = String(item.label || item.language || itemId);
+    variants.push({
+      key,
+      kind: 'pdf',
+      itemId,
+      language,
+      label: hasMarkdown ? `${baseLabel} · PDF` : baseLabel,
+      downloadUrl: String(item.download_url || ''),
+      filename: String(item.filename || `${itemId}.pdf`),
+      source: item,
+    });
+  });
+
+  const defaultMarkdown = variants.find(item => item.kind === 'markdown' && item.itemId === assets.defaultId)
+    || variants.find(item => item.kind === 'markdown');
+  const defaultVariant = defaultMarkdown || variants[0] || null;
+  return {
+    variants,
+    defaultKey: defaultVariant ? defaultVariant.key : '',
+  };
+}
+
+function problemActiveStatement(problem = state.currentProblem) {
+  const { variants, defaultKey } = problemStatementVariants(problem);
+  if (variants.length === 0) return null;
+  const activeKey = state.activeProblemStatementId || defaultKey;
+  return variants.find(item => item.key === activeKey) || variants[0];
+}
+
+function statementPdfForLanguage(problem = state.currentProblem, language = '') {
+  const assets = problemStatementAssets(problem);
+  const target = String(language || '').trim();
+  if (!target) return null;
+  return assets.pdfs.find(item => String(item.language || item.id || '').trim() === target) || null;
 }
 
 function renderProblemStatementSwitcher(problem = state.currentProblem) {
-  const assets = problemStatementAssets(problem);
-  if (assets.markdowns.length <= 1) return '';
+  const { variants } = problemStatementVariants(problem);
+  if (variants.length <= 1) return '';
   const active = problemActiveStatement(problem);
   return `
     <div class="tabs" id="problemStatementSwitch" style="margin-bottom: var(--space-md); flex-wrap: wrap;">
-      ${assets.markdowns.map(item => `
-        <button class="tab ${active && active.id === item.id ? 'active' : ''}" onclick="switchProblemStatement(${jsArg(item.id)})">
-          ${esc(item.label || item.language || item.id)}
+      ${variants.map(item => `
+        <button class="tab ${active && active.key === item.key ? 'active' : ''}" onclick="switchProblemStatement(${jsArg(item.key)})">
+          ${esc(item.label)}
         </button>
       `).join('')}
     </div>
   `;
 }
 
-function renderProblemStatementDownloads(problem = state.currentProblem) {
-  const assets = problemStatementAssets(problem);
+function renderProblemStatementActions(problem = state.currentProblem) {
   const actions = [];
+  const active = problemActiveStatement(problem);
+  const relatedPdf = active?.kind === 'pdf'
+    ? active
+    : statementPdfForLanguage(problem, active?.language || '');
   if (problem && problem.has_public_resources) {
     actions.push(`
       <a href="/api/problems/${esc(problem.slug)}/resources" target="_blank" class="btn btn-secondary btn-sm">
@@ -342,13 +408,13 @@ function renderProblemStatementDownloads(problem = state.currentProblem) {
       </a>
     `);
   }
-  assets.pdfs.forEach(item => {
+  if (relatedPdf && relatedPdf.downloadUrl) {
     actions.push(`
-      <a href="${esc(item.download_url)}" target="_blank" class="btn btn-secondary btn-sm">
-        PDF · ${esc(item.label || item.language || item.id)}
+      <a href="${esc(relatedPdf.downloadUrl)}" target="_blank" class="btn btn-secondary btn-sm">
+        打开 PDF
       </a>
     `);
-  });
+  }
   if (actions.length === 0) return '';
   return `<div class="row gap-sm" style="flex-wrap: wrap; margin-bottom: var(--space-md);">${actions.join('')}</div>`;
 }
@@ -356,7 +422,29 @@ function renderProblemStatementDownloads(problem = state.currentProblem) {
 function renderProblemStatementBody(problem = state.currentProblem) {
   const active = problemActiveStatement(problem);
   if (!active) {
-    return emptyBox('该题当前仅提供 PDF 题面，请使用上方下载入口查看。');
+    return emptyBox('该题当前没有可用题面。');
+  }
+  if (active.kind === 'pdf') {
+    if (!active.downloadUrl) {
+      return emptyBox('当前语言的 PDF 题面暂不可用。');
+    }
+    return `
+      <div class="statement-viewer">
+        <div class="statement-viewer-header">
+          <div>
+            <div class="statement-viewer-title">${esc(active.label)}</div>
+            <div class="statement-viewer-subtitle">当前语言以 PDF 形式提供，支持页内预览。</div>
+          </div>
+          <a href="${esc(active.downloadUrl)}" target="_blank" class="btn btn-secondary btn-sm">新标签打开</a>
+        </div>
+        <iframe
+          class="statement-pdf-frame"
+          src="${esc(active.downloadUrl)}#view=FitH"
+          title="${esc(active.label)} PDF"
+          loading="lazy"
+        ></iframe>
+      </div>
+    `;
   }
   return renderMd(rewriteProblemMarkdownAssets(active.content || '', problem));
 }
@@ -365,6 +453,8 @@ function switchProblemStatement(statementId) {
   state.activeProblemStatementId = statementId;
   const switcher = $('problemStatementSwitchWrap');
   if (switcher) switcher.innerHTML = renderProblemStatementSwitcher(state.currentProblem);
+  const actions = $('problemStatementActions');
+  if (actions) actions.innerHTML = renderProblemStatementActions(state.currentProblem);
   const body = $('problemStatementBody');
   if (body) body.innerHTML = renderProblemStatementBody(state.currentProblem);
 }
@@ -1170,7 +1260,7 @@ async function renderProblemDetail(slug, contestSlug = null) {
     ]);
     const subs = subsData.items || [];
     state.currentProblem = problem;
-    state.activeProblemStatementId = problemStatementAssets(problem).defaultId;
+    state.activeProblemStatementId = problemStatementVariants(problem).defaultKey;
 
     setPage(problem.title);
 
@@ -1193,7 +1283,7 @@ async function renderProblemDetail(slug, contestSlug = null) {
             <div class="card glass">
               <div class="card-body">
                 <div id="problemStatementSwitchWrap">${renderProblemStatementSwitcher(problem)}</div>
-                ${renderProblemStatementDownloads(problem)}
+                <div id="problemStatementActions">${renderProblemStatementActions(problem)}</div>
                 <div id="problemStatementBody">${renderProblemStatementBody(problem)}</div>
               </div>
             </div>

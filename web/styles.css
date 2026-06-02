@@ -2184,6 +2184,40 @@ tr:last-child td {
   white-space: pre-wrap;
 }
 
+.statement-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.statement-viewer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.statement-viewer-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.statement-viewer-subtitle {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.statement-pdf-frame {
+  width: 100%;
+  min-height: min(78vh, 980px);
+  border: var(--border-light);
+  border-radius: var(--radius-md);
+  background: hsla(0, 0%, 0%, 0.2);
+}
+
 /* ─── Direct Messages ────────────────────────────────────────────────────── */
 .messages-layout {
   display: grid;
