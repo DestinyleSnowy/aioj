@@ -2235,7 +2235,12 @@ tr:last-child td {
   margin-bottom: var(--space-md);
 }
 
-.md-content h1, .md-content h2, .md-content h3 {
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4,
+.md-content h5,
+.md-content h6 {
   margin: var(--space-lg) 0 var(--space-sm);
 }
 
@@ -2247,6 +2252,16 @@ tr:last-child td {
 
 .md-content li {
   margin-bottom: 0.35rem;
+}
+
+.md-content .task-list-item {
+  list-style: none;
+  margin-left: -1.1rem;
+}
+
+.md-content input[type="checkbox"] {
+  margin-right: 0.45rem;
+  accent-color: var(--color-primary);
 }
 
 .md-content blockquote {
@@ -2768,8 +2783,7 @@ body.message-image-panning {
   font-weight: 700;
 }
 
-.message-bubble .md-content p:last-child,
-.message-bubble .md-content pre:last-child {
+.message-bubble .md-content > :last-child {
   margin-bottom: 0;
 }
 

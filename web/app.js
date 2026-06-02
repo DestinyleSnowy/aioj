@@ -207,6 +207,10 @@ function jsArg(value) {
   return esc(JSON.stringify(value));
 }
 
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function formatDate(v) {
   if (!v) return '';
   const d = new Date(v);
@@ -261,6 +265,10 @@ function extractMarkdownMath(md) {
     let out = segment;
     out = out.replace(/\\\[([\s\S]+?)\\\]/g, (_, expr) => `\n\n${pushMathToken(expr, true)}\n\n`);
     out = out.replace(/\$\$([\s\S]+?)\$\$/g, (_, expr) => `\n\n${pushMathToken(expr, true)}\n\n`);
+    out = out.replace(
+      /(^|\n)\s*(\\begin\{(equation\*?|align\*?|aligned|gather\*?|multline\*?|flalign\*?|split|cases|matrix|pmatrix|bmatrix|vmatrix|Vmatrix)\}[\s\S]*?\\end\{\3\})/g,
+      (match, prefix, expr) => `${prefix}\n\n${pushMathToken(expr, true)}\n\n`,
+    );
     out = out.replace(/\\\(([\s\S]+?)\\\)/g, (_, expr) => pushMathToken(expr, false));
     out = out.replace(/(^|[^\\$])\$([^\n$](?:[^$]*?[^\s$])?)\$/g, (match, prefix, expr) => `${prefix}${pushMathToken(expr, false)}`);
     return out;
@@ -306,14 +314,21 @@ function finalizeMarkdownHtml(html) {
 }
 
 function restoreMarkdownMath(html, mathTokens) {
-  return String(html || '').replace(/@@AIOJ_MATH_TOKEN_(\d+)@@/g, (_, idx) => {
-    const token = mathTokens[Number(idx)];
-    if (!token) return '';
+  let restored = String(html || '');
+  mathTokens.forEach((token, idx) => {
+    const placeholder = `@@AIOJ_MATH_TOKEN_${idx}@@`;
     const rendered = renderLatexToHtml(token.expr, token.displayMode);
-    return token.displayMode
+    const replacement = token.displayMode
       ? `<div class="md-math md-math-block">${rendered}</div>`
       : `<span class="md-math md-math-inline">${rendered}</span>`;
+
+    if (token.displayMode) {
+      const wrappedParagraph = new RegExp(`<p>\\s*${escapeRegExp(placeholder)}\\s*</p>`, 'g');
+      restored = restored.replace(wrappedParagraph, replacement);
+    }
+    restored = restored.replaceAll(placeholder, replacement);
   });
+  return restored;
 }
 
 function renderMd(md) {
