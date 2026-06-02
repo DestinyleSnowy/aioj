@@ -55,6 +55,9 @@ const MESSAGE_SIDEBAR_MIN_WIDTH_PX = 260;
 const MESSAGE_SIDEBAR_MAX_WIDTH_PX = 520;
 const MESSAGE_THREAD_MIN_WIDTH_PX = 520;
 const MESSAGE_RESIZER_TRACK_PX = 16;
+const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
+const SIDEBAR_MODE_COLLAPSED = 'collapsed';
+const SIDEBAR_MODE_EXPANDED = 'expanded';
 
 function unreadDocumentTitlePrefix() {
   const totalUnread = Number(state.notificationUnreadCount || 0) + Number(state.messageUnreadCount || 0);
@@ -569,6 +572,48 @@ function closeModal() {
 }
 
 // ─── Navigation & App Shell ────────────────────────────────────────────────
+function syncSidebarToggleButton(collapsed) {
+  const btn = $('sidebarCollapseBtn');
+  if (!btn) return;
+  const label = collapsed ? '展开侧边栏' : '收起侧边栏';
+  btn.setAttribute('aria-label', label);
+  btn.setAttribute('aria-pressed', String(collapsed));
+  btn.title = label;
+}
+
+function setSidebarCollapsed(collapsed, persist = true) {
+  const shell = $('appShell');
+  if (!shell) return;
+  shell.classList.toggle('sidebar-collapsed', collapsed);
+  syncSidebarToggleButton(collapsed);
+  if (persist) {
+    localStorage.setItem(SIDEBAR_MODE_STORAGE_KEY, collapsed ? SIDEBAR_MODE_COLLAPSED : SIDEBAR_MODE_EXPANDED);
+  }
+}
+
+function syncSidebarNavTitles() {
+  document.querySelectorAll('.sidebar .nav-link').forEach((link) => {
+    const label = link.querySelector('.nav-text')?.textContent?.trim();
+    if (label) link.setAttribute('title', label);
+  });
+}
+
+function initSidebarMode() {
+  const savedMode = localStorage.getItem(SIDEBAR_MODE_STORAGE_KEY);
+  setSidebarCollapsed(savedMode === SIDEBAR_MODE_COLLAPSED, false);
+  syncSidebarNavTitles();
+
+  const btn = $('sidebarCollapseBtn');
+  if (!btn) return;
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const collapsed = !$('appShell').classList.contains('sidebar-collapsed');
+    setSidebarCollapsed(collapsed);
+    toast(`已${collapsed ? '收起' : '展开'}侧边栏`, 'info');
+  });
+}
+
 function clearPageState() {
   if (state.countdownTimer) {
     clearInterval(state.countdownTimer);
@@ -5600,6 +5645,8 @@ function route() {
 
 // ─── Dom Initialize ─────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  initSidebarMode();
+
   $('authBtn').addEventListener('click', () => showAuthModal());
   $('logoutBtn').addEventListener('click', logout);
   $('notificationBtn').addEventListener('click', () => {
