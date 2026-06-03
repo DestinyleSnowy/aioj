@@ -50,6 +50,8 @@ let problemEditorState = null;
 let problemEditorTempId = 0;
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
+const MESSAGE_THREAD_PAGE_SIZE = 40;
+const MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX = 32;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
 const MESSAGE_LAYOUT_STACK_BREAKPOINT_PX = 960;
 const MESSAGE_SIDEBAR_STORAGE_KEY = 'aioj_message_sidebar_width';
@@ -3111,6 +3113,32 @@ function scrollMessageThreadToBottom() {
   if (list) list.scrollTop = list.scrollHeight;
 }
 
+function messageThreadIsNearBottom(list = $('messageThreadList')) {
+  return !list || (list.scrollHeight - list.scrollTop - list.clientHeight < 80);
+}
+
+function oldestRenderedMessageId(list = $('messageThreadList')) {
+  const row = list?.querySelector('.message-row[data-message-id]');
+  const id = Number(row?.dataset.messageId || 0);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
+function renderMessageHistoryLoader() {
+  return `<div class="message-history-loader" data-message-history-loader hidden></div>`;
+}
+
+function setMessageHistoryLoader(list, text = '') {
+  const loader = list?.querySelector('[data-message-history-loader]');
+  if (!loader) return;
+  if (!text) {
+    loader.hidden = true;
+    loader.textContent = '';
+    return;
+  }
+  loader.hidden = false;
+  loader.textContent = text;
+}
+
 function clearMessageAttachmentCache() {
   for (const entry of state.messageAttachmentCache.values()) {
     if (entry?.url) URL.revokeObjectURL(entry.url);
@@ -3413,7 +3441,7 @@ async function renderMessages(peerId = null, options = {}) {
     let thread = null;
 
     if (selectedPeerId) {
-      thread = await api(`/api/messages/conversations/${selectedPeerId}?limit=120`, { headers: authHeaders() });
+      thread = await api(`/api/messages/conversations/${selectedPeerId}?limit=${MESSAGE_THREAD_PAGE_SIZE}`, { headers: authHeaders() });
       conversations.forEach((item) => {
         if (Number(item.peer_id) === Number(selectedPeerId)) item.unread_count = 0;
       });
@@ -3473,7 +3501,7 @@ async function renderMessages(peerId = null, options = {}) {
         ></div>
 
         <section class="message-thread-panel">
-          ${selectedPeerId && activePeer ? renderMessageThread(activePeer, threadItems) : `
+          ${selectedPeerId && activePeer ? renderMessageThread(activePeer, threadItems, { hasMore: !!thread?.has_more }) : `
             <div class="message-empty-panel">
               <div class="empty-icon">✉</div>
               <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信。</div>
@@ -3485,6 +3513,7 @@ async function renderMessages(peerId = null, options = {}) {
 
     initMessageLayoutInteractions();
     if (selectedPeerId && activePeer) {
+      initMessageThreadPagination(selectedPeerId, !!thread?.has_more);
       initMessageComposerInteractions(selectedPeerId);
       restoreMessageComposerState(selectedPeerId, composerSnapshot, {
         preserve: options.preserveComposer !== false,
@@ -3574,8 +3603,31 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
   saveMessageComposerDraft(currentMessagePeerId(), textarea.value);
 }
 
-function renderMessageThread(peer, messages) {
+function renderMessageRow(message) {
+  const mine = Number(message.sender_id) === Number(state.user.id);
+  const senderLabel = mine ? '我' : (message.sender_username || '用户');
+  const attachmentLabel = messageAttachmentQuoteLabel(message);
+  return `
+    <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id)}">
+      <div class="message-bubble">
+        ${message.has_attachment ? renderMessageAttachment(message) : ''}
+        ${message.body_md ? renderMd(message.body_md) : ''}
+        <div class="message-meta">
+          <span>${esc(senderLabel)} · ${formatDate(message.created_at)}</span>
+          <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMessageRows(messages = []) {
+  return messages.map(renderMessageRow).join('');
+}
+
+function renderMessageThread(peer, messages, options = {}) {
   const peerId = peer.id || peer.peer_id;
+  const hasMore = !!options.hasMore;
   return `
     <div class="message-thread-header">
       <div class="message-avatar">${messagePeerInitial(peer.username || peer.peer_username)}</div>
@@ -3586,29 +3638,14 @@ function renderMessageThread(peer, messages) {
       <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${peerId})" aria-label="查看新消息">0</button>
     </div>
 
-    <div class="message-thread-list" id="messageThreadList">
+    <div class="message-thread-list" id="messageThreadList" data-message-peer-id="${esc(peerId)}" data-has-more="${hasMore ? '1' : '0'}" data-loading-older="0">
+      ${renderMessageHistoryLoader()}
       ${messages.length === 0 ? `
         <div class="message-empty-panel">
           <div class="empty-icon">✉</div>
           <div class="text-muted" style="font-size: 13px;">还没有消息，发送第一条私信。</div>
         </div>
-      ` : messages.map(m => {
-        const mine = Number(m.sender_id) === Number(state.user.id);
-        const senderLabel = mine ? '我' : (m.sender_username || '用户');
-        const attachmentLabel = messageAttachmentQuoteLabel(m);
-        return `
-          <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(m.id)}">
-            <div class="message-bubble">
-              ${m.has_attachment ? renderMessageAttachment(m) : ''}
-              ${m.body_md ? renderMd(m.body_md) : ''}
-              <div class="message-meta">
-                <span>${esc(senderLabel)} · ${formatDate(m.created_at)}</span>
-                <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(m.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
-              </div>
-            </div>
-          </div>
-        `;
-      }).join('')}
+      ` : renderMessageRows(messages)}
     </div>
 
     <div class="message-composer" id="messageComposerWrap">
@@ -3624,6 +3661,80 @@ function renderMessageThread(peer, messages) {
       </div>
     </div>
   `;
+}
+
+function initMessageThreadPagination(peerId, hasMore = false) {
+  const list = $('messageThreadList');
+  const normalizedPeerId = Number(peerId || 0);
+  if (!list || !normalizedPeerId) return;
+
+  list.dataset.messagePeerId = String(normalizedPeerId);
+  list.dataset.hasMore = hasMore ? '1' : '0';
+  list.dataset.loadingOlder = '0';
+
+  list.addEventListener('scroll', () => {
+    if (list.scrollTop <= MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX) {
+      void loadOlderMessages(normalizedPeerId);
+    }
+  }, { passive: true });
+
+  setTimeout(() => {
+    if (!document.body.contains(list)) return;
+    if (list.scrollHeight <= list.clientHeight + 2) {
+      void loadOlderMessages(normalizedPeerId);
+    }
+  }, 0);
+}
+
+async function loadOlderMessages(peerId = null) {
+  const targetPeerId = Number(peerId || currentMessagePeerId() || 0);
+  const list = $('messageThreadList');
+  if (!targetPeerId || !list) return;
+  if (Number(list.dataset.messagePeerId || 0) !== targetPeerId) return;
+  if (list.dataset.hasMore !== '1' || list.dataset.loadingOlder === '1') return;
+
+  const beforeId = oldestRenderedMessageId(list);
+  if (!beforeId) {
+    list.dataset.hasMore = '0';
+    return;
+  }
+
+  const previousHeight = list.scrollHeight;
+  const previousTop = list.scrollTop;
+  list.dataset.loadingOlder = '1';
+  setMessageHistoryLoader(list, '正在加载更早消息...');
+
+  try {
+    const data = await api(`/api/messages/conversations/${targetPeerId}?limit=${MESSAGE_THREAD_PAGE_SIZE}&before_id=${beforeId}`, { headers: authHeaders() });
+    if (!document.body.contains(list) || Number(list.dataset.messagePeerId || 0) !== targetPeerId) return;
+
+    const items = data.items || [];
+    if (items.length) {
+      const firstMessageRow = list.querySelector('.message-row[data-message-id]');
+      const emptyPanel = list.querySelector('.message-empty-panel');
+      if (emptyPanel) emptyPanel.remove();
+      if (firstMessageRow) {
+        firstMessageRow.insertAdjacentHTML('beforebegin', renderMessageRows(items));
+      } else {
+        list.insertAdjacentHTML('beforeend', renderMessageRows(items));
+      }
+    }
+
+    list.dataset.hasMore = data.has_more ? '1' : '0';
+    setMessageHistoryLoader(list, '');
+    list.scrollTop = previousTop + (list.scrollHeight - previousHeight);
+    hydrateMessageAttachments({ preserveScrollAbove: true });
+  } catch (err) {
+    if (document.body.contains(list)) {
+      setMessageHistoryLoader(list, '');
+      toast(`加载更早消息失败: ${err.message}`, 'error');
+    }
+  } finally {
+    if (document.body.contains(list)) {
+      list.dataset.loadingOlder = '0';
+      if (list.dataset.hasMore !== '1') setMessageHistoryLoader(list, '');
+    }
+  }
 }
 
 function renderMessageAttachment(message) {
@@ -3652,14 +3763,18 @@ function renderMessageAttachment(message) {
   `;
 }
 
-async function hydrateMessageAttachments() {
+async function hydrateMessageAttachments(options = {}) {
   const images = Array.from(document.querySelectorAll('img[data-message-attachment-id]:not([data-loaded])'));
   const list = $('messageThreadList');
-  const stickToBottom = !list || (list.scrollHeight - list.scrollTop - list.clientHeight < 80);
+  const stickToBottom = !options.preserveScrollAbove && messageThreadIsNearBottom(list);
   for (const img of images) {
     const attachmentId = img.dataset.messageAttachmentId;
     const frame = img.closest('.message-image-frame');
     const placeholder = frame?.querySelector('.message-image-placeholder');
+    const preserveScroll = !!options.preserveScrollAbove &&
+      !!list &&
+      img.getBoundingClientRect().top < list.getBoundingClientRect().top;
+    const previousHeight = preserveScroll ? list.scrollHeight : 0;
     try {
       const url = await loadMessageAttachmentUrl(attachmentId);
       img.src = url;
@@ -3667,9 +3782,11 @@ async function hydrateMessageAttachments() {
       img.hidden = false;
       img.dataset.loaded = '1';
       if (placeholder) placeholder.style.display = 'none';
+      if (preserveScroll) list.scrollTop += list.scrollHeight - previousHeight;
       if (stickToBottom) scrollMessageThreadToBottom();
     } catch {
       if (placeholder) placeholder.textContent = '图片加载失败';
+      if (preserveScroll) list.scrollTop += list.scrollHeight - previousHeight;
       if (stickToBottom) scrollMessageThreadToBottom();
     }
   }

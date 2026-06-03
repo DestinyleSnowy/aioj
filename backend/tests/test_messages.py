@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from app.routers.messages import (
     clamp_limit,
     normalize_message_body,
+    normalize_message_cursor,
     normalize_optional_message_body,
     safe_attachment_filename,
     validate_file_upload,
@@ -27,6 +28,20 @@ def test_clamp_limit_handles_invalid_and_bounds():
     assert clamp_limit(0, default=20, max_value=50) == 20
     assert clamp_limit(500, default=20, max_value=50) == 50
     assert clamp_limit(12, default=20, max_value=50) == 12
+
+
+def test_normalize_message_cursor_allows_positive_ids_only():
+    assert normalize_message_cursor(None) is None
+    assert normalize_message_cursor("") is None
+    assert normalize_message_cursor("42") == 42
+
+    with pytest.raises(HTTPException) as invalid:
+        normalize_message_cursor(0)
+    assert invalid.value.status_code == 400
+
+    with pytest.raises(HTTPException) as malformed:
+        normalize_message_cursor("bad")
+    assert malformed.value.status_code == 400
 
 
 def test_optional_message_body_allows_empty_caption_but_limits_length():

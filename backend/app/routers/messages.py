@@ -134,6 +134,18 @@ def clamp_limit(value, *, default: int = 50, max_value: int = 200) -> int:
     return max(1, min(limit, max_value))
 
 
+def normalize_message_cursor(value) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        cursor = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid message cursor")
+    if cursor <= 0:
+        raise HTTPException(status_code=400, detail="Invalid message cursor")
+    return cursor
+
+
 @router.get("/api/messages/unread-count")
 def direct_message_unread_count(user=Depends(require_user)):
     with engine.connect() as conn:
@@ -243,11 +255,17 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
 
 
 @router.get("/api/messages/conversations/{peer_id}")
-def get_message_conversation(peer_id: int, limit: int = 100, user=Depends(require_user)):
+def get_message_conversation(
+    peer_id: int,
+    limit: int = 100,
+    before_id: int | None = None,
+    user=Depends(require_user),
+):
     if peer_id == user["id"]:
         raise HTTPException(status_code=400, detail="Cannot open a conversation with yourself")
 
     limit = clamp_limit(limit, default=100, max_value=200)
+    before_id = normalize_message_cursor(before_id)
     with engine.begin() as conn:
         peer = conn.execute(
             text(
@@ -275,9 +293,38 @@ def get_message_conversation(peer_id: int, limit: int = 100, user=Depends(requir
             ),
             {"peer_id": peer_id, "user_id": user["id"]},
         )
+
+        params = {"user_id": user["id"], "peer_id": peer_id, "limit": limit + 1}
+        before_filter = ""
+        if before_id is not None:
+            anchor = conn.execute(
+                text(
+                    """
+                    select created_at
+                    from direct_messages
+                    where id = :before_id
+                      and (
+                        (sender_id = :user_id and recipient_id = :peer_id)
+                        or (sender_id = :peer_id and recipient_id = :user_id)
+                      )
+                    """
+                ),
+                {"user_id": user["id"], "peer_id": peer_id, "before_id": before_id},
+            ).mappings().first()
+            if not anchor:
+                return {"peer": dict(peer), "items": [], "has_more": False}
+            params["before_id"] = before_id
+            params["before_created_at"] = anchor["created_at"]
+            before_filter = """
+                  and (
+                    dm.created_at < :before_created_at
+                    or (dm.created_at = :before_created_at and dm.id < :before_id)
+                  )
+            """
+
         rows = conn.execute(
             text(
-                """
+                f"""
                 select *
                 from (
                   select
@@ -298,18 +345,25 @@ def get_message_conversation(peer_id: int, limit: int = 100, user=Depends(requir
                   from direct_messages dm
                   join users su on su.id = dm.sender_id
                   join users ru on ru.id = dm.recipient_id
-                  where (dm.sender_id = :user_id and dm.recipient_id = :peer_id)
-                     or (dm.sender_id = :peer_id and dm.recipient_id = :user_id)
+                  where (
+                    (dm.sender_id = :user_id and dm.recipient_id = :peer_id)
+                    or (dm.sender_id = :peer_id and dm.recipient_id = :user_id)
+                  )
+                  {before_filter}
                   order by dm.created_at desc, dm.id desc
                   limit :limit
                 ) recent
                 order by created_at asc, id asc
                 """
             ),
-            {"user_id": user["id"], "peer_id": peer_id, "limit": limit},
+            params,
         ).mappings().all()
 
-    return {"peer": dict(peer), "items": [dict(row) for row in rows]}
+    return {
+        "peer": dict(peer),
+        "items": [dict(row) for row in rows[:limit]],
+        "has_more": len(rows) > limit,
+    }
 
 
 @router.post("/api/messages")
