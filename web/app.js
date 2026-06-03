@@ -51,6 +51,7 @@ let problemEditorTempId = 0;
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
 const MESSAGE_THREAD_PAGE_SIZE = 20;
+const MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX = 32;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
 const MESSAGE_LAYOUT_STACK_BREAKPOINT_PX = 960;
 const MESSAGE_SIDEBAR_STORAGE_KEY = 'aioj_message_sidebar_width';
@@ -75,6 +76,7 @@ function refreshDocumentTitle() {
 }
 
 function setPage(title) {
+  $('app')?.classList.remove('messages-page');
   $('pageTitle').textContent = title || 'AIOJ';
   if ($('pageSubtitle')) {
     $('pageSubtitle').textContent = '';
@@ -3122,31 +3124,20 @@ function oldestRenderedMessageId(list = $('messageThreadList')) {
   return Number.isFinite(id) && id > 0 ? id : 0;
 }
 
-function renderMessageHistoryLoader(hasMore = false) {
-  return `
-    <div class="message-history-loader" data-message-history-loader${hasMore ? '' : ' hidden'}>
-      <button class="btn btn-secondary btn-sm" type="button" data-message-history-button onclick="loadOlderMessages()">加载更早消息</button>
-    </div>
-  `;
+function renderMessageHistoryLoader() {
+  return `<div class="message-history-loader" data-message-history-loader hidden></div>`;
 }
 
-function setMessageHistoryLoader(list, mode = 'ready') {
+function setMessageHistoryLoader(list, text = '') {
   const loader = list?.querySelector('[data-message-history-loader]');
-  const button = loader?.querySelector('[data-message-history-button]');
   if (!loader) return;
-  if (mode === 'hidden') {
+  if (!text) {
     loader.hidden = true;
-    if (button) {
-      button.disabled = false;
-      button.textContent = '加载更早消息';
-    }
+    loader.textContent = '';
     return;
   }
   loader.hidden = false;
-  if (button) {
-    button.disabled = mode === 'loading';
-    button.textContent = mode === 'loading' ? '加载中...' : '加载更早消息';
-  }
+  loader.textContent = text;
 }
 
 function clearMessageAttachmentCache() {
@@ -3649,7 +3640,7 @@ function renderMessageThread(peer, messages, options = {}) {
     </div>
 
     <div class="message-thread-list" id="messageThreadList" data-message-peer-id="${esc(peerId)}" data-has-more="${hasMore ? '1' : '0'}" data-loading-older="0">
-      ${renderMessageHistoryLoader(hasMore)}
+      ${renderMessageHistoryLoader()}
       ${messages.length === 0 ? `
         <div class="message-empty-panel">
           <div class="empty-icon">✉</div>
@@ -3681,7 +3672,19 @@ function initMessageThreadPagination(peerId, hasMore = false) {
   list.dataset.messagePeerId = String(normalizedPeerId);
   list.dataset.hasMore = hasMore ? '1' : '0';
   list.dataset.loadingOlder = '0';
-  setMessageHistoryLoader(list, hasMore ? 'ready' : 'hidden');
+
+  list.addEventListener('scroll', () => {
+    if (list.scrollTop <= MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX) {
+      void loadOlderMessages(normalizedPeerId);
+    }
+  }, { passive: true });
+
+  setTimeout(() => {
+    if (!document.body.contains(list)) return;
+    if (list.scrollHeight <= list.clientHeight + 2) {
+      void loadOlderMessages(normalizedPeerId);
+    }
+  }, 0);
 }
 
 async function loadOlderMessages(peerId = null) {
@@ -3700,7 +3703,7 @@ async function loadOlderMessages(peerId = null) {
   const previousHeight = list.scrollHeight;
   const previousTop = list.scrollTop;
   list.dataset.loadingOlder = '1';
-  setMessageHistoryLoader(list, 'loading');
+  setMessageHistoryLoader(list, '正在加载更早消息...');
 
   try {
     const data = await api(`/api/messages/conversations/${targetPeerId}?limit=${MESSAGE_THREAD_PAGE_SIZE}&before_id=${beforeId}`, { headers: authHeaders() });
@@ -3719,18 +3722,18 @@ async function loadOlderMessages(peerId = null) {
     }
 
     list.dataset.hasMore = data.has_more ? '1' : '0';
-    setMessageHistoryLoader(list, data.has_more ? 'ready' : 'hidden');
+    setMessageHistoryLoader(list, '');
     list.scrollTop = previousTop + (list.scrollHeight - previousHeight);
     hydrateMessageAttachments({ preserveScrollAbove: true });
   } catch (err) {
     if (document.body.contains(list)) {
-      setMessageHistoryLoader(list, list.dataset.hasMore === '1' ? 'ready' : 'hidden');
+      setMessageHistoryLoader(list, '');
       toast(`加载更早消息失败: ${err.message}`, 'error');
     }
   } finally {
     if (document.body.contains(list)) {
       list.dataset.loadingOlder = '0';
-      if (list.dataset.hasMore !== '1') setMessageHistoryLoader(list, 'hidden');
+      if (list.dataset.hasMore !== '1') setMessageHistoryLoader(list, '');
     }
   }
 }
@@ -3756,7 +3759,7 @@ function renderMessageAttachment(message) {
   return `
     <div class="message-image-frame" data-message-attachment-frame="${attachmentId}">
       <div class="message-image-placeholder"${cachedUrl ? ' style="display:none"' : ''}>图片加载中...</div>
-      <img class="message-image" data-message-attachment-id="${attachmentId}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImage(this.src)" />
+      <img class="message-image" data-message-attachment-id="${attachmentId}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImageFromAttachment(${attachmentId}, this.src)" />
     </div>
   `;
 }
@@ -3818,6 +3821,54 @@ function destroyMessageImagePreview() {
   if (typeof preview.cleanup === 'function') preview.cleanup();
   document.body.classList.remove('message-image-panning');
   state.messageImagePreview = null;
+}
+
+function collectMessageImagePreviewItems() {
+  const root = $('messageThreadList') || document;
+  return Array.from(root.querySelectorAll('img[data-message-attachment-id]'))
+    .map((img) => {
+      const attachmentId = Number(img.dataset.messageAttachmentId || 0);
+      const cachedUrl = getMessageAttachmentCacheEntry(attachmentId)?.url || '';
+      return {
+        attachmentId,
+        src: img.currentSrc || img.src || cachedUrl,
+        alt: img.alt || '图片消息',
+      };
+    })
+    .filter((item) => item.attachmentId || item.src);
+}
+
+function findMessageImagePreviewIndex(items, attachmentId = 0, src = '') {
+  const normalizedId = Number(attachmentId || 0);
+  if (normalizedId) {
+    const byId = items.findIndex((item) => Number(item.attachmentId || 0) === normalizedId);
+    if (byId >= 0) return byId;
+  }
+  if (src) {
+    const bySrc = items.findIndex((item) => item.src === src);
+    if (bySrc >= 0) return bySrc;
+  }
+  return 0;
+}
+
+function updateMessageImagePreviewControls(preview = state.messageImagePreview) {
+  if (!preview) return;
+  const count = preview.items.length;
+  const hasPrevious = preview.index > 0;
+  const hasNext = preview.index < count - 1;
+  if (preview.counter) {
+    preview.counter.textContent = count > 1 ? `${preview.index + 1} / ${count}` : '1 / 1';
+  }
+  [preview.previousButton, preview.overlayPreviousButton].forEach((button) => {
+    if (!button) return;
+    button.disabled = !hasPrevious;
+    button.hidden = count <= 1;
+  });
+  [preview.nextButton, preview.overlayNextButton].forEach((button) => {
+    if (!button) return;
+    button.disabled = !hasNext;
+    button.hidden = count <= 1;
+  });
 }
 
 function getMessageImagePreviewFitScale(preview = state.messageImagePreview) {
@@ -3909,16 +3960,85 @@ function zoomMessageImagePreview(direction) {
   setMessageImagePreviewScale(preview.scale * factor);
 }
 
-function initMessageImagePreview() {
+async function setMessageImagePreviewIndex(index) {
+  const preview = state.messageImagePreview;
+  if (!preview || !preview.items.length) return;
+  const nextIndex = clampMessageImagePreviewValue(Number(index || 0), 0, preview.items.length - 1);
+  const item = preview.items[nextIndex];
+  const token = (preview.loadToken || 0) + 1;
+
+  preview.index = nextIndex;
+  preview.loadToken = token;
+  preview.naturalWidth = 0;
+  preview.naturalHeight = 0;
+  preview.fitScale = 1;
+  preview.scale = 1;
+  preview.offsetX = 0;
+  preview.offsetY = 0;
+  preview.img.hidden = true;
+  preview.img.removeAttribute('src');
+  preview.img.alt = item.alt || '图片消息';
+  if (preview.loading) {
+    preview.loading.textContent = '图片加载中...';
+    preview.loading.style.display = 'flex';
+  }
+  updateMessageImagePreviewControls(preview);
+
+  try {
+    const src = item.src || (item.attachmentId ? await loadMessageAttachmentUrl(item.attachmentId) : '');
+    if (state.messageImagePreview !== preview || preview.loadToken !== token) return;
+    if (!src) throw new Error('Missing image source');
+
+    item.src = src;
+    preview.img.src = src;
+    await waitForImageReady(preview.img);
+    if (state.messageImagePreview !== preview || preview.loadToken !== token) return;
+
+    preview.naturalWidth = preview.img.naturalWidth || 1;
+    preview.naturalHeight = preview.img.naturalHeight || 1;
+    if (preview.loading) preview.loading.style.display = 'none';
+    preview.img.hidden = false;
+    fitMessageImagePreview();
+  } catch {
+    if (state.messageImagePreview !== preview || preview.loadToken !== token) return;
+    if (preview.loading) preview.loading.textContent = '图片加载失败';
+  }
+}
+
+function showMessageImagePreviewOffset(delta) {
+  const preview = state.messageImagePreview;
+  if (!preview) return;
+  setMessageImagePreviewIndex(preview.index + delta);
+}
+
+function showPreviousMessageImage() {
+  showMessageImagePreviewOffset(-1);
+}
+
+function showNextMessageImage() {
+  showMessageImagePreviewOffset(1);
+}
+
+function initMessageImagePreview({ items = [], index = 0 } = {}) {
   const stage = $('messageImageStage');
   const img = $('messageImagePreview');
   if (!stage || !img) return;
 
+  const previewItems = items.length ? items : collectMessageImagePreviewItems();
+  if (!previewItems.length) return;
   const preview = {
     stage,
     img,
     loading: $('messageImageLoading'),
     zoomLabel: $('messageImageZoomLabel'),
+    counter: $('messageImageCounter'),
+    previousButton: $('messageImagePreviousBtn'),
+    nextButton: $('messageImageNextBtn'),
+    overlayPreviousButton: $('messageImageOverlayPreviousBtn'),
+    overlayNextButton: $('messageImageOverlayNextBtn'),
+    items: previewItems,
+    index: clampMessageImagePreviewValue(Number(index || 0), 0, previewItems.length - 1),
+    loadToken: 0,
     naturalWidth: 0,
     naturalHeight: 0,
     fitScale: 1,
@@ -3958,6 +4078,7 @@ function initMessageImagePreview() {
   };
 
   const onPointerDown = (event) => {
+    if (event.target?.closest?.('.message-image-nav-btn')) return;
     if (event.button !== 0 || !preview.naturalWidth || !preview.naturalHeight) return;
     event.preventDefault();
     preview.pointerId = event.pointerId;
@@ -3995,6 +4116,18 @@ function initMessageImagePreview() {
     renderMessageImagePreviewTransform(preview);
   };
 
+  const onKeyDown = (event) => {
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      showPreviousMessageImage();
+      return;
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      showNextMessageImage();
+    }
+  };
+
   preview.cleanup = () => {
     stopPan();
     preview.stage.removeEventListener('wheel', onWheel);
@@ -4003,6 +4136,7 @@ function initMessageImagePreview() {
     preview.stage.removeEventListener('pointerup', onPointerUp);
     preview.stage.removeEventListener('pointercancel', onPointerUp);
     preview.stage.removeEventListener('lostpointercapture', stopPan);
+    document.removeEventListener('keydown', onKeyDown);
     window.removeEventListener('resize', onResize);
   };
 
@@ -4012,37 +4146,41 @@ function initMessageImagePreview() {
   preview.stage.addEventListener('pointerup', onPointerUp);
   preview.stage.addEventListener('pointercancel', onPointerUp);
   preview.stage.addEventListener('lostpointercapture', stopPan);
+  document.addEventListener('keydown', onKeyDown);
   window.addEventListener('resize', onResize);
 
-  waitForImageReady(img)
-    .then(() => {
-      if (state.messageImagePreview !== preview) return;
-      preview.naturalWidth = img.naturalWidth || 1;
-      preview.naturalHeight = img.naturalHeight || 1;
-      if (preview.loading) preview.loading.style.display = 'none';
-      img.hidden = false;
-      fitMessageImagePreview();
-    })
-    .catch(() => {
-      if (state.messageImagePreview !== preview) return;
-      if (preview.loading) preview.loading.textContent = '图片加载失败';
-    });
+  setMessageImagePreviewIndex(preview.index);
 }
 
-function openMessageImage(src) {
-  if (!src) return;
+function openMessageImageFromAttachment(attachmentId, src = '') {
+  openMessageImage(src, { attachmentId });
+}
+
+function openMessageImage(src, options = {}) {
+  if (!src && !options.attachmentId) return;
+  const attachmentId = Number(options.attachmentId || 0);
+  const items = collectMessageImagePreviewItems();
+  if (!items.length) {
+    items.push({ attachmentId, src, alt: '图片消息' });
+  }
+  const index = findMessageImagePreviewIndex(items, attachmentId, src);
   openModal({
     title: '图片消息',
     body: `
       <div class="message-image-preview-shell">
+        <button class="message-image-nav-btn previous" id="messageImageOverlayPreviousBtn" type="button" aria-label="上一张图片" title="上一张" onclick="showPreviousMessageImage()">‹</button>
         <div class="message-image-stage" id="messageImageStage" aria-label="图片预览" tabindex="0">
           <div class="message-image-loading" id="messageImageLoading">图片加载中...</div>
-          <img id="messageImagePreview" src="${esc(src)}" alt="图片消息" class="message-image-preview" draggable="false" hidden />
+          <img id="messageImagePreview" alt="图片消息" class="message-image-preview" draggable="false" hidden />
         </div>
+        <button class="message-image-nav-btn next" id="messageImageOverlayNextBtn" type="button" aria-label="下一张图片" title="下一张" onclick="showNextMessageImage()">›</button>
       </div>
     `,
     footer: `
       <div class="message-image-toolbar" aria-label="图片缩放控制">
+        <button class="btn btn-secondary btn-sm message-image-zoom-btn" id="messageImagePreviousBtn" type="button" aria-label="上一张图片" title="上一张" onclick="showPreviousMessageImage()">‹</button>
+        <span class="message-image-count" id="messageImageCounter">--</span>
+        <button class="btn btn-secondary btn-sm message-image-zoom-btn" id="messageImageNextBtn" type="button" aria-label="下一张图片" title="下一张" onclick="showNextMessageImage()">›</button>
         <button class="btn btn-secondary btn-sm" type="button" onclick="fitMessageImagePreview()">适应窗口</button>
         <button class="btn btn-secondary btn-sm message-image-zoom-btn" type="button" aria-label="缩小" title="缩小" onclick="zoomMessageImagePreview(-1)">-</button>
         <span class="message-image-zoom-label" id="messageImageZoomLabel">--</span>
@@ -4053,7 +4191,7 @@ function openMessageImage(src) {
     `,
     image: true,
   });
-  initMessageImagePreview();
+  initMessageImagePreview({ items, index });
 }
 
 function insertTextareaNewline(textarea) {
@@ -7197,7 +7335,8 @@ Object.assign(window, {
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
-  handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, downloadMessageFile,
+  handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
+  showPreviousMessageImage, showNextMessageImage, downloadMessageFile,
   refreshMessageThreadNow, quoteMessage,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
