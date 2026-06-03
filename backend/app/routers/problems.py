@@ -11,6 +11,11 @@ from sqlalchemy import text
 from app.db import engine
 from app.dependencies import require_admin
 from app.services.audit import audit_log
+from app.services.document_conversion import (
+    DocumentConversionError,
+    convert_docx_bytes_to_pdf,
+    convert_docx_file_to_pdf,
+)
 from app.services.judge_admin import normalize_tags
 from app.services.problem_assets import (
     guess_content_type,
@@ -113,6 +118,20 @@ def _statement_assets_for_row(row) -> dict:
 def _statement_asset_id(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(value or "").strip().lower()).strip("-_.")
     return normalized
+
+
+def _statement_pdf_upload_payload(filename: str | None, content: bytes) -> tuple[str, bytes]:
+    source_filename = Path(filename or "statement.pdf").name
+    suffix = Path(source_filename).suffix.lower()
+    if suffix == ".pdf":
+        return source_filename, content
+    if suffix == ".docx":
+        try:
+            pdf_filename, pdf_content = convert_docx_bytes_to_pdf(content, source_filename)
+        except DocumentConversionError as exc:
+            raise HTTPException(status_code=500, detail=f"DOCX to PDF conversion failed: {exc}") from exc
+        return Path(pdf_filename).name, pdf_content
+    raise HTTPException(status_code=400, detail="Only PDF or DOCX files are supported for statement language packs")
 
 
 def _normalize_statement_assets_for_storage(statement_assets: dict, *, fallback_statement_md: str = "") -> tuple[dict, str]:
@@ -621,20 +640,19 @@ async def admin_problem_statement_pdf_upload(
     if not normalized_asset_id:
         raise HTTPException(status_code=400, detail="Invalid statement asset id")
 
-    filename = Path(file.filename or f"{normalized_asset_id}.pdf").name
-    if Path(filename).suffix.lower() != ".pdf":
-        raise HTTPException(status_code=400, detail="Only PDF files are supported for statement language packs")
-
     content = await file.read()
     if not content:
-        raise HTTPException(status_code=400, detail="Uploaded PDF is empty")
+        raise HTTPException(status_code=400, detail="Uploaded statement file is empty")
+    filename, pdf_content = _statement_pdf_upload_payload(file.filename or f"{normalized_asset_id}.pdf", content)
+    if not pdf_content:
+        raise HTTPException(status_code=400, detail="Converted PDF is empty")
 
     with engine.begin() as conn:
         row = problem_version_row(conn, slug, version_id)
         if not row:
             raise HTTPException(status_code=404, detail="Problem version not found")
         object_key = f"problems/{slug}/{row['version']}/statements/{normalized_asset_id}/{filename}"
-        put_bytes(S3_BUCKET_PROBLEMS, object_key, content, guess_content_type(filename, "application/pdf"))
+        put_bytes(S3_BUCKET_PROBLEMS, object_key, pdf_content, "application/pdf")
         assets = _statement_assets_for_row(row)
         assets["pdfs"] = [
             item for item in assets["pdfs"]
@@ -658,7 +676,7 @@ async def admin_problem_statement_pdf_upload(
             action="admin.problem.statement_pdf.upload",
             resource_type="problem_version",
             resource_id=version_id,
-            metadata={"slug": slug, "asset_id": normalized_asset_id, "filename": filename},
+            metadata={"slug": slug, "asset_id": normalized_asset_id, "filename": filename, "source_filename": file.filename},
         )
         response = _admin_problem_editor_payload(conn, slug)
     return {"ok": True, **response}
@@ -719,6 +737,7 @@ def _collect_statement_assets(root: Path, cfg: dict) -> tuple[str, dict, list[tu
     default_language = str(cfg.get("default_statement_language") or cfg.get("statement_language") or "default")
     markdowns: list[dict] = []
     pdfs: list[tuple[dict, Path]] = []
+    statement_documents: dict[str, tuple[dict, Path]] = {}
 
     statement_md = root / "statement.md"
     if statement_md.exists():
@@ -749,21 +768,44 @@ def _collect_statement_assets(root: Path, cfg: dict) -> tuple[str, dict, list[tu
                         "content": path.read_text(encoding="utf-8", errors="replace"),
                     }
                 )
-            elif path.suffix.lower() == ".pdf":
-                pdfs.append(
-                    (
-                        {
-                            "id": language if len(relative.parts) > 1 else path.stem,
-                            "language": language,
-                            "label": _statement_label(language, labels),
-                            "filename": relative.name,
-                        },
-                        path,
-                    )
+            elif path.suffix.lower() in {".pdf", ".docx"}:
+                asset_id = language if len(relative.parts) > 1 else path.stem
+                normalized_id = _statement_asset_id(asset_id)
+                if not normalized_id:
+                    continue
+                existing = statement_documents.get(normalized_id)
+                if existing and existing[1].suffix.lower() == ".pdf":
+                    continue
+                if existing and path.suffix.lower() == ".docx":
+                    continue
+                statement_documents[normalized_id] = (
+                    {
+                        "id": asset_id,
+                        "language": language,
+                        "label": _statement_label(language, labels),
+                        "filename": relative.name,
+                    },
+                    path,
                 )
 
+    for pdf_entry, source_path in statement_documents.values():
+        pdf_path = source_path
+        if source_path.suffix.lower() == ".docx":
+            try:
+                pdf_path = convert_docx_file_to_pdf(
+                    source_path,
+                    root / ".converted-statements" / _statement_asset_id(pdf_entry["id"]),
+                )
+            except DocumentConversionError as exc:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"DOCX to PDF conversion failed for statements/{source_path.name}: {exc}",
+                ) from exc
+            pdf_entry = {**pdf_entry, "filename": pdf_path.name}
+        pdfs.append((pdf_entry, pdf_path))
+
     if not markdowns and not pdfs:
-        raise HTTPException(status_code=400, detail="Missing statement.md, statements/*.md, or statements/*.pdf")
+        raise HTTPException(status_code=400, detail="Missing statement.md, statements/*.md, statements/*.pdf, or statements/*.docx")
 
     default_entry = next((item for item in markdowns if item["language"] == default_language), markdowns[0]) if markdowns else None
     return (default_entry["content"] if default_entry else ""), {"default_language": default_language, "markdowns": markdowns, "pdfs": []}, pdfs

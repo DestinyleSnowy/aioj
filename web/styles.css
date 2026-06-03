@@ -789,6 +789,11 @@ html[data-theme="light"] .theme-toggle-btn .moon-icon {
   padding-inline: clamp(18px, 2.2vw, 34px);
 }
 
+.content.problem-editor-content {
+  max-width: min(1760px, calc(100vw - 24px));
+  padding-inline: clamp(16px, 2vw, 32px);
+}
+
 /* ─── 4. Custom Buttons & Inputs ─────────────────────────────────────────── */
 .btn {
   display: inline-flex;
@@ -1565,6 +1570,121 @@ tr:last-child td {
   inset: 0;
   opacity: 0;
   cursor: pointer;
+}
+
+.problem-package-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 260px)) auto;
+  gap: var(--space-md);
+  align-items: stretch;
+}
+
+.problem-package-picker {
+  min-height: 76px;
+  padding: var(--space-md);
+  justify-content: center;
+}
+
+.problem-package-picker .file-upload-icon {
+  min-width: 42px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: var(--border-light);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.problem-package-picker .file-upload-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.problem-import-progress {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13.5px;
+  color: var(--text-secondary);
+}
+
+.problem-editor-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.problem-editor-page-top {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.problem-editor-page-actions {
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid hsla(0, 0%, 100%, 0.05);
+  background: var(--bg-modal-footer);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.problem-editor-meta-grid,
+.problem-editor-asset-form {
+  display: grid;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+.problem-editor-meta-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 260px) minmax(220px, 260px);
+}
+
+.problem-editor-asset-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.problem-editor-markdown-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-md);
+  align-items: start;
+}
+
+.problem-editor-workspace-grid {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+  min-height: 560px;
+}
+
+.problem-editor-asset-sidebar {
+  width: 260px;
+  flex: 0 0 260px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.problem-editor-workspace-panel {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-md);
+  border: var(--border-light);
+  border-radius: var(--radius-md);
+  background: hsla(0, 0%, 100%, 0.02);
 }
 
 /* Leaderboard tables mini styling */
@@ -3027,6 +3147,26 @@ body.message-layout-resizing * {
   .problem-layout {
     grid-template-columns: 1fr;
   }
+
+  .problem-package-upload-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .problem-editor-meta-grid,
+  .problem-editor-asset-form,
+  .problem-editor-markdown-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .problem-editor-workspace-grid {
+    flex-direction: column;
+  }
+
+  .problem-editor-asset-sidebar,
+  .problem-editor-workspace-panel {
+    width: 100%;
+    flex: 0 0 auto;
+  }
   
   .two-col {
     grid-template-columns: 1fr;
@@ -3053,6 +3193,16 @@ body.message-layout-resizing * {
   .modal.image-modal {
     width: 96vw;
     max-height: 96dvh;
+  }
+
+  .problem-editor-page-actions,
+  .problem-editor-page-top {
+    justify-content: stretch;
+  }
+
+  .problem-editor-page-actions > *,
+  .problem-editor-page-top > * {
+    flex: 1 1 auto;
   }
 
   .message-image-preview-shell {

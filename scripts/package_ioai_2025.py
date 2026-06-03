@@ -4,6 +4,8 @@ import argparse
 import json
 import re
 import shutil
+import subprocess
+import tempfile
 import textwrap
 import unicodedata
 import zipfile
@@ -16,6 +18,7 @@ import numpy as np
 
 RUNNER_IMAGE = "aioj-python-ioai-cpu:latest"
 PIXEL_REF_DATASET = "IOAI-official/IOAI-2025-Pixel-ref"
+TRANSLATION_DOCX_CONVERTER = "auto"
 STOP_HEADINGS = {
     "### data loading",
     "### dependencies and config variables",
@@ -221,6 +224,142 @@ def translation_pdf_label(pdf_path: Path) -> str:
     return f"{country} · {descriptor}"
 
 
+def translation_document_is_current(path: Path, expected_day: str) -> bool:
+    if not path.is_file() or path.name.startswith("._") or path.name.startswith("~$"):
+        return False
+    if path.suffix.lower() not in {".pdf", ".docx"}:
+        return False
+    path_text = repair_mojibake(path.as_posix()).casefold()
+    name_text = repair_mojibake(path.name).casefold()
+    if "__macosx" in path_text or "donotprint" in path_text:
+        return False
+    if expected_day == "day2" and "day1" in name_text:
+        return False
+    if expected_day == "day1" and "day2" in name_text:
+        return False
+    if re.search(r"(?i)\bold\d*\b", path.name):
+        return False
+    return True
+
+
+def converted_translation_pdf_path(source_root: Path, translation_pack: str, docx_path: Path) -> Path:
+    translation_root = source_root / "Translations" / translation_pack
+    try:
+        rel = docx_path.relative_to(translation_root)
+    except ValueError:
+        rel = Path(docx_path.name)
+    safe_stem = re.sub(r"[^a-zA-Z0-9._-]+", "_", rel.with_suffix("").as_posix()).strip("_") or docx_path.stem
+    return source_root / "aioj-converted-translations" / translation_pack / f"{safe_stem}.pdf"
+
+
+def _conversion_failed(method: str, docx_path: Path, detail: str) -> None:
+    print(f"Warning: {method} failed to convert DOCX to PDF ({docx_path}): {detail}")
+
+
+def convert_docx_to_pdf_libreoffice(docx_path: Path, pdf_path: Path) -> Path | None:
+    binary = shutil.which("soffice") or shutil.which("libreoffice")
+    if not binary:
+        return None
+    with tempfile.TemporaryDirectory(prefix="aioj_lo_") as out_td, tempfile.TemporaryDirectory(prefix="aioj_lo_profile_") as profile_td:
+        out_dir = Path(out_td)
+        profile_uri = Path(profile_td).resolve().as_uri()
+        cmd = [
+            binary,
+            f"-env:UserInstallation={profile_uri}",
+            "--headless",
+            "--nologo",
+            "--nofirststartwizard",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            str(out_dir),
+            str(docx_path),
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        except Exception as exc:
+            _conversion_failed("LibreOffice", docx_path, str(exc))
+            return None
+        candidates = list(out_dir.glob("*.pdf"))
+        expected = out_dir / f"{docx_path.stem}.pdf"
+        generated = expected if expected.exists() else (candidates[0] if candidates else None)
+        if result.returncode != 0 or not generated:
+            detail = (result.stderr or result.stdout or "").strip().splitlines()
+            _conversion_failed("LibreOffice", docx_path, detail[-1] if detail else "no PDF produced")
+            return None
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(generated, pdf_path)
+        return pdf_path
+
+
+def convert_docx_to_pdf_word(docx_path: Path, pdf_path: Path) -> Path | None:
+    try:
+        import win32com.client  # type: ignore
+    except Exception:
+        return None
+    word = None
+    doc = None
+    try:
+        word = win32com.client.DispatchEx("Word.Application")
+        word.Visible = False
+        word.DisplayAlerts = 0
+        doc = word.Documents.Open(str(docx_path), ReadOnly=True, AddToRecentFiles=False)
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.ExportAsFixedFormat(OutputFileName=str(pdf_path), ExportFormat=17)
+    except Exception as exc:
+        _conversion_failed("Word", docx_path, str(exc))
+        return None
+    finally:
+        if doc is not None:
+            doc.Close(False)
+        if word is not None:
+            word.Quit()
+    return pdf_path if pdf_path.exists() else None
+
+
+def convert_docx_to_pdf_pandoc(docx_path: Path, pdf_path: Path) -> Path | None:
+    pandoc = shutil.which("pandoc")
+    if not pandoc:
+        return None
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [pandoc, str(docx_path), "-o", str(pdf_path), "--pdf-engine=xelatex"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except Exception as exc:
+        _conversion_failed("pandoc", docx_path, str(exc))
+        return None
+    if result.returncode != 0 or not pdf_path.exists():
+        detail = (result.stderr or result.stdout or "").strip().splitlines()
+        tail = detail[-1] if detail else "pandoc returned a non-zero exit code"
+        _conversion_failed("pandoc", docx_path, tail)
+        return None
+    return pdf_path
+
+
+def convert_docx_to_pdf(source_root: Path, translation_pack: str, docx_path: Path) -> Path | None:
+    pdf_path = converted_translation_pdf_path(source_root, translation_pack, docx_path)
+    if pdf_path.exists() and pdf_path.stat().st_mtime >= docx_path.stat().st_mtime:
+        return pdf_path
+    configured = TRANSLATION_DOCX_CONVERTER
+    if configured == "none":
+        return None
+    methods = [configured] if configured != "auto" else ["libreoffice", "word", "pandoc"]
+    converters = {
+        "libreoffice": convert_docx_to_pdf_libreoffice,
+        "word": convert_docx_to_pdf_word,
+        "pandoc": convert_docx_to_pdf_pandoc,
+    }
+    for method in methods:
+        converter = converters.get(method)
+        if not converter:
+            continue
+        converted = converter(docx_path, pdf_path)
+        if converted:
+            return converted
+    print(f"Warning: no DOCX converter produced a PDF for {docx_path}")
+    return None
+
+
 def copy_translation_pdfs(source_root: Path, package_dir: Path, cfg: dict) -> dict[str, str]:
     translation_pack = str(cfg.get("translation_pack") or "").strip()
     if not translation_pack:
@@ -233,15 +372,18 @@ def copy_translation_pdfs(source_root: Path, package_dir: Path, cfg: dict) -> di
     expected_day = "day2" if "day2" in translation_pack.lower() else "day1"
     labels: dict[str, str] = {}
     used_ids = {"en"}
-    for pdf_path in sorted(translation_dir.rglob("*.pdf")):
-        if not pdf_path.is_file() or pdf_path.name.startswith("._"):
+    for source_path in sorted(translation_dir.rglob("*")):
+        if not translation_document_is_current(source_path, expected_day):
             continue
-        normalized_name = repair_mojibake(pdf_path.name).casefold()
-        if expected_day == "day2" and "day1" in normalized_name:
+        if source_path.suffix.lower() == ".pdf":
+            pdf_path = source_path
+        elif TRANSLATION_DOCX_CONVERTER != "none":
+            pdf_path = convert_docx_to_pdf(source_root, translation_pack, source_path)
+        else:
             continue
-        if expected_day == "day1" and "day2" in normalized_name:
+        if not pdf_path:
             continue
-        label = translation_pdf_label(pdf_path)
+        label = translation_pdf_label(source_path)
         base_id = statement_language_id(label)
         language_id = base_id
         suffix = 2
@@ -1007,11 +1149,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate AIOJ-ready problem packages from the IOAI 2025 repository.")
     parser.add_argument("--source", type=Path, default=Path(r"E:\IOAI-2025"))
     parser.add_argument("--output", type=Path, default=Path(r"E:\IOAI-2025\aioj-packages"))
+    parser.add_argument(
+        "--docx-converter",
+        choices=["auto", "libreoffice", "word", "pandoc", "none"],
+        default="auto",
+        help="DOCX-to-PDF converter for translation packs. Ubuntu servers should use auto or libreoffice.",
+    )
+    parser.add_argument(
+        "--no-docx-convert",
+        action="store_true",
+        help="Skip DOCX-to-PDF conversion and include only PDFs already present in Translations.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
+    global TRANSLATION_DOCX_CONVERTER
     args = parse_args()
+    TRANSLATION_DOCX_CONVERTER = "none" if args.no_docx_convert else args.docx_converter
     args.output.mkdir(parents=True, exist_ok=True)
     archives = []
     for cfg in TASKS:

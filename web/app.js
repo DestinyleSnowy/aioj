@@ -4806,6 +4806,148 @@ async function markJudgeJobFailed(jobId) {
 }
 
 // Admin: Problem Repository Manager
+function updateProblemPackagePickerLabel(inputId, labelId, mode = 'file') {
+  const input = $(inputId);
+  const label = $(labelId);
+  if (!input || !label) return;
+  const files = Array.from(input.files || []);
+  if (!files.length) {
+    label.textContent = mode === 'folder' ? '选择题包文件夹' : '选择 ZIP 题包';
+    return;
+  }
+  if (mode === 'folder') {
+    const root = findProblemPackageRoot(files);
+    label.textContent = root
+      ? `${root.split('/').pop()} (${files.length} 个文件)`
+      : `已选择 ${files.length} 个文件`;
+    return;
+  }
+  label.textContent = files[0].name;
+}
+
+function fileRelativePath(file) {
+  return String(file?.webkitRelativePath || file?.relativePath || file?.name || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '');
+}
+
+function findProblemPackageRoot(files) {
+  const roots = [];
+  Array.from(files || []).forEach((file) => {
+    const path = fileRelativePath(file);
+    const parts = path.split('/').filter(Boolean);
+    if (parts.length && parts[parts.length - 1].toLowerCase() === 'problem.yaml') {
+      roots.push(parts.slice(0, -1).join('/'));
+    }
+  });
+  roots.sort((a, b) => a.split('/').filter(Boolean).length - b.split('/').filter(Boolean).length);
+  return roots[0] || '';
+}
+
+async function buildProblemPackageZipFromFolder(files, resultEl = null) {
+  if (!window.JSZip) {
+    throw new Error('浏览器未加载 JSZip，无法把文件夹打包为题包 ZIP');
+  }
+  const list = Array.from(files || []).filter(file => file && !String(file.name || '').startsWith('._'));
+  const root = findProblemPackageRoot(list);
+  if (!root && !list.some(file => fileRelativePath(file).toLowerCase() === 'problem.yaml')) {
+    throw new Error('所选文件夹里没有 problem.yaml，无法识别为标准题包');
+  }
+  const rootPrefix = root ? `${root}/` : '';
+  const archive = new JSZip();
+  let included = 0;
+  list.forEach((file) => {
+    const path = fileRelativePath(file);
+    if (rootPrefix && !path.startsWith(rootPrefix)) return;
+    const rel = rootPrefix ? path.slice(rootPrefix.length) : path;
+    if (!rel || rel.startsWith('__MACOSX/')) return;
+    archive.file(rel, file);
+    included++;
+  });
+  if (!included) {
+    throw new Error('所选文件夹没有可上传的题包文件');
+  }
+  const zipName = `${(root || 'problem-package').split('/').pop() || 'problem-package'}.zip`;
+  const blob = await archive.generateAsync(
+    { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+    (meta) => {
+      if (resultEl && meta.percent != null) {
+        resultEl.innerHTML = `
+          <div class="problem-import-progress">
+            <div class="spinner-ring" style="width:16px; height:16px; border-width:2px;"></div>
+            <span>正在打包文件夹：${Math.round(meta.percent)}%</span>
+          </div>
+        `;
+      }
+    },
+  );
+  return new File([blob], zipName, { type: 'application/zip' });
+}
+
+async function prepareProblemPackageUpload({ zipInputId = 'problemZip', folderInputId = 'problemFolder', resultEl = null } = {}) {
+  const zipInput = $(zipInputId);
+  const folderInput = $(folderInputId);
+  const zipFile = zipInput?.files?.[0] || null;
+  if (zipFile) {
+    if (!zipFile.name.toLowerCase().endsWith('.zip')) {
+      throw new Error('请选择 .zip 题包，或改用文件夹上传');
+    }
+    return zipFile;
+  }
+  const folderFiles = Array.from(folderInput?.files || []);
+  if (folderFiles.length) {
+    return buildProblemPackageZipFromFolder(folderFiles, resultEl);
+  }
+  throw new Error('请先选择 ZIP 题包或题包文件夹');
+}
+
+async function uploadProblemPackageFromControls({
+  zipInputId = 'problemZip',
+  folderInputId = 'problemFolder',
+  resultId = 'importResult',
+  refreshAdmin = true,
+} = {}) {
+  const resultEl = $(resultId);
+  if (!resultEl) return null;
+  resultEl.innerHTML = `
+    <div class="problem-import-progress">
+      <div class="spinner-ring" style="width:16px; height:16px; border-width:2px;"></div>
+      <span>正在准备题包上传...</span>
+    </div>
+  `;
+  try {
+    const uploadFile = await prepareProblemPackageUpload({ zipInputId, folderInputId, resultEl });
+    resultEl.innerHTML = `
+      <div class="problem-import-progress">
+        <div class="spinner-ring" style="width:16px; height:16px; border-width:2px;"></div>
+        <span>正在验证并部署 ${esc(uploadFile.name)}，部署可能需要 3-10 秒...</span>
+      </div>
+    `;
+    const fd = new FormData();
+    fd.append('file', uploadFile);
+    const data = await tryApi(
+      ['/api/admin/problems/import', '/api/admin/problem-packages/import'],
+      { method: 'POST', headers: authHeaders(), body: fd }
+    );
+    resultEl.innerHTML = `
+      <div class="notice success">
+        <strong>部署成功!</strong> 题目: ${esc(data.slug)} 已经成功装载入库 (版本号: ${esc(data.version || '1')})。
+        <div style="margin-top: 8px; font-size: 13px;">
+          版本状态: ${esc(data.version_status || 'DRAFT')}，自测结果: ${esc(data.self_test_status || 'PENDING')}${data.activated ? '，已自动激活。' : '。'}
+        </div>
+      </div>
+    `;
+    toast('题包文件部署入库成功', 'success');
+    if (refreshAdmin && state.currentRoute === '/problem-admin') {
+      setTimeout(() => renderProblemAdmin(), 1800);
+    }
+    return data;
+  } catch (err) {
+    resultEl.innerHTML = `<div class="notice error">部署导入失败: ${esc(err.message)}</div>`;
+    return null;
+  }
+}
+
 async function renderProblemAdmin() {
   setPage('题目管理');
   if (!requireAdmin()) return;
@@ -4827,8 +4969,17 @@ async function renderProblemAdmin() {
         <div class="card-body">
           <p class="text-muted" style="font-size: 13.5px; margin-bottom: 12px;">上传标准 ZIP 题目包。基础格式包含 <code>problem.yaml</code>、<code>public/</code>、<code>private/</code>；题面可放 <code>statement.md</code> 或 <code>statements/*.md|*.pdf</code>。</p>
           <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">artifact 题包请将运行期输入放到 <code>private/input/</code>，将仅评分器可见的隐藏材料放到 <code>private/scoring/</code>。</p>
-          <div class="row gap-md" style="flex-wrap: wrap;">
-            <input type="file" id="problemZip" accept=".zip" style="width: auto; max-width: 320px;" />
+          <div class="problem-package-upload-grid">
+            <label class="file-upload problem-package-picker">
+              <span class="file-upload-icon">ZIP</span>
+              <span class="file-upload-label"><span id="problemZipLabel">选择 ZIP 题包</span></span>
+              <input type="file" id="problemZip" accept=".zip,application/zip" onchange="updateProblemPackagePickerLabel('problemZip', 'problemZipLabel')" />
+            </label>
+            <label class="file-upload problem-package-picker">
+              <span class="file-upload-icon">DIR</span>
+              <span class="file-upload-label"><span id="problemFolderLabel">选择题包文件夹</span></span>
+              <input type="file" id="problemFolder" webkitdirectory directory multiple onchange="updateProblemPackagePickerLabel('problemFolder', 'problemFolderLabel', 'folder')" />
+            </label>
             <button class="btn btn-primary" onclick="importProblem()">执行题包部署</button>
           </div>
           <div id="importResult" class="mt-md"></div>
@@ -4863,7 +5014,7 @@ async function renderProblemAdmin() {
                     <td>
                       <div class="row gap-xs" style="justify-content: flex-end;">
                         <a href="/problems/${esc(p.slug)}" class="btn btn-secondary btn-sm" data-link>预览</a>
-                        <button class="btn btn-secondary btn-sm" onclick="showProblemEditorModal('${esc(p.slug)}')">可视化编辑</button>
+                        <a href="/edit/${esc(p.slug)}" class="btn btn-primary btn-sm" data-link>可视化编辑</a>
                         <button class="btn btn-secondary btn-sm" onclick="showProblemVersionsModal('${esc(p.slug)}')">版本流水线</button>
                         <button class="btn btn-secondary btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'PUBLIC')">发布公开</button>
                         <button class="btn btn-secondary btn-sm" onclick="setProblemStatus('${esc(p.slug)}', 'DRAFT')">草稿锁定</button>
@@ -4884,35 +5035,7 @@ async function renderProblemAdmin() {
 }
 
 async function importProblem() {
-  const fileInput = $('problemZip');
-  if (!fileInput || !fileInput.files.length) { toast('请先选择有效的 .zip 题包文件！', 'warning'); return; }
-  const resultEl = $('importResult');
-  resultEl.innerHTML = `
-    <div style="display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--text-secondary);">
-      <div class="spinner-ring" style="width:16px; height:16px; border-width:2px;"></div>
-      <span>解密题包并验证沙箱配置，部署可能需要 3-10 秒...</span>
-    </div>
-  `;
-  try {
-    const fd = new FormData();
-    fd.append('file', fileInput.files[0]);
-    const data = await tryApi(
-      ['/api/admin/problems/import', '/api/admin/problem-packages/import'],
-      { method: 'POST', headers: authHeaders(), body: fd }
-    );
-    resultEl.innerHTML = `
-      <div class="notice success">
-        <strong>部署成功!</strong> 题目: ${esc(data.slug)} 已经成功装载入库 (版本号: ${esc(data.version || '1')})。
-        <div style="margin-top: 8px; font-size: 13px;">
-          版本状态: ${esc(data.version_status || 'DRAFT')}，自测结果: ${esc(data.self_test_status || 'PENDING')}${data.activated ? '，已自动激活。' : '。'}
-        </div>
-      </div>
-    `;
-    toast('题包文件部署入库成功', 'success');
-    setTimeout(() => renderProblemAdmin(), 1800);
-  } catch (err) {
-    resultEl.innerHTML = `<div class="notice error">部署导入失败: ${esc(err.message)}</div>`;
-  }
+  return uploadProblemPackageFromControls();
 }
 
 function cloneJson(value) {
@@ -5016,9 +5139,234 @@ function syncProblemEditorMarkdownPreview() {
   if (preview) preview.innerHTML = problemEditorMarkdownPreviewHtml(content);
 }
 
+function problemEditorIsStandaloneRoute() {
+  return /^\/edit\/[^/]+$/.test(state.currentRoute || location.pathname || '');
+}
+
+function problemEditorRenderTargets() {
+  if (problemEditorIsStandaloneRoute()) {
+    return { bodyId: 'problemEditorPageBody', footerId: 'problemEditorPageFooter', standalone: true };
+  }
+  return { bodyId: 'modalBody', footerId: 'modalFooter', standalone: false };
+}
+
+function refreshProblemAdminIfVisible() {
+  if (state.currentRoute === '/problem-admin') {
+    renderProblemAdmin();
+  }
+}
+
+function statementAssetIdFromLabel(value) {
+  const normalized = String(value || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/^[._-]+|[._-]+$/g, '');
+  return normalized || `pdf-${Date.now()}`;
+}
+
+function cleanTranslationPdfLabel(value) {
+  return String(value || '')
+    .replace(/\.[^.]+$/g, '')
+    .replaceAll('_', ' ')
+    .replace(/\bindividual contest day[12]\b/gi, ' ')
+    .replace(/\bgaite day[12]\b/gi, ' ')
+    .replace(/\bteamleadertranslate\b/gi, ' ')
+    .replace(/\bteamleadtranslate\b/gi, ' ')
+    .replace(/\bmachine(?:\s+|)translate\b/gi, ' ')
+    .replace(/\bteam leader translate\b/gi, ' ')
+    .replace(/\bteam lead translate\b/gi, ' ')
+    .replace(/\bold\d*\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^[-_\s]+|[-_\s]+$/g, '');
+}
+
+function translationDocumentLabelForFile(file) {
+  const path = fileRelativePath(file);
+  const parts = path.split('/').filter(Boolean);
+  const parent = parts.length > 1 ? cleanTranslationPdfLabel(parts[parts.length - 2]) : '';
+  const descriptor = cleanTranslationPdfLabel(file?.name || '');
+  if (!parent) return descriptor || 'Translation';
+  if (!descriptor) return parent;
+  const parentNorm = parent.toLocaleLowerCase();
+  const descriptorNorm = descriptor.toLocaleLowerCase();
+  if (descriptorNorm === parentNorm || descriptorNorm.includes(parentNorm)) return descriptor;
+  return `${parent} · ${descriptor}`;
+}
+
+function translationDocumentGroupKey(file) {
+  const path = fileRelativePath(file);
+  const parts = path.split('/').filter(Boolean);
+  const parent = parts.length > 1 ? cleanTranslationPdfLabel(parts[parts.length - 2]) : '';
+  return statementAssetIdFromLabel(parent || cleanTranslationPdfLabel(file?.name || ''));
+}
+
+function statementDocumentKind(file) {
+  const name = String(file?.name || '').toLowerCase();
+  if (name.endsWith('.pdf')) return 'pdf';
+  if (name.endsWith('.docx')) return 'docx';
+  return '';
+}
+
+function selectProblemEditorStatementDocuments(files) {
+  const chosen = new Map();
+  (files || [])
+    .filter(file => file && !String(file.name || '').startsWith('._') && !String(file.name || '').startsWith('~$'))
+    .filter(file => !fileRelativePath(file).toLowerCase().includes('__macosx/'))
+    .forEach((file) => {
+      const kind = statementDocumentKind(file);
+      if (!kind) return;
+      const key = translationDocumentGroupKey(file);
+      const current = chosen.get(key);
+      if (!current || (kind === 'pdf' && statementDocumentKind(current) !== 'pdf')) {
+        chosen.set(key, file);
+      }
+    });
+  return Array.from(chosen.values());
+}
+
+function problemEditorPdfBatchFiles() {
+  const directFiles = Array.from($('problemEditorPdfBatchFiles')?.files || []);
+  const folderFiles = Array.from($('problemEditorPdfFolder')?.files || []);
+  return selectProblemEditorStatementDocuments([...directFiles, ...folderFiles]);
+}
+
+function renderProblemEditorDataImportPanel() {
+  if (!problemEditorIsStandaloneRoute()) return '';
+  return `
+    <div class="card highlight mb-lg">
+      <div class="card-header">
+        <h3 class="card-title">GUI 数据上传 / 完整题包更新</h3>
+      </div>
+      <div class="card-body">
+        <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">选择 ZIP 或包含 <code>problem.yaml</code>、<code>public/</code>、<code>private/</code> 的题包文件夹；导入会创建新版本并跑版本自测。</p>
+        <div class="problem-package-upload-grid">
+          <label class="file-upload problem-package-picker">
+            <span class="file-upload-icon">ZIP</span>
+            <span class="file-upload-label"><span id="editorProblemZipLabel">选择 ZIP 题包</span></span>
+            <input type="file" id="editorProblemZip" accept=".zip,application/zip" onchange="updateProblemPackagePickerLabel('editorProblemZip', 'editorProblemZipLabel')" />
+          </label>
+          <label class="file-upload problem-package-picker">
+            <span class="file-upload-icon">DIR</span>
+            <span class="file-upload-label"><span id="editorProblemFolderLabel">选择题包文件夹</span></span>
+            <input type="file" id="editorProblemFolder" webkitdirectory directory multiple onchange="updateProblemPackagePickerLabel('editorProblemFolder', 'editorProblemFolderLabel', 'folder')" />
+          </label>
+          <button class="btn btn-primary" onclick="importProblemFromEditorPage()">上传数据并生成版本</button>
+        </div>
+        <div id="editorImportResult" class="mt-md"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderProblemEditorPdfBatchPanel(canEdit) {
+  if (!problemEditorIsStandaloneRoute()) return '';
+  const disabledAttr = canEdit ? '' : 'disabled';
+  return `
+    <div class="card mb-lg">
+      <div class="card-header">
+        <h3 class="card-title">PDF / DOCX 语言包批量上传</h3>
+      </div>
+      <div class="card-body">
+        <p class="text-muted" style="font-size: 13px; margin-bottom: 12px;">可直接选择一批 PDF/DOCX，或选择翻译包文件夹；同一国家同时存在 PDF 与 DOCX 时保留 PDF，只有 DOCX 时由服务器转成 PDF。</p>
+        <div class="problem-package-upload-grid">
+          <label class="file-upload problem-package-picker">
+            <span class="file-upload-icon">DOC</span>
+            <span class="file-upload-label"><span id="problemEditorPdfBatchLabel">选择 PDF/DOCX 文件</span></span>
+            <input type="file" id="problemEditorPdfBatchFiles" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple onchange="updateProblemPackagePickerLabel('problemEditorPdfBatchFiles', 'problemEditorPdfBatchLabel')" ${disabledAttr} />
+          </label>
+          <label class="file-upload problem-package-picker">
+            <span class="file-upload-icon">DIR</span>
+            <span class="file-upload-label"><span id="problemEditorPdfFolderLabel">选择语言包文件夹</span></span>
+            <input type="file" id="problemEditorPdfFolder" webkitdirectory directory multiple onchange="updateProblemPackagePickerLabel('problemEditorPdfFolder', 'problemEditorPdfFolderLabel', 'folder')" ${disabledAttr} />
+          </label>
+          <button class="btn btn-primary" onclick="uploadProblemEditorPdfBatch()" ${disabledAttr}>批量上传语言包</button>
+        </div>
+        <div id="problemEditorPdfBatchResult" class="mt-md"></div>
+      </div>
+    </div>
+  `;
+}
+
+async function importProblemFromEditorPage() {
+  const data = await uploadProblemPackageFromControls({
+    zipInputId: 'editorProblemZip',
+    folderInputId: 'editorProblemFolder',
+    resultId: 'editorImportResult',
+    refreshAdmin: false,
+  });
+  if (data?.slug) {
+    setTimeout(() => navigate(`/edit/${encodeURIComponent(data.slug)}`), 1200);
+  }
+}
+
+async function uploadProblemEditorPdfBatch() {
+  if (!problemEditorCanEdit()) return;
+  const versionId = problemEditorState?.editableVersion?.id;
+  if (!versionId) return;
+  const files = problemEditorPdfBatchFiles();
+  const resultEl = $('problemEditorPdfBatchResult');
+  if (!files.length) {
+    toast('请先选择 PDF/DOCX 文件或语言包文件夹', 'warning');
+    if (resultEl) resultEl.innerHTML = '<div class="notice warning">没有识别到可上传的 PDF/DOCX 文件。</div>';
+    return;
+  }
+
+  const usedIds = new Set();
+  let latestData = null;
+  let uploaded = 0;
+  for (const file of files) {
+    const label = translationDocumentLabelForFile(file);
+    const baseId = statementAssetIdFromLabel(label);
+    let assetId = baseId;
+    let suffix = 2;
+    while (usedIds.has(assetId)) {
+      assetId = `${baseId}-${suffix}`;
+      suffix++;
+    }
+    usedIds.add(assetId);
+    if (resultEl) {
+      resultEl.innerHTML = `
+        <div class="problem-import-progress">
+          <div class="spinner-ring" style="width:16px; height:16px; border-width:2px;"></div>
+          <span>正在上传 ${uploaded + 1}/${files.length}: ${esc(file.name)}${statementDocumentKind(file) === 'docx' ? '（服务器转 PDF）' : ''}</span>
+        </div>
+      `;
+    }
+    const fd = new FormData();
+    fd.append('asset_id', assetId);
+    fd.append('language', assetId);
+    fd.append('label', label || assetId);
+    fd.append('file', file);
+    latestData = await api(`/api/admin/problems/${problemEditorState.slug}/versions/${versionId}/statement-pdfs`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: fd,
+    });
+    uploaded++;
+  }
+
+  if (latestData) {
+    loadProblemEditorState(latestData);
+    renderProblemEditorModalContent();
+  }
+  const finalResultEl = $('problemEditorPdfBatchResult') || resultEl;
+  if (finalResultEl) {
+    finalResultEl.innerHTML = `<div class="notice success">已上传 ${uploaded} 个语言包。</div>`;
+  }
+  toast(`已上传 ${uploaded} 个语言包`, 'success');
+}
+
 function renderProblemEditorModalContent() {
   if (!problemEditorState) return;
   problemEditorEnsureSelection();
+  const targets = problemEditorRenderTargets();
+  const bodyEl = $(targets.bodyId);
+  const footerEl = $(targets.footerId);
+  if (!bodyEl || !footerEl) return;
   const canEdit = problemEditorCanEdit();
   const assets = problemEditorAssets();
   const variants = problemEditorVariants();
@@ -5068,7 +5416,7 @@ function renderProblemEditorModalContent() {
     const isDefault = current.kind === 'markdown' && (itemId === currentDefaultLanguage || itemLanguage === currentDefaultLanguage);
     if (current.kind === 'markdown') {
       workspace = `
-        <div class="form-row" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-md); margin-bottom: var(--space-md);">
+        <div class="form-row problem-editor-asset-form">
           <div class="form-group">
             <label for="problemEditorAssetId">资产 ID</label>
             <input id="problemEditorAssetId" type="text" value="${esc(itemId)}" placeholder="如: en / zh-cn" ${disabledAttr} />
@@ -5086,7 +5434,7 @@ function renderProblemEditorModalContent() {
             <input id="problemEditorAssetFilename" type="text" value="${esc(itemFilename)}" placeholder="statement.md" ${disabledAttr} />
           </div>
         </div>
-        <div style="display:grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-md); align-items: start;">
+        <div class="problem-editor-markdown-grid">
           <div class="form-group" style="min-width: 0;">
             <label for="problemEditorMarkdownContent">Markdown / LaTeX 题面</label>
             <textarea id="problemEditorMarkdownContent" rows="22" oninput="syncProblemEditorMarkdownPreview()" ${disabledAttr}>${esc(selectedItem.content || '')}</textarea>
@@ -5109,7 +5457,7 @@ function renderProblemEditorModalContent() {
       `;
     } else {
       workspace = `
-        <div class="form-row" style="display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-md); margin-bottom: var(--space-md);">
+        <div class="form-row problem-editor-asset-form">
           <div class="form-group">
             <label for="problemEditorAssetId">资产 ID</label>
             <input id="problemEditorAssetId" type="text" value="${esc(itemId)}" placeholder="如: zh-cn-pdf" ${disabledAttr} />
@@ -5128,8 +5476,8 @@ function renderProblemEditorModalContent() {
           </div>
         </div>
         <div class="row gap-sm mb-md" style="flex-wrap: wrap;">
-          <input id="problemEditorPdfFile" type="file" accept=".pdf,application/pdf" style="width: auto; max-width: 360px;" ${disabledAttr} />
-          <button class="btn btn-primary btn-sm" onclick="uploadProblemEditorPdf()" ${disabledAttr}>上传 / 替换 PDF</button>
+          <input id="problemEditorPdfFile" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" style="width: auto; max-width: 360px;" ${disabledAttr} />
+          <button class="btn btn-primary btn-sm" onclick="uploadProblemEditorPdf()" ${disabledAttr}>上传 / 替换 PDF/DOCX</button>
           <button class="btn btn-danger btn-sm" onclick="deleteProblemEditorSelectedAsset()" ${disabledAttr}>删除此语言</button>
           ${selectedItem.download_url ? `<a class="btn btn-secondary btn-sm" target="_blank" href="${esc(selectedItem.download_url)}">新标签打开</a>` : ''}
         </div>
@@ -5142,23 +5490,25 @@ function renderProblemEditorModalContent() {
           ></iframe>
         ` : `
           <div class="empty-state">
-            <div class="loading-text">上传 PDF 后可在此页内预览</div>
+            <div class="loading-text">上传 PDF/DOCX 后可在此页内预览</div>
           </div>
         `}
       `;
     }
   }
 
-  $('modalBody').innerHTML = `
+  bodyEl.innerHTML = `
     <div class="notice info">
-      ZIP 题包导入仍保留；这里用于基于现有版本做小改动，例如编辑 Markdown/LaTeX 题面，或单独上传某个语言包 PDF，而不必整包重传。
+      ZIP 题包导入仍保留；这里用于基于现有版本做小改动，例如编辑 Markdown/LaTeX 题面，或单独上传某个语言包 PDF/DOCX，而不必整包重传。
     </div>
     ${canEdit ? '' : `
       <div class="notice warning">
         当前只存在生效版本。为了避免小改动直接影响线上题面，请先创建一个草稿版本，再在草稿上增量编辑并通过现有版本流水线激活。
       </div>
     `}
-    <div style="display:grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 260px) minmax(220px, 260px); gap: var(--space-md); margin-bottom: var(--space-md);">
+    ${renderProblemEditorDataImportPanel()}
+    ${renderProblemEditorPdfBatchPanel(canEdit)}
+    <div class="problem-editor-meta-grid">
       <div class="form-group">
         <label for="problemEditorTitle">题目标题</label>
         <input id="problemEditorTitle" type="text" value="${esc(problemEditorState.problem?.title || '')}" ${disabledAttr} />
@@ -5176,20 +5526,20 @@ function renderProblemEditorModalContent() {
         </div>
       </div>
     </div>
-    <div style="display:flex; gap: var(--space-md); align-items: flex-start; min-height: 560px;">
-      <div style="width: 260px; flex: 0 0 260px; display:flex; flex-direction:column; gap: var(--space-sm);">
+    <div class="problem-editor-workspace-grid">
+      <div class="problem-editor-asset-sidebar">
         ${sidebarButtons}
         <div style="display:flex; flex-direction:column; gap: var(--space-sm); max-height: 620px; overflow: auto;">
           ${sidebarItems}
         </div>
       </div>
-      <div style="flex: 1; min-width: 0; padding: var(--space-md); border: var(--border-light); border-radius: var(--radius-md); background: hsla(0, 0%, 100%, 0.02);">
+      <div class="problem-editor-workspace-panel">
         ${workspace}
       </div>
     </div>
   `;
-  $('modalFooter').innerHTML = `
-    <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+  footerEl.innerHTML = `
+    ${targets.standalone ? '<a class="btn btn-secondary" href="/problem-admin" data-link>返回题目管理</a>' : '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>'}
     <button class="btn btn-secondary" onclick="refreshProblemEditorModal()">刷新</button>
     <button class="btn btn-secondary" onclick="showProblemVersionsModal(${jsArg(problemEditorState.slug)})">版本流水线</button>
     ${canEdit
@@ -5198,25 +5548,91 @@ function renderProblemEditorModalContent() {
   `;
 }
 
-async function showProblemEditorModal(slug) {
-  problemEditorState = null;
-  openModal({
-    title: `题目可视化编辑器 — ${slug}`,
-    wide: true,
-    body: `
-      <div class="loading-overlay">
-        <div class="spinner-ring"></div>
-        <span class="loading-text">正在加载题目编辑上下文...</span>
+function showProblemEditorModal(slug) {
+  navigate(`/edit/${encodeURIComponent(slug)}`);
+}
+
+async function renderProblemEditIndex() {
+  setPage('题目编辑');
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在加载可编辑题目列表...</span>
+    </div>
+  `;
+  try {
+    const data = await tryApi(['/api/admin/problems', '/api/problems'], { headers: authHeaders() });
+    const items = data.items || [];
+    app.innerHTML = `
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">选择要编辑的题目</h3>
+        </div>
+        ${items.length === 0 ? emptyBox('平台尚未部署题目') : `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>题目标识</th>
+                  <th>题目名称</th>
+                  <th>状态</th>
+                  <th>当前版本</th>
+                  <th style="text-align:right;">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${items.map(item => `
+                  <tr>
+                    <td><strong style="font-family: var(--font-mono);">${esc(item.slug)}</strong></td>
+                    <td>${esc(item.title)}</td>
+                    <td>${statusPill(item.status)}</td>
+                    <td style="font-family: var(--font-mono); font-size: 12px;">${esc(item.active_version || '未激活')}</td>
+                    <td style="text-align:right;">
+                      <a class="btn btn-primary btn-sm" href="/edit/${esc(item.slug)}" data-link>打开编辑页</a>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `}
       </div>
-    `,
-    footer: `<button class="btn btn-secondary" onclick="closeModal()">关闭</button>`,
-  });
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function renderProblemEditorPage(slug) {
+  setPage(`编辑题目 · ${slug}`);
+  if (!requireAdmin()) return;
+  problemEditorState = null;
+  const app = $('app');
+  app.className = 'content animate-fade-in problem-editor-content';
+  app.innerHTML = `
+    <div class="problem-editor-page">
+      <div class="problem-editor-page-top">
+        <a class="btn btn-secondary btn-sm" href="/problem-admin" data-link>返回题目管理</a>
+        <a class="btn btn-secondary btn-sm" href="/problems/${esc(slug)}" data-link>预览题目</a>
+      </div>
+      <div id="problemEditorPageBody">
+        <div class="loading-overlay">
+          <div class="spinner-ring"></div>
+          <span class="loading-text">正在加载题目编辑上下文...</span>
+        </div>
+      </div>
+      <div class="problem-editor-page-actions" id="problemEditorPageFooter"></div>
+    </div>
+  `;
   try {
     const data = await api(`/api/admin/problems/${slug}/editor`, { headers: authHeaders() });
     loadProblemEditorState(data);
+    setPage(`编辑题目 · ${data?.problem?.title || slug}`);
     renderProblemEditorModalContent();
   } catch (err) {
-    $('modalBody').innerHTML = errorBox(err);
+    app.innerHTML = errorBox(err);
   }
 }
 
@@ -5283,7 +5699,7 @@ async function createProblemEditorDraft() {
     });
     loadProblemEditorState(data);
     renderProblemEditorModalContent();
-    renderProblemAdmin();
+    refreshProblemAdminIfVisible();
     toast('已基于当前版本生成可编辑草稿', 'success');
   } catch (err) {
     toast(`创建编辑草稿失败: ${err.message}`, 'error');
@@ -5306,7 +5722,7 @@ async function saveProblemEditorMeta() {
     });
     loadProblemEditorState(data, problemEditorCurrentAsset() ? { kind: problemEditorCurrentAsset().kind, id: problemEditorCurrentAsset().item.id || '' } : null);
     renderProblemEditorModalContent();
-    renderProblemAdmin();
+    refreshProblemAdminIfVisible();
     toast('题目基本信息已保存', 'success');
   } catch (err) {
     toast(`保存题目基本信息失败: ${err.message}`, 'error');
@@ -5335,7 +5751,7 @@ async function saveProblemEditorMarkdownAsset() {
     });
     loadProblemEditorState(data, { kind: 'markdown', id: assetId });
     renderProblemEditorModalContent();
-    renderProblemAdmin();
+    refreshProblemAdminIfVisible();
     toast('Markdown 题面已保存', 'success');
   } catch (err) {
     toast(`保存 Markdown 题面失败: ${err.message}`, 'error');
@@ -5349,8 +5765,8 @@ async function uploadProblemEditorPdf() {
   const item = current.item;
   const assetId = (item.id || '').trim();
   const fileInput = $('problemEditorPdfFile');
-  if (!assetId) { toast('请填写 PDF 语言资产 ID', 'warning'); return; }
-  if (!fileInput || !fileInput.files.length) { toast('请先选择 PDF 文件', 'warning'); return; }
+  if (!assetId) { toast('请填写语言资产 ID', 'warning'); return; }
+  if (!fileInput || !fileInput.files.length) { toast('请先选择 PDF 或 DOCX 文件', 'warning'); return; }
   try {
     const fd = new FormData();
     fd.append('asset_id', assetId);
@@ -5364,9 +5780,9 @@ async function uploadProblemEditorPdf() {
     });
     loadProblemEditorState(data, { kind: 'pdf', id: assetId });
     renderProblemEditorModalContent();
-    toast('PDF 语言包已上传', 'success');
+    toast('语言包已上传', 'success');
   } catch (err) {
-    toast(`上传 PDF 语言包失败: ${err.message}`, 'error');
+    toast(`上传语言包失败: ${err.message}`, 'error');
   }
 }
 
@@ -5966,10 +6382,14 @@ function route() {
   if (path === '/admin/audit') return renderAuditLogs();
   if (path === '/judge-admin') return renderJudgeAdmin();
   if (path === '/problem-admin') return renderProblemAdmin();
+  if (path === '/edit') return renderProblemEditIndex();
   if (path === '/contest-admin') return renderContestAdmin();
 
   // Parameterized routes
   let match;
+  if ((match = path.match(/^\/edit\/([^/]+)$/))) {
+    return renderProblemEditorPage(decodeURIComponent(match[1]));
+  }
   if ((match = path.match(/^\/contests\/([^/]+)\/problems\/([^/]+)$/))) {
     return renderProblemDetail(match[2], match[1]);
   }
@@ -6646,11 +7066,14 @@ Object.assign(window, {
   changePassword, showResetPasswordModal, resetUserPassword,
   renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
   toggleUserRole, toggleUserDisabled,
-  importProblem, setProblemStatus, showProblemVersionsModal, rerunProblemVersionSelfTest,
+  importProblem, updateProblemPackagePickerLabel, importProblemFromEditorPage,
+  setProblemStatus, showProblemVersionsModal, rerunProblemVersionSelfTest,
   showProblemEditorModal, refreshProblemEditorModal, selectProblemEditorAsset,
   addProblemEditorMarkdownAsset, addProblemEditorPdfAsset, createProblemEditorDraft,
   saveProblemEditorMeta, saveProblemEditorMarkdownAsset, uploadProblemEditorPdf,
-  deleteProblemEditorSelectedAsset, syncProblemEditorMarkdownPreview,
+  uploadProblemEditorPdfBatch, deleteProblemEditorSelectedAsset, syncProblemEditorMarkdownPreview,
+  selectProblemEditorStatementDocuments, statementDocumentKind,
+  translationDocumentLabelForFile, translationDocumentGroupKey,
   activateProblemVersion, setProblemVersionStatus,
   showCreateContestModal, createContest, setContestStatus,
   showContestSettingsModal, saveContestSettings,
