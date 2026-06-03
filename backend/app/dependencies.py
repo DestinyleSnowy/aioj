@@ -5,6 +5,7 @@ from sqlalchemy import text
 
 from app.db import engine
 from app.security import verify_token
+from app.user_profiles import serialize_user
 
 
 def get_optional_user(authorization: Optional[str] = Header(None)):
@@ -19,7 +20,15 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
         row = conn.execute(
             text(
                 """
-                select id, username, email, role, coalesce(is_disabled, false) as is_disabled
+                select
+                  id,
+                  username,
+                  email,
+                  role,
+                  created_at,
+                  avatar_object_key,
+                  avatar_updated_at,
+                  coalesce(is_disabled, false) as is_disabled
                 from users
                 where id = :id
                 """
@@ -28,7 +37,7 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
         ).mappings().first()
     if not row or bool(row["is_disabled"]):
         return None
-    data = dict(row)
+    data = serialize_user(row)
     data.pop("is_disabled", None)
     return data
 

@@ -2659,6 +2659,21 @@ tr:last-child td {
   font-size: 14px;
 }
 
+.user-avatar,
+.message-avatar,
+.profile-avatar-container {
+  overflow: hidden;
+}
+
+.user-avatar img,
+.message-avatar img,
+.profile-avatar-container img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .message-avatar.small {
   width: 28px;
   height: 28px;
@@ -3499,6 +3514,36 @@ body.message-layout-resizing * {
   font-weight: 600;
   color: var(--text-secondary);
   transition: color var(--transition-fast);
+}
+
+.profile-avatar-container {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: var(--grad-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 32px;
+  font-weight: 700;
+  box-shadow: var(--shadow-accent-glow);
+  margin-bottom: var(--space-md);
+  text-transform: uppercase;
+}
+
+.avatar-upload-actions {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+.avatar-help-text {
+  font-size: 12px;
+  text-align: center;
 }
 
 .user-profile-capsule:hover .user-name {

@@ -5,6 +5,7 @@ from app.db import engine
 from app.dependencies import require_admin
 from app.security import hash_password
 from app.services.audit import audit_log
+from app.user_profiles import serialize_user
 
 router = APIRouter()
 
@@ -15,13 +16,21 @@ def admin_users(user=Depends(require_admin)):
         rows = conn.execute(
             text(
                 """
-                select id, username, email, role, coalesce(is_disabled, false) as is_disabled, created_at
+                select
+                  id,
+                  username,
+                  email,
+                  role,
+                  coalesce(is_disabled, false) as is_disabled,
+                  created_at,
+                  avatar_object_key,
+                  avatar_updated_at
                 from users
                 order by id asc
                 """
             )
         ).mappings().all()
-    return {"items": [dict(r) for r in rows]}
+    return {"items": [serialize_user(r) for r in rows]}
 
 
 @router.post("/api/admin/users/{user_id}/role")
@@ -38,7 +47,15 @@ def admin_set_user_role(user_id: int, payload: dict, user=Depends(require_admin)
                 update users
                 set role = :role
                 where id = :id
-                returning id, username, email, role, coalesce(is_disabled, false) as is_disabled, created_at
+                returning
+                  id,
+                  username,
+                  email,
+                  role,
+                  coalesce(is_disabled, false) as is_disabled,
+                  created_at,
+                  avatar_object_key,
+                  avatar_updated_at
                 """
             ),
             {"id": user_id, "role": role},
@@ -54,7 +71,7 @@ def admin_set_user_role(user_id: int, payload: dict, user=Depends(require_admin)
             )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"ok": True, "user": dict(row)}
+    return {"ok": True, "user": serialize_user(row)}
 
 
 @router.post("/api/admin/users/{user_id}/disabled")
@@ -69,7 +86,15 @@ def admin_set_user_disabled(user_id: int, payload: dict, user=Depends(require_ad
                 update users
                 set is_disabled = :is_disabled
                 where id = :id
-                returning id, username, email, role, coalesce(is_disabled, false) as is_disabled, created_at
+                returning
+                  id,
+                  username,
+                  email,
+                  role,
+                  coalesce(is_disabled, false) as is_disabled,
+                  created_at,
+                  avatar_object_key,
+                  avatar_updated_at
                 """
             ),
             {"id": user_id, "is_disabled": is_disabled},
@@ -85,7 +110,7 @@ def admin_set_user_disabled(user_id: int, payload: dict, user=Depends(require_ad
             )
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"ok": True, "user": dict(row)}
+    return {"ok": True, "user": serialize_user(row)}
 
 
 @router.post("/api/admin/users/{user_id}/password")
@@ -101,7 +126,7 @@ def admin_reset_user_password(user_id: int, payload: dict, user=Depends(require_
                 update users
                 set password_hash = :password_hash
                 where id = :id
-                returning id, username, email, role
+                returning id, username, email, role, created_at, avatar_object_key, avatar_updated_at
                 """
             ),
             {"id": user_id, "password_hash": hash_password(new_password)},
@@ -117,4 +142,4 @@ def admin_reset_user_password(user_id: int, payload: dict, user=Depends(require_
 
     if not row:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"ok": True, "user": dict(row)}
+    return {"ok": True, "user": serialize_user(row)}

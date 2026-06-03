@@ -9,6 +9,7 @@ S3_BUCKET_PROBLEMS = settings.s3_bucket_problems
 S3_BUCKET_SUBMISSIONS = settings.s3_bucket_submissions
 S3_BUCKET_LOGS = settings.s3_bucket_logs
 S3_BUCKET_MESSAGES = settings.s3_bucket_messages
+S3_BUCKET_AVATARS = settings.s3_bucket_avatars
 
 
 def s3_client():
@@ -54,3 +55,7 @@ def put_bytes(bucket: str, key: str, body: bytes, content_type: str = "applicati
 def get_bytes(bucket: str, key: str) -> bytes:
     obj = s3_client().get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()
+
+
+def delete_object(bucket: str, key: str) -> None:
+    s3_client().delete_object(Bucket=bucket, Key=key)

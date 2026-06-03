@@ -20,6 +20,7 @@ from app.routers.system import router as system_router
 from app.services.system_settings import ensure_default_settings
 from app.settings import settings
 from app.storage import (
+    S3_BUCKET_AVATARS,
     S3_BUCKET_LOGS,
     S3_BUCKET_MESSAGES,
     S3_BUCKET_PROBLEMS,
@@ -38,6 +39,7 @@ async def lifespan(_: FastAPI):
     ensure_bucket(S3_BUCKET_SUBMISSIONS)
     ensure_bucket(S3_BUCKET_LOGS)
     ensure_bucket(S3_BUCKET_MESSAGES)
+    ensure_bucket(S3_BUCKET_AVATARS)
     if settings.bootstrap_admin_on_startup:
         ensure_admin()
     yield

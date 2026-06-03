@@ -64,6 +64,8 @@ const MESSAGE_RESIZER_TRACK_PX = 16;
 const MESSAGE_IMAGE_PREVIEW_MIN_SCALE = 0.001;
 const MESSAGE_IMAGE_PREVIEW_MAX_SCALE = 12;
 const MESSAGE_IMAGE_PREVIEW_ZOOM_STEP = 1.18;
+const AVATAR_FILE_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
+const AVATAR_ACCEPT_ATTRIBUTE = 'image/png,image/jpeg,image/gif,image/webp';
 const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
 const SIDEBAR_MODE_COLLAPSED = 'collapsed';
 const SIDEBAR_MODE_EXPANDED = 'expanded';
@@ -178,6 +180,23 @@ function safeMdSrc(value) {
     return '';
   }
   return '';
+}
+
+function avatarInitial(name, maxChars = 1) {
+  const compact = String(name || '').trim().replace(/\s+/g, '');
+  if (!compact) return '?';
+  const count = Math.max(1, Number(maxChars) || 1);
+  return esc(Array.from(compact).slice(0, count).join('').toUpperCase() || '?');
+}
+
+function renderAvatar(name, url = '', className = 'user-avatar', options = {}) {
+  const classes = esc(className);
+  const src = safeMdSrc(url);
+  if (src) {
+    const altText = esc(options.alt || `${String(name || '用户').trim() || '用户'}头像`);
+    return `<span class="${classes}"><img src="${src}" alt="${altText}" loading="lazy" /></span>`;
+  }
+  return `<span class="${classes}" aria-hidden="true">${avatarInitial(name, options.initialCount || 1)}</span>`;
 }
 
 function isRelativeMdTarget(value) {
@@ -697,7 +716,7 @@ function updateNav() {
   const userPill = $('userPill');
   if (state.user) {
     userPill.innerHTML = `
-      <div class="user-avatar">${esc(state.user.username[0].toUpperCase())}</div>
+      ${renderAvatar(state.user.username, state.user.avatar_url, 'user-avatar')}
       <span class="user-name">${esc(state.user.username)}</span>
       <svg class="dropdown-arrow" viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 6px;">
         <polyline points="6 9 12 15 18 9"></polyline>
@@ -708,7 +727,7 @@ function updateNav() {
   const footerEl = $('sidebarUser');
   if (state.user) {
     footerEl.innerHTML = `
-      <div class="user-avatar">${esc(state.user.username[0].toUpperCase())}</div>
+      ${renderAvatar(state.user.username, state.user.avatar_url, 'user-avatar')}
       <div style="flex: 1; min-width: 0;">
         <div style="font-weight: 600; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(state.user.username)}</div>
         <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">${esc(state.user.role)}</div>
@@ -3046,7 +3065,7 @@ function messagePreview(text, limit = 96, attachmentContentType = '') {
 }
 
 function messagePeerInitial(name) {
-  return esc(String(name || '?').slice(0, 1).toUpperCase());
+  return avatarInitial(name, 1);
 }
 
 function messageConversationKey(type, id) {
@@ -4861,11 +4880,15 @@ async function renderAccount() {
       <!-- Left Sidebar: Profile Avatar Card & Solved Stats -->
       <div class="account-sidebar" style="display: flex; flex-direction: column; gap: var(--space-lg);">
         <div class="card highlight" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: var(--space-xl) var(--space-lg);">
-          <div class="profile-avatar-container" style="width: 80px; height: 80px; border-radius: 50%; background: var(--grad-main); display: flex; align-items: center; justify-content: center; color: #fff; font-size: 32px; font-weight: 700; box-shadow: var(--shadow-accent-glow); margin-bottom: var(--space-md); text-transform: uppercase;">
-            ${esc(state.user.username.slice(0, 2))}
-          </div>
+          ${renderAvatar(state.user.username, state.user.avatar_url, 'profile-avatar-container', { initialCount: 2 })}
           <h2 style="font-size: 20px; font-weight: 700; margin-bottom: 6px;">${esc(state.user.username)}</h2>
           <span class="pill blue" style="font-size: 10px; padding: 2px 10px; border-radius: 4px;">${esc(state.user.role)}</span>
+          <div class="avatar-upload-actions">
+            <input type="file" id="avatarInput" accept="${AVATAR_ACCEPT_ATTRIBUTE}" style="display:none" onchange="handleAvatarFileChange(this)" />
+            <button class="btn btn-secondary btn-sm" id="avatarUploadBtn" onclick="showAvatarPicker()">更换头像</button>
+            <div class="text-muted avatar-help-text">支持 PNG / JPG / GIF / WebP，最大 5 MB</div>
+            <div id="avatarError" class="notice error" style="display:none; width:100%; margin-top: var(--space-xs);"></div>
+          </div>
           
           <div style="width: 100%; border-top: var(--border-subtle); margin-top: var(--space-lg); padding-top: var(--space-lg); text-align: left; display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
             <div style="display: flex; justify-content: space-between;"><span class="text-muted">关联邮箱</span><span style="font-weight:500;">${esc(state.user.email || '尚未绑定邮箱')}</span></div>
@@ -4924,6 +4947,71 @@ async function renderAccount() {
       </div>
     </div>
   `;
+}
+
+
+function showAvatarPicker() {
+  $('avatarInput')?.click();
+}
+
+async function handleAvatarFileChange(input) {
+  const file = input?.files?.[0];
+  const errEl = $('avatarError');
+  if (errEl) {
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+  }
+  if (!file) return;
+
+  if (file.size > AVATAR_FILE_SIZE_LIMIT_BYTES) {
+    const message = '头像文件不能超过 5 MB。';
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = message;
+    }
+    toast(message, 'warning');
+    input.value = '';
+    return;
+  }
+
+  const btn = $('avatarUploadBtn');
+  const originalLabel = btn?.dataset.originalLabel || btn?.textContent || '更换头像';
+  if (btn) {
+    btn.dataset.originalLabel = originalLabel;
+    btn.disabled = true;
+    btn.textContent = '上传中...';
+  }
+
+  try {
+    const formData = new FormData();
+    formData.append('avatar', file);
+    const data = await tryApi(
+      ['/api/auth/avatar', '/api/account/avatar'],
+      {
+        method: 'POST',
+        headers: authHeaders(),
+        body: formData,
+      }
+    );
+    state.user = { ...(state.user || {}), ...((data && data.user) || {}) };
+    updateNav();
+    if (location.pathname === '/account') {
+      await renderAccount();
+    }
+    toast('头像已更新。', 'success');
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+    toast(`头像更新失败: ${err.message}`, 'danger');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+    if (input) input.value = '';
+  }
 }
 
 
@@ -7633,6 +7721,7 @@ function toggleFullscreenEditor() {
 // ─── Window exports for handlers ──────────────────────────────────────────
 Object.assign(window, {
   navigate, showAuthModal, switchAuthTab, submitAuth, logout,
+  showAvatarPicker, handleAvatarFileChange,
   submitSolution, showContestTab, switchProblemTab, handleFileSelect,
   cancelSubmission, downloadSubmissionArtifact, renderAuditLogs,
   joinContest, submitInviteCode, leaveContest,
