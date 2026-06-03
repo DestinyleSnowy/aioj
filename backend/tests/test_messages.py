@@ -3,6 +3,8 @@ from fastapi import HTTPException
 
 from app.routers.messages import (
     clamp_limit,
+    normalize_group_member_ids,
+    normalize_group_name,
     normalize_message_body,
     normalize_message_cursor,
     normalize_optional_message_body,
@@ -75,3 +77,28 @@ def test_validate_file_upload_accepts_images_and_regular_files():
 def test_safe_attachment_filename_removes_header_unsafe_characters():
     assert safe_attachment_filename('../bad"name.png', ".png") == "badname.png"
     assert safe_attachment_filename("", ".webp") == "file.webp"
+
+
+def test_normalize_group_name_trims_and_limits_length():
+    assert normalize_group_name("  team chat  ") == "team chat"
+
+    with pytest.raises(HTTPException) as empty:
+        normalize_group_name("   ")
+    assert empty.value.status_code == 400
+
+    with pytest.raises(HTTPException) as too_long:
+        normalize_group_name("x" * 81)
+    assert too_long.value.status_code == 400
+
+
+def test_normalize_group_member_ids_dedupes_and_skips_current_user():
+    assert normalize_group_member_ids([1, "2", 2, 3], current_user_id=1) == [2, 3]
+    assert normalize_group_member_ids("2,3,2", current_user_id=1) == [2, 3]
+
+    with pytest.raises(HTTPException) as invalid:
+        normalize_group_member_ids(["bad"])
+    assert invalid.value.status_code == 400
+
+    with pytest.raises(HTTPException) as too_many:
+        normalize_group_member_ids(list(range(1, 51)))
+    assert too_many.value.status_code == 400

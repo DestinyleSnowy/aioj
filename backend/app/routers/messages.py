@@ -15,6 +15,8 @@ router = APIRouter()
 
 MAX_MESSAGE_LENGTH = 4000
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+MAX_GROUP_NAME_LENGTH = 80
+MAX_GROUP_MEMBERS = 50
 IMAGE_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -47,6 +49,79 @@ def normalize_recipient_id(value) -> int | None:
     if recipient_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid recipient_id")
     return recipient_id
+
+
+def normalize_group_name(value) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Group name is required")
+    if len(name) > MAX_GROUP_NAME_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Group name must be at most {MAX_GROUP_NAME_LENGTH} characters")
+    return name
+
+
+def normalize_group_member_ids(value, *, current_user_id: int | None = None) -> list[int]:
+    if value in (None, ""):
+        raw_items = []
+    elif isinstance(value, str):
+        raw_items = [item.strip() for item in value.split(",") if item.strip()]
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raise HTTPException(status_code=400, detail="member_ids must be a list")
+
+    member_ids: list[int] = []
+    seen: set[int] = set()
+    for item in raw_items:
+        try:
+            member_id = int(item)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid member_id")
+        if member_id <= 0:
+            raise HTTPException(status_code=400, detail="Invalid member_id")
+        if current_user_id is not None and member_id == current_user_id:
+            continue
+        if member_id in seen:
+            continue
+        seen.add(member_id)
+        member_ids.append(member_id)
+
+    if len(member_ids) > MAX_GROUP_MEMBERS - 1:
+        raise HTTPException(status_code=400, detail=f"Group can have at most {MAX_GROUP_MEMBERS} members")
+    return member_ids
+
+
+def fetch_users_by_ids(conn, user_ids: list[int]):
+    if not user_ids:
+        return []
+    params = {f"user_id_{idx}": user_id for idx, user_id in enumerate(user_ids)}
+    placeholders = ", ".join(f":user_id_{idx}" for idx in range(len(user_ids)))
+    rows = conn.execute(
+        text(
+            f"""
+            select id, username, role, coalesce(is_disabled, false) as is_disabled
+            from users
+            where id in ({placeholders})
+            """
+        ),
+        params,
+    ).mappings().all()
+
+    by_id = {int(row["id"]): row for row in rows}
+    missing = [user_id for user_id in user_ids if user_id not in by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail="Group member not found")
+    disabled = [row["username"] for row in rows if bool(row["is_disabled"])]
+    if disabled:
+        raise HTTPException(status_code=400, detail="Group member is disabled")
+    return [by_id[user_id] for user_id in user_ids]
+
+
+def resolve_group_members(conn, *, current_user_id: int, member_ids) -> list[dict]:
+    normalized_ids = normalize_group_member_ids(member_ids, current_user_id=current_user_id)
+    if not normalized_ids:
+        raise HTTPException(status_code=400, detail="At least one group member is required")
+    return [dict(row) for row in fetch_users_by_ids(conn, normalized_ids)]
 
 
 def resolve_recipient(conn, *, current_user_id: int, recipient_id=None, recipient_key: str = ""):
@@ -152,10 +227,115 @@ def trim_message_page(rows, limit: int):
     return list(rows)[-limit:]
 
 
+def get_group_membership(conn, *, group_id: int, user_id: int):
+    row = conn.execute(
+        text(
+            """
+            select
+              g.id,
+              g.name,
+              g.owner_id,
+              g.created_at,
+              g.updated_at,
+              mgm.role as member_role,
+              mgm.joined_at,
+              (
+                select count(*)
+                from message_group_members members
+                where members.group_id = g.id
+              ) as member_count
+            from message_groups g
+            join message_group_members mgm on mgm.group_id = g.id
+            where g.id = :group_id
+              and mgm.user_id = :user_id
+            """
+        ),
+        {"group_id": group_id, "user_id": user_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Group not found")
+    return row
+
+
+def list_group_members(conn, group_id: int):
+    rows = conn.execute(
+        text(
+            """
+            select
+              u.id,
+              u.username,
+              u.role,
+              mgm.role as member_role,
+              mgm.joined_at
+            from message_group_members mgm
+            join users u on u.id = mgm.user_id
+            where mgm.group_id = :group_id
+            order by
+              case mgm.role when 'OWNER' then 0 else 1 end,
+              u.username asc,
+              u.id asc
+            """
+        ),
+        {"group_id": group_id},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def mark_group_messages_read(conn, *, group_id: int, user_id: int, joined_at):
+    last_message_id = conn.execute(
+        text(
+            """
+            select max(id)
+            from group_messages
+            where group_id = :group_id
+              and created_at >= :joined_at
+            """
+        ),
+        {"group_id": group_id, "joined_at": joined_at},
+    ).scalar_one()
+
+    conn.execute(
+        text(
+            """
+            insert into group_message_reads(group_id, user_id, last_read_message_id, read_at)
+            values (:group_id, :user_id, :last_message_id, now())
+            on conflict (group_id, user_id) do update
+            set last_read_message_id = nullif(
+                  greatest(
+                    coalesce(group_message_reads.last_read_message_id, 0),
+                    coalesce(excluded.last_read_message_id, 0)
+                  ),
+                  0
+                ),
+                read_at = now()
+            """
+        ),
+        {"group_id": group_id, "user_id": user_id, "last_message_id": last_message_id},
+    )
+
+
+def message_attachment_response(row):
+    if not row:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        content = get_bytes(S3_BUCKET_MESSAGES, row["attachment_object_key"])
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="File not found") from exc
+
+    content_type = row["attachment_content_type"] or "application/octet-stream"
+    headers = {
+        "Content-Disposition": content_disposition(
+            row["attachment_filename"],
+            inline=content_type.startswith("image/"),
+        )
+    }
+    return Response(content=content, media_type=content_type, headers=headers)
+
+
 @router.get("/api/messages/unread-count")
 def direct_message_unread_count(user=Depends(require_user)):
     with engine.connect() as conn:
-        unread_count = conn.execute(
+        direct_unread_count = conn.execute(
             text(
                 """
                 select count(*) as n
@@ -166,7 +346,31 @@ def direct_message_unread_count(user=Depends(require_user)):
             ),
             {"user_id": user["id"]},
         ).scalar_one()
-    return {"unread_count": int(unread_count or 0)}
+        group_unread_count = conn.execute(
+            text(
+                """
+                select count(*) as n
+                from group_messages gm
+                join message_group_members mgm
+                  on mgm.group_id = gm.group_id
+                 and mgm.user_id = :user_id
+                left join group_message_reads gmr
+                  on gmr.group_id = gm.group_id
+                 and gmr.user_id = :user_id
+                where gm.sender_id <> :user_id
+                  and gm.created_at >= mgm.joined_at
+                  and gm.id > coalesce(gmr.last_read_message_id, 0)
+                """
+            ),
+            {"user_id": user["id"]},
+        ).scalar_one()
+    direct_count = int(direct_unread_count or 0)
+    group_count = int(group_unread_count or 0)
+    return {
+        "unread_count": direct_count + group_count,
+        "direct_unread_count": direct_count,
+        "group_unread_count": group_count,
+    }
 
 
 @router.get("/api/messages/users")
@@ -201,7 +405,7 @@ def search_message_users(q: str = "", limit: int = 20, user=Depends(require_user
 def list_message_conversations(limit: int = 50, user=Depends(require_user)):
     limit = clamp_limit(limit, default=50, max_value=200)
     with engine.connect() as conn:
-        rows = conn.execute(
+        direct_rows = conn.execute(
             text(
                 """
                 with scoped as (
@@ -232,11 +436,18 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
                   group by sender_id
                 )
                 select
+                  'direct' as conversation_type,
+                  ('direct:' || ranked.peer_id::text) as conversation_key,
                   ranked.peer_id,
                   u.username as peer_username,
                   u.role as peer_role,
+                  null::bigint as group_id,
+                  null::text as group_name,
+                  null::bigint as group_owner_id,
+                  null::bigint as group_member_count,
                   ranked.id as last_message_id,
                   ranked.sender_id as last_sender_id,
+                  sender_user.username as last_sender_username,
                   ranked.recipient_id as last_recipient_id,
                   ranked.body_md as last_body_md,
                   (ranked.attachment_object_key is not null) as last_has_attachment,
@@ -246,18 +457,96 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
                   ranked.is_read as last_is_read,
                   ranked.created_at as last_created_at,
                   ranked.read_at as last_read_at,
-                  coalesce(unread.unread_count, 0) as unread_count
+                  coalesce(unread.unread_count, 0) as unread_count,
+                  ranked.created_at as sort_at,
+                  ranked.id as sort_id
                 from ranked
                 join users u on u.id = ranked.peer_id
+                join users sender_user on sender_user.id = ranked.sender_id
                 left join unread on unread.peer_id = ranked.peer_id
                 where ranked.rn = 1
                 order by ranked.created_at desc, ranked.id desc
-                limit :limit
                 """
             ),
-            {"user_id": user["id"], "limit": limit},
+            {"user_id": user["id"]},
         ).mappings().all()
-    return {"items": [dict(row) for row in rows]}
+        group_rows = conn.execute(
+            text(
+                """
+                with my_groups as (
+                  select
+                    g.id,
+                    g.name,
+                    g.owner_id,
+                    g.created_at,
+                    g.updated_at,
+                    mgm.joined_at,
+                    (
+                      select count(*)
+                      from message_group_members members
+                      where members.group_id = g.id
+                    ) as member_count
+                  from message_groups g
+                  join message_group_members mgm on mgm.group_id = g.id
+                  where mgm.user_id = :user_id
+                ),
+                unread as (
+                  select gm.group_id, count(*) as unread_count
+                  from group_messages gm
+                  join message_group_members mgm
+                    on mgm.group_id = gm.group_id
+                   and mgm.user_id = :user_id
+                  left join group_message_reads gmr
+                    on gmr.group_id = gm.group_id
+                   and gmr.user_id = :user_id
+                  where gm.sender_id <> :user_id
+                    and gm.created_at >= mgm.joined_at
+                    and gm.id > coalesce(gmr.last_read_message_id, 0)
+                  group by gm.group_id
+                )
+                select
+                  'group' as conversation_type,
+                  ('group:' || g.id::text) as conversation_key,
+                  null::bigint as peer_id,
+                  null::text as peer_username,
+                  null::text as peer_role,
+                  g.id as group_id,
+                  g.name as group_name,
+                  g.owner_id as group_owner_id,
+                  g.member_count as group_member_count,
+                  last_message.id as last_message_id,
+                  last_message.sender_id as last_sender_id,
+                  sender_user.username as last_sender_username,
+                  null::bigint as last_recipient_id,
+                  last_message.body_md as last_body_md,
+                  (last_message.attachment_object_key is not null) as last_has_attachment,
+                  last_message.attachment_content_type as last_attachment_content_type,
+                  last_message.attachment_filename as last_attachment_filename,
+                  last_message.attachment_size_bytes as last_attachment_size_bytes,
+                  null::boolean as last_is_read,
+                  last_message.created_at as last_created_at,
+                  null::timestamptz as last_read_at,
+                  coalesce(unread.unread_count, 0) as unread_count,
+                  coalesce(last_message.created_at, g.created_at) as sort_at,
+                  coalesce(last_message.id, 0) as sort_id
+                from my_groups g
+                left join lateral (
+                  select gm.*
+                  from group_messages gm
+                  where gm.group_id = g.id
+                    and gm.created_at >= g.joined_at
+                  order by gm.created_at desc, gm.id desc
+                  limit 1
+                ) last_message on true
+                left join users sender_user on sender_user.id = last_message.sender_id
+                left join unread on unread.group_id = g.id
+                """
+            ),
+            {"user_id": user["id"]},
+        ).mappings().all()
+    rows = [dict(row) for row in direct_rows] + [dict(row) for row in group_rows]
+    rows.sort(key=lambda row: (row["sort_at"], row["sort_id"]), reverse=True)
+    return {"items": rows[:limit]}
 
 
 @router.get("/api/messages/conversations/{peer_id}")
@@ -424,6 +713,319 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
     return {"ok": True, "message": dict(row), "peer": dict(recipient)}
 
 
+@router.post("/api/messages/groups")
+def create_message_group(payload: dict, request: Request, user=Depends(require_user)):
+    check_rate_limit(client_key(request, "message-group", str(user["id"])), max_calls=30, window_seconds=3600)
+    name = normalize_group_name(payload.get("name") or payload.get("group_name"))
+    member_ids = payload.get("member_ids") or payload.get("members") or []
+
+    with engine.begin() as conn:
+        invited_members = resolve_group_members(conn, current_user_id=user["id"], member_ids=member_ids)
+        group = conn.execute(
+            text(
+                """
+                insert into message_groups(name, owner_id)
+                values (:name, :owner_id)
+                returning id, name, owner_id, created_at, updated_at
+                """
+            ),
+            {"name": name, "owner_id": user["id"]},
+        ).mappings().first()
+
+        member_rows = [
+            {"group_id": group["id"], "user_id": user["id"], "role": "OWNER"},
+            *[
+                {"group_id": group["id"], "user_id": member["id"], "role": "MEMBER"}
+                for member in invited_members
+            ],
+        ]
+        conn.execute(
+            text(
+                """
+                insert into message_group_members(group_id, user_id, role)
+                values (:group_id, :user_id, :role)
+                on conflict (group_id, user_id) do nothing
+                """
+            ),
+            member_rows,
+        )
+        members = list_group_members(conn, group["id"])
+
+    group_payload = dict(group)
+    group_payload["member_count"] = len(members)
+    group_payload["members"] = members
+    return {"ok": True, "group": group_payload}
+
+
+@router.get("/api/messages/groups/{group_id}")
+def get_group_message_conversation(
+    group_id: int,
+    limit: int = 100,
+    before_id: int | None = None,
+    user=Depends(require_user),
+):
+    limit = clamp_limit(limit, default=100, max_value=200)
+    before_id = normalize_message_cursor(before_id)
+
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        mark_group_messages_read(
+            conn,
+            group_id=group_id,
+            user_id=user["id"],
+            joined_at=group["joined_at"],
+        )
+        members = list_group_members(conn, group_id)
+
+        params = {"group_id": group_id, "joined_at": group["joined_at"], "limit": limit + 1}
+        before_filter = ""
+        if before_id is not None:
+            anchor = conn.execute(
+                text(
+                    """
+                    select created_at
+                    from group_messages
+                    where id = :before_id
+                      and group_id = :group_id
+                      and created_at >= :joined_at
+                    """
+                ),
+                {"group_id": group_id, "joined_at": group["joined_at"], "before_id": before_id},
+            ).mappings().first()
+            if not anchor:
+                group_payload = dict(group)
+                group_payload["members"] = members
+                return {"group": group_payload, "items": [], "has_more": False}
+            params["before_id"] = before_id
+            params["before_created_at"] = anchor["created_at"]
+            before_filter = """
+                  and (
+                    gm.created_at < :before_created_at
+                    or (gm.created_at = :before_created_at and gm.id < :before_id)
+                  )
+            """
+
+        rows = conn.execute(
+            text(
+                f"""
+                select *
+                from (
+                  select
+                    gm.id,
+                    'group' as message_type,
+                    'group' as attachment_scope,
+                    gm.group_id,
+                    gm.sender_id,
+                    su.username as sender_username,
+                    null::bigint as recipient_id,
+                    null::text as recipient_username,
+                    gm.body_md,
+                    (gm.attachment_object_key is not null) as has_attachment,
+                    case when gm.attachment_object_key is not null then gm.id end as attachment_id,
+                    gm.attachment_content_type,
+                    gm.attachment_filename,
+                    gm.attachment_size_bytes,
+                    null::boolean as is_read,
+                    gm.created_at,
+                    null::timestamptz as read_at
+                  from group_messages gm
+                  join users su on su.id = gm.sender_id
+                  where gm.group_id = :group_id
+                    and gm.created_at >= :joined_at
+                  {before_filter}
+                  order by gm.created_at desc, gm.id desc
+                  limit :limit
+                ) recent
+                order by created_at asc, id asc
+                """
+            ),
+            params,
+        ).mappings().all()
+
+    group_payload = dict(group)
+    group_payload["members"] = members
+    return {
+        "group": group_payload,
+        "items": [dict(row) for row in trim_message_page(rows, limit)],
+        "has_more": len(rows) > limit,
+    }
+
+
+@router.post("/api/messages/groups/{group_id}/messages")
+def send_group_message(group_id: int, payload: dict, request: Request, user=Depends(require_user)):
+    check_rate_limit(client_key(request, "message", str(user["id"])), max_calls=120, window_seconds=3600)
+    body = normalize_message_body(payload.get("body_md") or payload.get("body"))
+
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        row = conn.execute(
+            text(
+                """
+                with inserted as (
+                  insert into group_messages(group_id, sender_id, body_md)
+                  values (:group_id, :sender_id, :body_md)
+                  returning id, group_id, sender_id, body_md,
+                            false as has_attachment,
+                            null::bigint as attachment_id,
+                            attachment_content_type, attachment_filename, attachment_size_bytes,
+                            created_at
+                )
+                select
+                  inserted.id,
+                  'group' as message_type,
+                  'group' as attachment_scope,
+                  inserted.group_id,
+                  inserted.sender_id,
+                  su.username as sender_username,
+                  null::bigint as recipient_id,
+                  null::text as recipient_username,
+                  inserted.body_md,
+                  inserted.has_attachment,
+                  inserted.attachment_id,
+                  inserted.attachment_content_type,
+                  inserted.attachment_filename,
+                  inserted.attachment_size_bytes,
+                  null::boolean as is_read,
+                  inserted.created_at,
+                  null::timestamptz as read_at
+                from inserted
+                join users su on su.id = inserted.sender_id
+                """
+            ),
+            {"group_id": group_id, "sender_id": user["id"], "body_md": body},
+        ).mappings().first()
+        conn.execute(
+            text("update message_groups set updated_at = now() where id = :group_id"),
+            {"group_id": group_id},
+        )
+        conn.execute(
+            text(
+                """
+                insert into group_message_reads(group_id, user_id, last_read_message_id, read_at)
+                values (:group_id, :user_id, :message_id, now())
+                on conflict (group_id, user_id) do update
+                set last_read_message_id = greatest(
+                      coalesce(group_message_reads.last_read_message_id, 0),
+                      excluded.last_read_message_id
+                    ),
+                    read_at = now()
+                """
+            ),
+            {"group_id": group_id, "user_id": user["id"], "message_id": row["id"]},
+        )
+
+    return {"ok": True, "message": dict(row), "group": dict(group)}
+
+
+@router.post("/api/messages/groups/{group_id}/files")
+async def send_group_message_file(
+    group_id: int,
+    request: Request,
+    body_md: str = Form(""),
+    file: UploadFile = File(...),
+    user=Depends(require_user),
+):
+    check_rate_limit(client_key(request, "message-file", str(user["id"])), max_calls=60, window_seconds=3600)
+    body = normalize_optional_message_body(body_md)
+    file_bytes = await file.read()
+    content_type, suffix = validate_file_upload(file.filename, file.content_type, file_bytes)
+    object_key = f"messages/groups/{group_id}/{user['id']}/{uuid4().hex}{suffix}"
+    filename = safe_attachment_filename(file.filename, suffix)
+
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        row = conn.execute(
+            text(
+                """
+                with inserted as (
+                  insert into group_messages(
+                    group_id,
+                    sender_id,
+                    body_md,
+                    attachment_object_key,
+                    attachment_content_type,
+                    attachment_filename,
+                    attachment_size_bytes
+                  )
+                  values (
+                    :group_id,
+                    :sender_id,
+                    :body_md,
+                    :attachment_object_key,
+                    :attachment_content_type,
+                    :attachment_filename,
+                    :attachment_size_bytes
+                  )
+                  returning id, group_id, sender_id, body_md,
+                            true as has_attachment,
+                            id as attachment_id,
+                            attachment_content_type, attachment_filename, attachment_size_bytes,
+                            created_at
+                )
+                select
+                  inserted.id,
+                  'group' as message_type,
+                  'group' as attachment_scope,
+                  inserted.group_id,
+                  inserted.sender_id,
+                  su.username as sender_username,
+                  null::bigint as recipient_id,
+                  null::text as recipient_username,
+                  inserted.body_md,
+                  inserted.has_attachment,
+                  inserted.attachment_id,
+                  inserted.attachment_content_type,
+                  inserted.attachment_filename,
+                  inserted.attachment_size_bytes,
+                  null::boolean as is_read,
+                  inserted.created_at,
+                  null::timestamptz as read_at
+                from inserted
+                join users su on su.id = inserted.sender_id
+                """
+            ),
+            {
+                "group_id": group_id,
+                "sender_id": user["id"],
+                "body_md": body,
+                "attachment_object_key": object_key,
+                "attachment_content_type": content_type,
+                "attachment_filename": filename,
+                "attachment_size_bytes": len(file_bytes),
+            },
+        ).mappings().first()
+        conn.execute(
+            text("update message_groups set updated_at = now() where id = :group_id"),
+            {"group_id": group_id},
+        )
+
+    try:
+        put_bytes(S3_BUCKET_MESSAGES, object_key, file_bytes, content_type)
+    except Exception as exc:
+        with engine.begin() as conn:
+            conn.execute(text("delete from group_messages where id = :id"), {"id": row["id"]})
+        raise HTTPException(status_code=500, detail="Failed to store message file") from exc
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                insert into group_message_reads(group_id, user_id, last_read_message_id, read_at)
+                values (:group_id, :user_id, :message_id, now())
+                on conflict (group_id, user_id) do update
+                set last_read_message_id = greatest(
+                      coalesce(group_message_reads.last_read_message_id, 0),
+                      excluded.last_read_message_id
+                    ),
+                    read_at = now()
+                """
+            ),
+            {"group_id": group_id, "user_id": user["id"], "message_id": row["id"]},
+        )
+
+    return {"ok": True, "message": dict(row), "group": dict(group)}
+
+
 @router.post("/api/messages/files")
 async def send_direct_message_file(
     request: Request,
@@ -554,26 +1156,39 @@ def get_direct_message_attachment(message_id: int, user=Depends(require_user)):
             {"message_id": message_id, "user_id": user["id"]},
         ).mappings().first()
 
-    if not row:
-        raise HTTPException(status_code=404, detail="File not found")
-    try:
-        content = get_bytes(S3_BUCKET_MESSAGES, row["attachment_object_key"])
-    except Exception as exc:
-        raise HTTPException(status_code=404, detail="File not found") from exc
-
-    content_type = row["attachment_content_type"] or "application/octet-stream"
-    headers = {
-        "Content-Disposition": content_disposition(
-            row["attachment_filename"],
-            inline=content_type.startswith("image/"),
-        )
-    }
-    return Response(content=content, media_type=content_type, headers=headers)
+    return message_attachment_response(row)
 
 
 @router.get("/api/messages/{message_id}/image")
 def get_direct_message_image(message_id: int, user=Depends(require_user)):
     return get_direct_message_attachment(message_id, user)
+
+
+@router.get("/api/messages/group-messages/{message_id}/attachment")
+def get_group_message_attachment(message_id: int, user=Depends(require_user)):
+    with engine.connect() as conn:
+        row = conn.execute(
+            text(
+                """
+                select gm.attachment_object_key, gm.attachment_content_type, gm.attachment_filename
+                from group_messages gm
+                join message_group_members mgm
+                  on mgm.group_id = gm.group_id
+                 and mgm.user_id = :user_id
+                where gm.id = :message_id
+                  and gm.created_at >= mgm.joined_at
+                  and gm.attachment_object_key is not null
+                """
+            ),
+            {"message_id": message_id, "user_id": user["id"]},
+        ).mappings().first()
+
+    return message_attachment_response(row)
+
+
+@router.get("/api/messages/group-messages/{message_id}/image")
+def get_group_message_image(message_id: int, user=Depends(require_user)):
+    return get_group_message_attachment(message_id, user)
 
 
 @router.post("/api/messages/conversations/{peer_id}/read")
@@ -596,3 +1211,16 @@ def mark_message_conversation_read(peer_id: int, user=Depends(require_user)):
             {"peer_id": peer_id, "user_id": user["id"]},
         )
     return {"ok": True, "updated": int(result.rowcount or 0)}
+
+
+@router.post("/api/messages/groups/{group_id}/read")
+def mark_group_message_conversation_read(group_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        mark_group_messages_read(
+            conn,
+            group_id=group_id,
+            user_id=user["id"],
+            joined_at=group["joined_at"],
+        )
+    return {"ok": True}

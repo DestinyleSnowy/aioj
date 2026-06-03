@@ -682,6 +682,8 @@ body.messages-page-active .main {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .mobile-menu-btn {
@@ -706,12 +708,16 @@ body.messages-page-active .main {
 .page-title-box {
   display: flex;
   flex-direction: column;
+  min-width: 0;
 }
 
 .page-title {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .page-subtitle {
@@ -722,6 +728,7 @@ body.messages-page-active .main {
   display: flex;
   align-items: center;
   gap: var(--space-md);
+  flex: 0 0 auto;
 }
 
 /* Theme Toggle Trigger Button */
@@ -2658,6 +2665,11 @@ tr:last-child td {
   font-size: 12px;
 }
 
+.message-avatar.group {
+  border-radius: var(--radius-md);
+  background: var(--grad-success);
+}
+
 .message-conversation-body {
   min-width: 0;
   display: flex;
@@ -2689,6 +2701,15 @@ tr:last-child td {
 .message-preview {
   color: var(--text-muted);
   font-size: 12.5px;
+}
+
+.message-conversation-subtitle {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .message-unread-dot {
@@ -3133,6 +3154,43 @@ body.message-layout-resizing * {
 .message-user-result.muted {
   cursor: default;
   color: var(--text-muted);
+}
+
+.message-selected-users {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+}
+
+.message-selected-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 8px 5px 5px;
+  border: var(--border-light);
+  border-radius: var(--radius-full);
+  background: hsla(0, 0%, 100%, 0.035);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.message-selected-user button {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: hsla(0, 0%, 100%, 0.06);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.message-selected-user button:hover {
+  background: var(--bg-danger-subtle);
+  color: var(--color-danger);
 }
 
 /* ─── 16. Utility classes & Grid layout ──────────────────────────────────── */

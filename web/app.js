@@ -36,11 +36,13 @@ const state = {
   messageRefreshTimer: null,
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
+  messageActiveConversationKey: '',
   messageAttachmentCache: new Map(),
   messageComposerDrafts: new Map(),
   messageLayoutCleanup: null,
   messageImagePreview: null,
   newMessagePendingFiles: [],
+  newGroupMembers: [],
   currentProblem: null,
   activeProblemStatementId: '',
   markdownConfigured: false,
@@ -658,6 +660,7 @@ function stopMessageAutoRefresh() {
   }
   state.messageRefreshInFlight = false;
   state.messageActivePeerId = 0;
+  state.messageActiveConversationKey = '';
 }
 
 function updateNav() {
@@ -2987,27 +2990,48 @@ function bindMessageDropZone(element, onFiles) {
   });
 }
 
-async function uploadDirectMessageFiles({ recipientId = null, recipient = '', body = '', files = [] }) {
+async function uploadMessageFiles({
+  conversationType = 'direct',
+  recipientId = null,
+  recipient = '',
+  groupId = null,
+  body = '',
+  files = [],
+}) {
   const selectedFiles = normalizeMessageFiles(files);
   if (!selectedFiles.length) throw new Error('请选择要发送的文件。');
 
   let lastResponse = null;
   for (const [index, file] of selectedFiles.entries()) {
     const fd = new FormData();
-    if (recipientId) {
-      fd.append('recipient_id', String(recipientId));
+    if (conversationType === 'group') {
+      fd.append('body_md', index === 0 ? body : '');
+      fd.append('file', file);
+      lastResponse = await api(`/api/messages/groups/${Number(groupId)}/files`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      });
     } else {
-      fd.append('recipient', recipient);
+      if (recipientId) {
+        fd.append('recipient_id', String(recipientId));
+      } else {
+        fd.append('recipient', recipient);
+      }
+      fd.append('body_md', index === 0 ? body : '');
+      fd.append('file', file);
+      lastResponse = await api('/api/messages/files', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      });
     }
-    fd.append('body_md', index === 0 ? body : '');
-    fd.append('file', file);
-    lastResponse = await api('/api/messages/files', {
-      method: 'POST',
-      headers: authHeaders(),
-      body: fd,
-    });
   }
   return lastResponse;
+}
+
+async function uploadDirectMessageFiles({ recipientId = null, recipient = '', body = '', files = [] }) {
+  return uploadMessageFiles({ conversationType: 'direct', recipientId, recipient, body, files });
 }
 
 function messagePreview(text, limit = 96, attachmentContentType = '') {
@@ -3025,6 +3049,68 @@ function messagePeerInitial(name) {
   return esc(String(name || '?').slice(0, 1).toUpperCase());
 }
 
+function messageConversationKey(type, id) {
+  const normalizedType = type === 'group' ? 'group' : 'direct';
+  const normalizedId = Number(id || 0);
+  return normalizedId ? `${normalizedType}:${normalizedId}` : '';
+}
+
+function parseMessageConversationKey(value, fallbackType = 'direct') {
+  if (value && typeof value === 'object') {
+    const type = value.type || value.conversationType || value.conversation_type || fallbackType;
+    const id = value.id || value.group_id || value.groupId || value.peer_id || value.peerId;
+    return parseMessageConversationKey(messageConversationKey(type, id), fallbackType);
+  }
+
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    const match = raw.match(/^(direct|group):(\d+)$/);
+    if (match) {
+      const id = Number(match[2]);
+      return { type: match[1], id, key: `${match[1]}:${id}` };
+    }
+    if (/^\d+$/.test(raw)) {
+      const id = Number(raw);
+      return { type: fallbackType, id, key: messageConversationKey(fallbackType, id) };
+    }
+  }
+
+  const id = Number(value || 0);
+  if (id) {
+    return { type: fallbackType, id, key: messageConversationKey(fallbackType, id) };
+  }
+  return { type: fallbackType, id: 0, key: '' };
+}
+
+function messageConversationFromPath(path = location.pathname) {
+  let match = String(path || '').match(/^\/messages\/groups\/(\d+)$/);
+  if (match) return parseMessageConversationKey(`group:${match[1]}`);
+  match = String(path || '').match(/^\/messages\/(\d+)$/);
+  if (match) return parseMessageConversationKey(`direct:${match[1]}`);
+  return parseMessageConversationKey(state.messageActiveConversationKey || state.messageActivePeerId || '');
+}
+
+function currentMessageConversationKey() {
+  return messageConversationFromPath().key;
+}
+
+function messageConversationPath(target) {
+  const parsed = parseMessageConversationKey(target);
+  if (!parsed.id) return '/messages';
+  return parsed.type === 'group' ? `/messages/groups/${parsed.id}` : `/messages/${parsed.id}`;
+}
+
+function messageConversationApiPath(target, { beforeId = null } = {}) {
+  const parsed = parseMessageConversationKey(target);
+  if (!parsed.id) return '';
+  const base = parsed.type === 'group'
+    ? `/api/messages/groups/${parsed.id}`
+    : `/api/messages/conversations/${parsed.id}`;
+  const params = new URLSearchParams({ limit: String(MESSAGE_THREAD_PAGE_SIZE) });
+  if (beforeId) params.set('before_id', String(beforeId));
+  return `${base}?${params.toString()}`;
+}
+
 function currentMessagePeerId() {
   const match = location.pathname.match(/^\/messages\/(\d+)$/);
   return match ? Number(match[1]) : Number(state.messageActivePeerId || 0);
@@ -3035,27 +3121,35 @@ function normalizeMessagePeerId(peerId) {
 }
 
 function saveMessageComposerDraft(peerId, value = '') {
-  const normalizedPeerId = normalizeMessagePeerId(peerId);
-  if (!normalizedPeerId) return;
+  const key = parseMessageConversationKey(peerId).key;
+  if (!key) return;
   const draft = String(value || '');
   if (draft) {
-    state.messageComposerDrafts.set(normalizedPeerId, draft);
+    state.messageComposerDrafts.set(key, draft);
   } else {
-    state.messageComposerDrafts.delete(normalizedPeerId);
+    state.messageComposerDrafts.delete(key);
   }
 }
 
 function clearMessageComposerDraft(peerId) {
-  const normalizedPeerId = normalizeMessagePeerId(peerId);
-  if (normalizedPeerId) state.messageComposerDrafts.delete(normalizedPeerId);
+  const key = parseMessageConversationKey(peerId).key;
+  if (key) state.messageComposerDrafts.delete(key);
 }
 
 function captureMessageComposerState() {
   const composer = $('messageComposer');
   if (!composer) return null;
   const value = composer.value || '';
+  const key = parseMessageConversationKey(
+    composer.dataset.messageComposerKey ||
+    composer.dataset.messageComposerPeerId ||
+    state.messageActiveConversationKey ||
+    state.messageActivePeerId ||
+    currentMessageConversationKey(),
+  ).key;
   return {
-    peerId: normalizeMessagePeerId(composer.dataset.messageComposerPeerId || state.messageActivePeerId || currentMessagePeerId()),
+    peerId: parseMessageConversationKey(key).type === 'direct' ? parseMessageConversationKey(key).id : 0,
+    conversationKey: key,
     value,
     focused: document.activeElement === composer,
     selectionStart: composer.selectionStart ?? value.length,
@@ -3066,20 +3160,20 @@ function captureMessageComposerState() {
 
 function restoreMessageComposerState(peerId, snapshot = null, options = {}) {
   const composer = $('messageComposer');
-  const normalizedPeerId = normalizeMessagePeerId(peerId);
-  if (!composer || !normalizedPeerId) return;
+  const key = parseMessageConversationKey(peerId).key;
+  if (!composer || !key) return;
 
   const preserve = options.preserve !== false;
-  const snapshotMatches = snapshot && normalizeMessagePeerId(snapshot.peerId) === normalizedPeerId;
+  const snapshotMatches = snapshot && parseMessageConversationKey(snapshot.conversationKey || snapshot.peerId).key === key;
   const value = preserve
-    ? (snapshotMatches ? snapshot.value : (state.messageComposerDrafts.get(normalizedPeerId) || ''))
+    ? (snapshotMatches ? snapshot.value : (state.messageComposerDrafts.get(key) || ''))
     : '';
 
   composer.value = value || '';
   if (preserve) {
-    saveMessageComposerDraft(normalizedPeerId, composer.value);
+    saveMessageComposerDraft(key, composer.value);
   } else {
-    clearMessageComposerDraft(normalizedPeerId);
+    clearMessageComposerDraft(key);
   }
 
   const fallbackCursor = composer.value.length;
@@ -3321,36 +3415,56 @@ function initMessageLayoutInteractions() {
   };
 }
 
-function getMessageAttachmentCacheEntry(attachmentId) {
-  const normalizedId = Number(attachmentId || 0);
-  if (!normalizedId) return null;
-  return state.messageAttachmentCache.get(normalizedId) || null;
+function normalizeMessageAttachmentTarget(scopeOrId, maybeId = null) {
+  if (maybeId == null) {
+    return { scope: 'direct', id: Number(scopeOrId || 0), key: messageAttachmentCacheKey('direct', scopeOrId) };
+  }
+  const scope = scopeOrId === 'group' ? 'group' : 'direct';
+  const id = Number(maybeId || 0);
+  return { scope, id, key: messageAttachmentCacheKey(scope, id) };
 }
 
-async function loadMessageAttachmentUrl(attachmentId) {
-  const normalizedId = Number(attachmentId || 0);
-  if (!normalizedId) throw new Error('Missing attachment id');
+function messageAttachmentCacheKey(scope, attachmentId) {
+  const normalizedScope = scope === 'group' ? 'group' : 'direct';
+  return `${normalizedScope}:${Number(attachmentId || 0)}`;
+}
 
-  const cached = getMessageAttachmentCacheEntry(normalizedId);
+function getMessageAttachmentCacheEntry(scopeOrId, maybeId = null) {
+  const target = normalizeMessageAttachmentTarget(scopeOrId, maybeId);
+  if (!target.id) return null;
+  return state.messageAttachmentCache.get(target.key) || null;
+}
+
+function messageAttachmentUrlPath(scope, attachmentId) {
+  return scope === 'group'
+    ? `/api/messages/group-messages/${Number(attachmentId)}/attachment`
+    : `/api/messages/${Number(attachmentId)}/attachment`;
+}
+
+async function loadMessageAttachmentUrl(scopeOrId, maybeId = null) {
+  const target = normalizeMessageAttachmentTarget(scopeOrId, maybeId);
+  if (!target.id) throw new Error('Missing attachment id');
+
+  const cached = getMessageAttachmentCacheEntry(target.scope, target.id);
   if (cached?.url) return cached.url;
   if (cached?.promise) return cached.promise;
 
   const promise = (async () => {
-    const res = await fetch(`/api/messages/${normalizedId}/attachment`, { headers: authHeaders() });
+    const res = await fetch(messageAttachmentUrlPath(target.scope, target.id), { headers: authHeaders() });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
-    state.messageAttachmentCache.set(normalizedId, { url });
+    state.messageAttachmentCache.set(target.key, { url });
     return url;
   })();
 
-  state.messageAttachmentCache.set(normalizedId, { promise });
+  state.messageAttachmentCache.set(target.key, { promise });
 
   try {
     return await promise;
   } catch (err) {
-    if (state.messageAttachmentCache.get(normalizedId)?.promise === promise) {
-      state.messageAttachmentCache.delete(normalizedId);
+    if (state.messageAttachmentCache.get(target.key)?.promise === promise) {
+      state.messageAttachmentCache.delete(target.key);
     }
     throw err;
   }
@@ -3386,10 +3500,10 @@ async function pollMessageUnreadState() {
   state.messageUnreadCount = Number(countData.unread_count || 0);
   updateNav();
 
-  const peerId = currentMessagePeerId();
-  if (!peerId) return;
+  const conversationKey = currentMessageConversationKey();
+  if (!conversationKey) return;
   const conversations = conversationData.items || [];
-  const active = conversations.find(c => Number(c.peer_id) === Number(peerId));
+  const active = conversations.find(c => (c.conversation_key || messageConversationKey(c.conversation_type, c.group_id || c.peer_id)) === conversationKey);
   updateMessageThreadUnreadBadge(Number(active?.unread_count || 0));
 }
 
@@ -3413,26 +3527,26 @@ function ensureMessageAutoRefresh() {
   }, MESSAGE_REFRESH_INTERVAL_MS);
 }
 
-async function renderMessages(peerId = null, options = {}) {
-  setPage('私信');
+async function renderMessages(target = null, options = {}) {
+  setPage('聊天');
   document.body.classList.add('messages-page-active');
   const app = $('app');
   app.classList.add('messages-page');
   if (!state.user) {
-    app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button> 使用私信。</div>`;
+    app.innerHTML = `<div class="notice info">请先 <button class="btn btn-secondary btn-sm" onclick="showAuthModal()">登录账户</button> 使用聊天。</div>`;
     return;
   }
 
   const silent = !!options.silent || !!app.querySelector('.messages-layout');
   const composerSnapshot = captureMessageComposerState();
   if (composerSnapshot && options.preserveComposer !== false) {
-    saveMessageComposerDraft(composerSnapshot.peerId, composerSnapshot.value);
+    saveMessageComposerDraft(composerSnapshot.conversationKey || composerSnapshot.peerId, composerSnapshot.value);
   }
   if (!silent) {
     app.innerHTML = `
       <div class="loading-overlay">
         <div class="spinner-ring"></div>
-        <span class="loading-text">正在同步私信会话...</span>
+        <span class="loading-text">正在同步聊天会话...</span>
       </div>
     `;
   }
@@ -3440,27 +3554,38 @@ async function renderMessages(peerId = null, options = {}) {
   try {
     const conversationData = await api('/api/messages/conversations?limit=100', { headers: authHeaders() });
     const conversations = conversationData.items || [];
-    const selectedPeerId = peerId ? Number(peerId) : Number(conversations[0]?.peer_id || 0);
+    const requested = target ? parseMessageConversationKey(target) : messageConversationFromPath();
+    const firstConversationKey = conversations[0]?.conversation_key ||
+      messageConversationKey(conversations[0]?.conversation_type, conversations[0]?.group_id || conversations[0]?.peer_id);
+    const selectedKey = requested.key || firstConversationKey || '';
+    const selected = parseMessageConversationKey(selectedKey);
     let thread = null;
 
-    if (selectedPeerId) {
-      thread = await api(`/api/messages/conversations/${selectedPeerId}?limit=${MESSAGE_THREAD_PAGE_SIZE}`, { headers: authHeaders() });
+    if (selected.id) {
+      thread = await api(messageConversationApiPath(selected.key), { headers: authHeaders() });
       conversations.forEach((item) => {
-        if (Number(item.peer_id) === Number(selectedPeerId)) item.unread_count = 0;
+        const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
+        if (itemKey === selected.key) item.unread_count = 0;
       });
       await refreshMessageCount();
     }
 
-    const activePeer = thread?.peer || conversations.find(c => Number(c.peer_id) === selectedPeerId);
+    const activeConversation = thread?.peer || thread?.group || conversations.find((item) => {
+      const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
+      return itemKey === selected.key;
+    });
     const threadItems = thread?.items || [];
 
     app.innerHTML = `
       <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
         <div>
-          <h3 class="section-title">私信</h3>
-          <div class="text-muted" style="font-size: 13px;">与站内用户一对一沟通，打开会话后会自动标记已读。</div>
+          <h3 class="section-title">聊天</h3>
+          <div class="text-muted" style="font-size: 13px;">支持站内私聊和群聊，打开会话后会自动标记已读。</div>
         </div>
-        <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
+        <div class="row gap-sm" style="flex-wrap: wrap;">
+          <button class="btn btn-secondary" onclick="showCreateMessageGroupModal()">新建群聊</button>
+          <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
+        </div>
       </div>
 
       <div class="messages-layout">
@@ -3469,22 +3594,41 @@ async function renderMessages(peerId = null, options = {}) {
             <div class="message-empty-panel">
               <div class="empty-icon">✉</div>
               <div class="text-muted" style="font-size: 13px;">暂无会话</div>
-              <button class="btn btn-secondary btn-sm mt-md" onclick="showNewMessageModal()">开始私信</button>
+              <div class="row gap-sm mt-md" style="flex-wrap: wrap; justify-content: center;">
+                <button class="btn btn-secondary btn-sm" onclick="showCreateMessageGroupModal()">新建群聊</button>
+                <button class="btn btn-primary btn-sm" onclick="showNewMessageModal()">开始私信</button>
+              </div>
             </div>
-          ` : conversations.map(c => {
-            const active = Number(c.peer_id) === selectedPeerId;
+          ` : conversations.map((c) => {
+            const conversationType = c.conversation_type === 'group' ? 'group' : 'direct';
+            const conversationId = conversationType === 'group' ? c.group_id : c.peer_id;
+            const conversationKey = c.conversation_key || messageConversationKey(conversationType, conversationId);
+            const active = conversationKey === selected.key;
             const incoming = Number(c.last_sender_id) !== Number(state.user.id);
             const unread = Number(c.unread_count || 0);
+            const title = conversationType === 'group' ? c.group_name : c.peer_username;
+            const subtitle = conversationType === 'group'
+              ? `${Number(c.group_member_count || 0)} 位成员`
+              : esc(c.peer_role || 'USER');
+            const previewPrefix = c.last_message_id
+              ? (conversationType === 'group'
+                ? (incoming ? `${c.last_sender_username || '成员'}：` : '我：')
+                : (incoming ? '' : '我：'))
+              : '';
+            const previewText = c.last_message_id
+              ? messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : ''))
+              : (conversationType === 'group' ? '群聊已创建' : '空消息');
             return `
-              <button class="message-conversation ${active ? 'active' : ''}" onclick="openMessageConversation(${c.peer_id})">
-                <span class="message-avatar">${messagePeerInitial(c.peer_username)}</span>
+              <button class="message-conversation ${active ? 'active' : ''}" onclick="openMessageConversation(${jsArg(conversationKey)})">
+                <span class="message-avatar ${conversationType === 'group' ? 'group' : ''}">${messagePeerInitial(title)}</span>
                 <span class="message-conversation-body">
                   <span class="message-conversation-top">
-                    <strong>${esc(c.peer_username)}</strong>
-                    <span>${formatDate(c.last_created_at)}</span>
+                    <strong>${esc(title)}</strong>
+                    <span>${formatDate(c.last_created_at || c.sort_at)}</span>
                   </span>
+                  <span class="message-conversation-subtitle">${subtitle}</span>
                   <span class="message-preview">
-                    ${incoming ? '' : '我：'}${esc(messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : '')))}
+                    ${esc(previewPrefix)}${esc(previewText)}
                   </span>
                 </span>
                 ${unread > 0 ? `<span class="message-unread-dot">${unread > 99 ? '99+' : unread}</span>` : ''}
@@ -3504,10 +3648,10 @@ async function renderMessages(peerId = null, options = {}) {
         ></div>
 
         <section class="message-thread-panel">
-          ${selectedPeerId && activePeer ? renderMessageThread(activePeer, threadItems, { hasMore: !!thread?.has_more }) : `
+          ${selected.id && activeConversation ? renderMessageThread(activeConversation, threadItems, { hasMore: !!thread?.has_more, conversationType: selected.type }) : `
             <div class="message-empty-panel">
               <div class="empty-icon">✉</div>
-              <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信。</div>
+              <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信/群聊。</div>
             </div>
           `}
         </section>
@@ -3515,18 +3659,19 @@ async function renderMessages(peerId = null, options = {}) {
     `;
 
     initMessageLayoutInteractions();
-    if (selectedPeerId && activePeer) {
-      initMessageThreadPagination(selectedPeerId, !!thread?.has_more);
-      initMessageComposerInteractions(selectedPeerId);
-      restoreMessageComposerState(selectedPeerId, composerSnapshot, {
+    if (selected.id && activeConversation) {
+      initMessageThreadPagination(selected.key, !!thread?.has_more);
+      initMessageComposerInteractions(selected.key);
+      restoreMessageComposerState(selected.key, composerSnapshot, {
         preserve: options.preserveComposer !== false,
         focus: !!options.focusComposer || (
           !!composerSnapshot?.focused &&
-          normalizeMessagePeerId(composerSnapshot.peerId) === normalizeMessagePeerId(selectedPeerId)
+          parseMessageConversationKey(composerSnapshot.conversationKey || composerSnapshot.peerId).key === selected.key
         ),
       });
     }
-    state.messageActivePeerId = selectedPeerId;
+    state.messageActiveConversationKey = selected.key;
+    state.messageActivePeerId = selected.type === 'direct' ? selected.id : 0;
 
     updateMessageThreadUnreadBadge(0);
     scrollMessageThreadToBottom();
@@ -3534,31 +3679,33 @@ async function renderMessages(peerId = null, options = {}) {
     ensureMessageAutoRefresh();
   } catch (err) {
     if (silent) {
-      toast(`刷新私信失败: ${err.message}`, 'error');
+      toast(`刷新聊天失败: ${err.message}`, 'error');
     } else {
       app.innerHTML = errorBox(err);
     }
   }
 }
 
-function openMessageConversation(peerId) {
-  const path = `/messages/${peerId}`;
+function openMessageConversation(target) {
+  const parsed = parseMessageConversationKey(target);
+  if (!parsed.id) return;
+  const path = messageConversationPath(parsed.key);
   if (location.pathname !== path) {
     history.pushState(null, '', path);
   }
   state.currentRoute = path;
   updateNav();
-  renderMessages(peerId, { silent: true });
+  renderMessages(parsed.key, { silent: true });
 }
 
-function refreshMessages(peerId, options = {}) {
-  return renderMessages(peerId, { silent: true, ...options });
+function refreshMessages(target, options = {}) {
+  return renderMessages(target, { silent: true, ...options });
 }
 
-async function refreshMessageThreadNow(peerId = null) {
-  const targetPeerId = Number(peerId || currentMessagePeerId() || 0);
-  if (!targetPeerId) return;
-  await refreshMessages(targetPeerId);
+async function refreshMessageThreadNow(target = null) {
+  const key = parseMessageConversationKey(target || currentMessageConversationKey()).key;
+  if (!key) return;
+  await refreshMessages(key);
   updateMessageThreadUnreadBadge(0);
 }
 
@@ -3603,7 +3750,7 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
   textarea.focus();
   const cursor = before.length + insert.length;
   textarea.setSelectionRange(cursor, cursor);
-  saveMessageComposerDraft(currentMessagePeerId(), textarea.value);
+  saveMessageComposerDraft(currentMessageConversationKey(), textarea.value);
 }
 
 function renderMessageRow(message) {
@@ -3629,71 +3776,81 @@ function renderMessageRows(messages = []) {
 }
 
 function renderMessageThread(peer, messages, options = {}) {
-  const peerId = peer.id || peer.peer_id;
+  const conversationType = options.conversationType === 'group' || peer.group_id ? 'group' : 'direct';
+  const conversationId = conversationType === 'group'
+    ? (peer.id || peer.group_id)
+    : (peer.id || peer.peer_id);
+  const conversationKey = messageConversationKey(conversationType, conversationId);
   const hasMore = !!options.hasMore;
+  const title = conversationType === 'group'
+    ? (peer.name || peer.group_name)
+    : (peer.username || peer.peer_username);
+  const subtitle = conversationType === 'group'
+    ? `${Number(peer.member_count || peer.group_member_count || peer.members?.length || 0)} 位成员`
+    : (peer.role || peer.peer_role || 'USER');
   return `
     <div class="message-thread-header">
-      <div class="message-avatar">${messagePeerInitial(peer.username || peer.peer_username)}</div>
+      <div class="message-avatar ${conversationType === 'group' ? 'group' : ''}">${messagePeerInitial(title)}</div>
       <div>
-        <div style="font-weight: 700; color: var(--text-main);">${esc(peer.username || peer.peer_username)}</div>
-        <div class="text-muted" style="font-size: 12px;">${esc(peer.role || peer.peer_role || 'USER')}</div>
+        <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
+        <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}</div>
       </div>
-      <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${peerId})" aria-label="查看新消息">0</button>
+      <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${jsArg(conversationKey)})" aria-label="查看新消息">0</button>
     </div>
 
-    <div class="message-thread-list" id="messageThreadList" data-message-peer-id="${esc(peerId)}" data-has-more="${hasMore ? '1' : '0'}" data-loading-older="0">
+    <div class="message-thread-list" id="messageThreadList" data-message-conversation-key="${esc(conversationKey)}" data-message-peer-id="${conversationType === 'direct' ? esc(conversationId) : ''}" data-has-more="${hasMore ? '1' : '0'}" data-loading-older="0">
       ${renderMessageHistoryLoader()}
       ${messages.length === 0 ? `
         <div class="message-empty-panel">
           <div class="empty-icon">✉</div>
-          <div class="text-muted" style="font-size: 13px;">还没有消息，发送第一条私信。</div>
+          <div class="text-muted" style="font-size: 13px;">还没有消息，发送第一条${conversationType === 'group' ? '群聊消息' : '私信'}。</div>
         </div>
       ` : renderMessageRows(messages)}
     </div>
 
     <div class="message-composer" id="messageComposerWrap">
-      <textarea id="messageComposer" rows="3" maxlength="4000" data-message-composer-peer-id="${esc(peerId)}" placeholder="输入私信内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${peerId})"></textarea>
+      <textarea id="messageComposer" rows="3" maxlength="4000" data-message-composer-key="${esc(conversationKey)}" data-message-composer-peer-id="${conversationType === 'direct' ? esc(conversationId) : ''}" placeholder="输入消息内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${jsArg(conversationKey)})"></textarea>
       <div class="message-drop-banner">松开以上传文件</div>
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
         <span class="text-muted message-composer-hint">最长 4000 字符 · 支持拖拽或粘贴文件，单个最大 20 MB</span>
         <div class="row gap-sm" style="flex-wrap: wrap;">
           <label class="btn btn-secondary message-file-button" for="messageFileInput">文件</label>
-          <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${peerId}, this)" />
-          <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${peerId})">发送</button>
+          <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${jsArg(conversationKey)}, this)" />
+          <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${jsArg(conversationKey)})">发送</button>
         </div>
       </div>
     </div>
   `;
 }
 
-function initMessageThreadPagination(peerId, hasMore = false) {
+function initMessageThreadPagination(target, hasMore = false) {
   const list = $('messageThreadList');
-  const normalizedPeerId = Number(peerId || 0);
-  if (!list || !normalizedPeerId) return;
+  const key = parseMessageConversationKey(target).key;
+  if (!list || !key) return;
 
-  list.dataset.messagePeerId = String(normalizedPeerId);
+  list.dataset.messageConversationKey = key;
   list.dataset.hasMore = hasMore ? '1' : '0';
   list.dataset.loadingOlder = '0';
 
   list.addEventListener('scroll', () => {
     if (list.scrollTop <= MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX) {
-      void loadOlderMessages(normalizedPeerId);
+      void loadOlderMessages(key);
     }
   }, { passive: true });
 
   setTimeout(() => {
     if (!document.body.contains(list)) return;
     if (list.scrollHeight <= list.clientHeight + 2) {
-      void loadOlderMessages(normalizedPeerId);
+      void loadOlderMessages(key);
     }
   }, 0);
 }
 
-async function loadOlderMessages(peerId = null) {
-  const targetPeerId = Number(peerId || currentMessagePeerId() || 0);
+async function loadOlderMessages(target = null) {
+  const key = parseMessageConversationKey(target || currentMessageConversationKey()).key;
   const list = $('messageThreadList');
-  if (!targetPeerId || !list) return;
-  if (Number(list.dataset.messagePeerId || 0) !== targetPeerId) return;
+  if (!key || !list) return;
+  if ((list.dataset.messageConversationKey || '') !== key) return;
   if (list.dataset.hasMore !== '1' || list.dataset.loadingOlder === '1') return;
 
   const beforeId = oldestRenderedMessageId(list);
@@ -3708,8 +3865,8 @@ async function loadOlderMessages(peerId = null) {
   setMessageHistoryLoader(list, '正在加载更早消息...');
 
   try {
-    const data = await api(`/api/messages/conversations/${targetPeerId}?limit=${MESSAGE_THREAD_PAGE_SIZE}&before_id=${beforeId}`, { headers: authHeaders() });
-    if (!document.body.contains(list) || Number(list.dataset.messagePeerId || 0) !== targetPeerId) return;
+    const data = await api(messageConversationApiPath(key, { beforeId }), { headers: authHeaders() });
+    if (!document.body.contains(list) || (list.dataset.messageConversationKey || '') !== key) return;
 
     const items = data.items || [];
     if (items.length) {
@@ -3743,11 +3900,12 @@ async function loadOlderMessages(peerId = null) {
 function renderMessageAttachment(message) {
   const attachmentId = message.attachment_id || message.id;
   if (!attachmentId) return '';
+  const attachmentScope = message.attachment_scope || message.message_type || (message.group_id ? 'group' : 'direct');
   const filename = message.attachment_filename || '附件';
   const contentType = message.attachment_content_type || 'application/octet-stream';
   if (!isImageAttachment(contentType)) {
     return `
-      <button class="message-file-card" type="button" onclick="downloadMessageFile(${attachmentId}, ${jsArg(filename)})">
+      <button class="message-file-card" type="button" onclick="downloadMessageFile(${jsArg(attachmentScope)}, ${attachmentId}, ${jsArg(filename)})">
         <span class="message-file-icon">FILE</span>
         <span class="message-file-info">
           <strong>${esc(filename)}</strong>
@@ -3757,11 +3915,12 @@ function renderMessageAttachment(message) {
       </button>
     `;
   }
-  const cachedUrl = getMessageAttachmentCacheEntry(attachmentId)?.url || '';
+  const cachedUrl = getMessageAttachmentCacheEntry(attachmentScope, attachmentId)?.url || '';
+  const attachmentKey = messageAttachmentCacheKey(attachmentScope, attachmentId);
   return `
-    <div class="message-image-frame" data-message-attachment-frame="${attachmentId}">
+    <div class="message-image-frame" data-message-attachment-frame="${esc(attachmentKey)}">
       <div class="message-image-placeholder"${cachedUrl ? ' style="display:none"' : ''}>图片加载中...</div>
-      <img class="message-image" data-message-attachment-id="${attachmentId}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImageFromAttachment(${attachmentId}, this.src)" />
+      <img class="message-image" data-message-attachment-id="${attachmentId}" data-message-attachment-scope="${esc(attachmentScope)}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImageFromAttachment(${jsArg(attachmentScope)}, ${attachmentId}, this.src)" />
     </div>
   `;
 }
@@ -3772,6 +3931,7 @@ async function hydrateMessageAttachments(options = {}) {
   const stickToBottom = !options.preserveScrollAbove && messageThreadIsNearBottom(list);
   for (const img of images) {
     const attachmentId = img.dataset.messageAttachmentId;
+    const attachmentScope = img.dataset.messageAttachmentScope || 'direct';
     const frame = img.closest('.message-image-frame');
     const placeholder = frame?.querySelector('.message-image-placeholder');
     const preserveScroll = !!options.preserveScrollAbove &&
@@ -3779,7 +3939,7 @@ async function hydrateMessageAttachments(options = {}) {
       img.getBoundingClientRect().top < list.getBoundingClientRect().top;
     const previousHeight = preserveScroll ? list.scrollHeight : 0;
     try {
-      const url = await loadMessageAttachmentUrl(attachmentId);
+      const url = await loadMessageAttachmentUrl(attachmentScope, attachmentId);
       img.src = url;
       await waitForImageReady(img);
       img.hidden = false;
@@ -3795,9 +3955,15 @@ async function hydrateMessageAttachments(options = {}) {
   }
 }
 
-async function downloadMessageFile(attachmentId, filename = 'attachment') {
+async function downloadMessageFile(scopeOrId, attachmentIdOrFilename = null, filenameValue = 'attachment') {
+  const target = typeof scopeOrId === 'string' && ['direct', 'group'].includes(scopeOrId)
+    ? normalizeMessageAttachmentTarget(scopeOrId, attachmentIdOrFilename)
+    : normalizeMessageAttachmentTarget(scopeOrId);
+  const filename = typeof scopeOrId === 'string' && ['direct', 'group'].includes(scopeOrId)
+    ? filenameValue
+    : (attachmentIdOrFilename || 'attachment');
   try {
-    const res = await fetch(`/api/messages/${attachmentId}/attachment`, { headers: authHeaders() });
+    const res = await fetch(messageAttachmentUrlPath(target.scope, target.id), { headers: authHeaders() });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -3830,8 +3996,10 @@ function collectMessageImagePreviewItems() {
   return Array.from(root.querySelectorAll('img[data-message-attachment-id]'))
     .map((img) => {
       const attachmentId = Number(img.dataset.messageAttachmentId || 0);
-      const cachedUrl = getMessageAttachmentCacheEntry(attachmentId)?.url || '';
+      const attachmentScope = img.dataset.messageAttachmentScope || 'direct';
+      const cachedUrl = getMessageAttachmentCacheEntry(attachmentScope, attachmentId)?.url || '';
       return {
+        attachmentScope,
         attachmentId,
         src: img.currentSrc || img.src || cachedUrl,
         alt: img.alt || '图片消息',
@@ -3840,10 +4008,11 @@ function collectMessageImagePreviewItems() {
     .filter((item) => item.attachmentId || item.src);
 }
 
-function findMessageImagePreviewIndex(items, attachmentId = 0, src = '') {
+function findMessageImagePreviewIndex(items, attachmentId = 0, src = '', attachmentScope = 'direct') {
   const normalizedId = Number(attachmentId || 0);
+  const normalizedScope = attachmentScope === 'group' ? 'group' : 'direct';
   if (normalizedId) {
-    const byId = items.findIndex((item) => Number(item.attachmentId || 0) === normalizedId);
+    const byId = items.findIndex((item) => Number(item.attachmentId || 0) === normalizedId && (item.attachmentScope || 'direct') === normalizedScope);
     if (byId >= 0) return byId;
   }
   if (src) {
@@ -3987,7 +4156,7 @@ async function setMessageImagePreviewIndex(index) {
   updateMessageImagePreviewControls(preview);
 
   try {
-    const src = item.src || (item.attachmentId ? await loadMessageAttachmentUrl(item.attachmentId) : '');
+    const src = item.src || (item.attachmentId ? await loadMessageAttachmentUrl(item.attachmentScope || 'direct', item.attachmentId) : '');
     if (state.messageImagePreview !== preview || preview.loadToken !== token) return;
     if (!src) throw new Error('Missing image source');
 
@@ -4156,18 +4325,23 @@ function initMessageImagePreview({ items = [], index = 0 } = {}) {
   setMessageImagePreviewIndex(preview.index);
 }
 
-function openMessageImageFromAttachment(attachmentId, src = '') {
-  openMessageImage(src, { attachmentId });
+function openMessageImageFromAttachment(scopeOrId, attachmentIdOrSrc = '', srcValue = '') {
+  if (typeof scopeOrId === 'string' && ['direct', 'group'].includes(scopeOrId)) {
+    openMessageImage(srcValue, { attachmentScope: scopeOrId, attachmentId: Number(attachmentIdOrSrc || 0) });
+    return;
+  }
+  openMessageImage(attachmentIdOrSrc, { attachmentScope: 'direct', attachmentId: Number(scopeOrId || 0) });
 }
 
 function openMessageImage(src, options = {}) {
   if (!src && !options.attachmentId) return;
   const attachmentId = Number(options.attachmentId || 0);
+  const attachmentScope = options.attachmentScope === 'group' ? 'group' : 'direct';
   const items = collectMessageImagePreviewItems();
   if (!items.length) {
-    items.push({ attachmentId, src, alt: '图片消息' });
+    items.push({ attachmentScope, attachmentId, src, alt: '图片消息' });
   }
-  const index = findMessageImagePreviewIndex(items, attachmentId, src);
+  const index = findMessageImagePreviewIndex(items, attachmentId, src, attachmentScope);
   openModal({
     title: '图片消息',
     body: `
@@ -4204,7 +4378,7 @@ function insertTextareaNewline(textarea) {
   textarea.value = `${textarea.value.slice(0, start)}\n${textarea.value.slice(end)}`;
   textarea.selectionStart = textarea.selectionEnd = start + 1;
   if (textarea.id === 'messageComposer') {
-    saveMessageComposerDraft(textarea.dataset.messageComposerPeerId || currentMessagePeerId(), textarea.value);
+    saveMessageComposerDraft(textarea.dataset.messageComposerKey || textarea.dataset.messageComposerPeerId || currentMessageConversationKey(), textarea.value);
   }
 }
 
@@ -4249,6 +4423,133 @@ function showNewMessageModal() {
     $('messageRecipient')?.focus();
     initNewMessageComposerInteractions();
   }, 50);
+}
+
+function showCreateMessageGroupModal() {
+  state.newGroupMembers = [];
+  const body = `
+    <div class="form-group">
+      <label for="newGroupName">群聊名称</label>
+      <input type="text" id="newGroupName" maxlength="80" placeholder="例如：竞赛讨论组" autocomplete="off" />
+    </div>
+    <div class="form-group">
+      <label for="newGroupMemberSearch">添加成员</label>
+      <input type="text" id="newGroupMemberSearch" placeholder="搜索用户名" autocomplete="off" oninput="searchMessageGroupUsers(this.value)" />
+      <div id="newGroupSelectedMembers" class="message-selected-users"></div>
+      <div id="messageGroupUserResults" class="message-user-results"></div>
+    </div>
+    <div id="newGroupError" class="notice error" style="display:none"></div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    <button class="btn btn-primary" id="newGroupCreateBtn" onclick="createMessageGroup()">创建群聊</button>
+  `;
+  openModal({ title: '新建群聊', body, footer });
+  setTimeout(() => {
+    renderSelectedMessageGroupMembers();
+    $('newGroupName')?.focus();
+  }, 50);
+}
+
+function renderSelectedMessageGroupMembers() {
+  const wrap = $('newGroupSelectedMembers');
+  if (!wrap) return;
+  const members = state.newGroupMembers || [];
+  wrap.innerHTML = members.length
+    ? members.map(member => `
+      <span class="message-selected-user">
+        <span class="message-avatar small">${messagePeerInitial(member.username)}</span>
+        <span>${esc(member.username)}</span>
+        <button type="button" aria-label="移除成员" title="移除成员" onclick="removeMessageGroupMember(${member.id})">×</button>
+      </span>
+    `).join('')
+    : '<span class="text-muted" style="font-size: 12px;">至少选择 1 位成员，当前用户会自动加入。</span>';
+}
+
+let messageGroupUserSearchTimer = null;
+
+function searchMessageGroupUsers(query) {
+  const resultsEl = $('messageGroupUserResults');
+  if (!resultsEl) return;
+
+  const q = String(query || '').trim();
+  if (!q) {
+    resultsEl.innerHTML = '';
+    return;
+  }
+
+  clearTimeout(messageGroupUserSearchTimer);
+  messageGroupUserSearchTimer = setTimeout(async () => {
+    try {
+      const selectedIds = new Set((state.newGroupMembers || []).map(member => Number(member.id)));
+      const data = await api(`/api/messages/users?q=${encodeURIComponent(q)}&limit=10`, { headers: authHeaders() });
+      const users = (data.items || []).filter(user => !selectedIds.has(Number(user.id)));
+      resultsEl.innerHTML = users.length === 0
+        ? `<div class="message-user-result muted">未找到可添加用户</div>`
+        : users.map(u => `
+          <button type="button" class="message-user-result" onclick="selectMessageGroupMember(${u.id}, ${jsArg(u.username)}, ${jsArg(u.role || 'USER')})">
+            <span class="message-avatar small">${messagePeerInitial(u.username)}</span>
+            <span>
+              <strong>${esc(u.username)}</strong>
+              <span class="text-muted">${esc(u.role || 'USER')}</span>
+            </span>
+          </button>
+        `).join('');
+    } catch (err) {
+      resultsEl.innerHTML = `<div class="message-user-result muted">${esc(err.message)}</div>`;
+    }
+  }, 200);
+}
+
+function selectMessageGroupMember(userId, username, role = 'USER') {
+  const id = Number(userId || 0);
+  if (!id || id === Number(state.user?.id || 0)) return;
+  if (!(state.newGroupMembers || []).some(member => Number(member.id) === id)) {
+    state.newGroupMembers.push({ id, username, role });
+  }
+  if ($('newGroupMemberSearch')) $('newGroupMemberSearch').value = '';
+  if ($('messageGroupUserResults')) $('messageGroupUserResults').innerHTML = '';
+  renderSelectedMessageGroupMembers();
+  $('newGroupMemberSearch')?.focus();
+}
+
+function removeMessageGroupMember(userId) {
+  const id = Number(userId || 0);
+  state.newGroupMembers = (state.newGroupMembers || []).filter(member => Number(member.id) !== id);
+  renderSelectedMessageGroupMembers();
+}
+
+async function createMessageGroup() {
+  const btn = $('newGroupCreateBtn');
+  const errEl = $('newGroupError');
+  const name = $('newGroupName')?.value.trim();
+  const memberIds = (state.newGroupMembers || []).map(member => Number(member.id)).filter(Boolean);
+
+  if (!name) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写群聊名称。'; }
+    return;
+  }
+  if (memberIds.length === 0) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请至少添加 1 位成员。'; }
+    return;
+  }
+
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '创建中...'; }
+    const data = await api('/api/messages/groups', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, member_ids: memberIds }),
+    });
+    closeModal();
+    state.newGroupMembers = [];
+    toast('群聊已创建', 'success');
+    openMessageConversation(messageConversationKey('group', data.group?.id));
+  } catch (err) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '创建群聊'; }
+  }
 }
 
 function updateNewMessageFileLabel(input, explicitFiles = null) {
@@ -4371,24 +4672,33 @@ async function sendNewMessage() {
 }
 
 async function sendMessageToPeer(peerId) {
+  const target = parseMessageConversationKey(peerId);
   const textarea = $('messageComposer');
   const btn = $('sendMessageBtn');
   const body = textarea?.value.trim();
   if (!body) {
-    toast('请输入私信内容', 'warning');
+    toast('请输入消息内容', 'warning');
     return;
   }
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
-    await api('/api/messages', {
-      method: 'POST',
-      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipient_id: Number(peerId), body_md: body }),
-    });
+    if (target.type === 'group') {
+      await api(`/api/messages/groups/${target.id}/messages`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body_md: body }),
+      });
+    } else {
+      await api('/api/messages', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipient_id: Number(target.id), body_md: body }),
+      });
+    }
     if (textarea) textarea.value = '';
-    clearMessageComposerDraft(peerId);
-    await refreshMessages(peerId, { preserveComposer: false, focusComposer: true });
+    clearMessageComposerDraft(target.key);
+    await refreshMessages(target.key, { preserveComposer: false, focusComposer: true });
   } catch (err) {
     toast(`发送失败: ${err.message}`, 'error');
     textarea?.focus({ preventScroll: true });
@@ -4403,6 +4713,7 @@ function isAllowedMessageFile(file) {
 }
 
 async function sendFileToPeer(peerId, input) {
+  const target = parseMessageConversationKey(peerId);
   const files = normalizeMessageFiles(input?.files);
   if (!files.length) return;
   const fileError = messageFileValidationError(files);
@@ -4412,27 +4723,28 @@ async function sendFileToPeer(peerId, input) {
     return;
   }
 
-  await sendFilesToPeer(peerId, files, { input });
+  await sendFilesToPeer(target.key, files, { input });
 }
 
 function initMessageComposerInteractions(peerId) {
+  const target = parseMessageConversationKey(peerId);
   const composer = $('messageComposer');
   const composerWrap = $('messageComposerWrap');
   if (!composer || !composerWrap) return;
 
   composer.addEventListener('input', () => {
-    saveMessageComposerDraft(peerId, composer.value);
+    saveMessageComposerDraft(target.key, composer.value);
   });
 
   composer.addEventListener('paste', (event) => {
     const files = extractMessageFiles(event.clipboardData);
     if (!files.length) return;
     event.preventDefault();
-    void sendFilesToPeer(peerId, files);
+    void sendFilesToPeer(target.key, files);
   });
 
   bindMessageDropZone(composerWrap, (files) => {
-    void sendFilesToPeer(peerId, files);
+    void sendFilesToPeer(target.key, files);
   });
 }
 
@@ -4457,6 +4769,7 @@ function initNewMessageComposerInteractions() {
 }
 
 async function sendFilesToPeer(peerId, files, options = {}) {
+  const target = parseMessageConversationKey(peerId);
   const selectedFiles = normalizeMessageFiles(files);
   if (!selectedFiles.length) return;
   const fileError = messageFileValidationError(selectedFiles);
@@ -4473,18 +4786,20 @@ async function sendFilesToPeer(peerId, files, options = {}) {
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
-    await uploadDirectMessageFiles({
-      recipientId: Number(peerId),
+    await uploadMessageFiles({
+      conversationType: target.type,
+      recipientId: target.type === 'direct' ? Number(target.id) : null,
+      groupId: target.type === 'group' ? Number(target.id) : null,
       body: caption,
       files: selectedFiles,
     });
     if (textarea) textarea.value = '';
     if (input) input.value = '';
-    clearMessageComposerDraft(peerId);
+    clearMessageComposerDraft(target.key);
     if (selectedFiles.length > 1) {
       toast(`已发送 ${selectedFiles.length} 个文件`, 'success');
     }
-    await refreshMessages(peerId, { preserveComposer: false, focusComposer: true });
+    await refreshMessages(target.key, { preserveComposer: false, focusComposer: true });
   } catch (err) {
     toast(`文件发送失败: ${err.message}`, 'error');
     textarea?.focus({ preventScroll: true });
@@ -6650,8 +6965,11 @@ function route() {
   if ((match = path.match(/^\/contests\/([^/]+)\/problems\/([^/]+)$/))) {
     return renderProblemDetail(match[2], match[1]);
   }
+  if ((match = path.match(/^\/messages\/groups\/(\d+)$/))) {
+    return renderMessages(`group:${match[1]}`);
+  }
   if ((match = path.match(/^\/messages\/(\d+)$/))) {
-    return renderMessages(Number(match[1]));
+    return renderMessages(`direct:${match[1]}`);
   }
   if ((match = path.match(/^\/contests\/([^/]+)$/))) {
     return renderContestDetail(match[1]);
@@ -7338,6 +7656,7 @@ Object.assign(window, {
   showAnnouncementModal, publishAnnouncement,
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
+  showCreateMessageGroupModal, searchMessageGroupUsers, selectMessageGroupMember, removeMessageGroupMember, createMessageGroup,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile,

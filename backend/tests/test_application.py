@@ -30,5 +30,11 @@ def test_create_app_registers_core_routes():
     assert "/api/messages/unread-count" in paths
     assert "/api/messages/files" in paths
     assert "/api/messages/images" in paths
+    assert "/api/messages/groups" in paths
+    assert "/api/messages/groups/{group_id}" in paths
+    assert "/api/messages/groups/{group_id}/messages" in paths
+    assert "/api/messages/groups/{group_id}/files" in paths
+    assert "/api/messages/groups/{group_id}/read" in paths
+    assert "/api/messages/group-messages/{message_id}/attachment" in paths
     assert "/api/messages/{message_id}/attachment" in paths
     assert "/api/messages/{message_id}/image" in paths

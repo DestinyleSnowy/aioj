@@ -226,6 +226,53 @@ create table if not exists direct_messages (
   )
 );
 
+create table if not exists message_groups (
+  id bigserial primary key,
+  name text not null,
+  owner_id bigint references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint message_groups_name_length_check check (
+    length(btrim(name)) between 1 and 80
+  )
+);
+
+create table if not exists message_group_members (
+  group_id bigint not null references message_groups(id) on delete cascade,
+  user_id bigint not null references users(id) on delete cascade,
+  role text not null default 'MEMBER',
+  joined_at timestamptz not null default now(),
+  primary key (group_id, user_id),
+  constraint message_group_members_role_check check (role in ('OWNER', 'MEMBER'))
+);
+
+create table if not exists group_messages (
+  id bigserial primary key,
+  group_id bigint not null references message_groups(id) on delete cascade,
+  sender_id bigint not null references users(id) on delete cascade,
+  body_md text not null default '',
+  attachment_object_key text,
+  attachment_content_type text,
+  attachment_filename text,
+  attachment_size_bytes integer,
+  created_at timestamptz not null default now(),
+  constraint group_messages_content_check check (
+    length(btrim(body_md)) between 1 and 4000
+    or attachment_object_key is not null
+  ),
+  constraint group_messages_attachment_size_check check (
+    attachment_size_bytes is null or attachment_size_bytes between 1 and 20971520
+  )
+);
+
+create table if not exists group_message_reads (
+  group_id bigint not null references message_groups(id) on delete cascade,
+  user_id bigint not null references users(id) on delete cascade,
+  last_read_message_id bigint references group_messages(id) on delete set null,
+  read_at timestamptz not null default now(),
+  primary key (group_id, user_id)
+);
+
 create table if not exists audit_logs (
   id bigserial primary key,
   user_id bigint references users(id) on delete set null,
@@ -261,6 +308,10 @@ create index if not exists idx_direct_messages_conversation on direct_messages(
   created_at desc,
   id desc
 );
+create index if not exists idx_message_group_members_user on message_group_members(user_id, joined_at desc, group_id);
+create index if not exists idx_group_messages_group_created on group_messages(group_id, created_at desc, id desc);
+create index if not exists idx_group_messages_sender_created on group_messages(sender_id, created_at desc, id desc);
+create index if not exists idx_group_message_reads_user on group_message_reads(user_id, group_id);
 create index if not exists idx_audit_logs_created_desc on audit_logs(created_at desc, id desc);
 create index if not exists idx_audit_logs_user_created on audit_logs(user_id, created_at desc, id desc);
 create index if not exists idx_audit_logs_resource on audit_logs(resource_type, resource_id, created_at desc);
