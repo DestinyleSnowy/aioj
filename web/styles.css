@@ -316,6 +316,11 @@ body {
   overflow-x: hidden;
 }
 
+body.messages-page-active {
+  height: 100dvh;
+  overflow: hidden;
+}
+
 a {
   color: var(--color-primary);
   text-decoration: none;
@@ -633,6 +638,27 @@ p {
   display: flex;
   flex-direction: column;
   padding-left: 0;
+}
+
+body.messages-page-active .app-shell,
+body.messages-page-active .main {
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@supports selector(body:has(.content.messages-page)) {
+  body:has(.content.messages-page) {
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  body:has(.content.messages-page) .app-shell,
+  body:has(.content.messages-page) .main {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
 }
 
 /* Floating Top Header */

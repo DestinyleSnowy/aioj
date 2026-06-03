@@ -77,6 +77,7 @@ function refreshDocumentTitle() {
 
 function setPage(title) {
   $('app')?.classList.remove('messages-page');
+  document.body.classList.remove('messages-page-active');
   $('pageTitle').textContent = title || 'AIOJ';
   if ($('pageSubtitle')) {
     $('pageSubtitle').textContent = '';
@@ -3414,6 +3415,7 @@ function ensureMessageAutoRefresh() {
 
 async function renderMessages(peerId = null, options = {}) {
   setPage('私信');
+  document.body.classList.add('messages-page-active');
   const app = $('app');
   app.classList.add('messages-page');
   if (!state.user) {
@@ -4008,7 +4010,9 @@ async function setMessageImagePreviewIndex(index) {
 function showMessageImagePreviewOffset(delta) {
   const preview = state.messageImagePreview;
   if (!preview) return;
-  setMessageImagePreviewIndex(preview.index + delta);
+  const nextIndex = preview.index + delta;
+  if (nextIndex < 0 || nextIndex >= preview.items.length) return;
+  setMessageImagePreviewIndex(nextIndex);
 }
 
 function showPreviousMessageImage() {
