@@ -7,6 +7,7 @@ from app.routers.messages import (
     normalize_message_cursor,
     normalize_optional_message_body,
     safe_attachment_filename,
+    trim_message_page,
     validate_file_upload,
 )
 
@@ -42,6 +43,14 @@ def test_normalize_message_cursor_allows_positive_ids_only():
     with pytest.raises(HTTPException) as malformed:
         normalize_message_cursor("bad")
     assert malformed.value.status_code == 400
+
+
+def test_trim_message_page_keeps_newest_rows_when_extra_cursor_row_exists():
+    rows = [{"id": id_} for id_ in range(1, 22)]
+
+    page = trim_message_page(rows, 20)
+
+    assert [row["id"] for row in page] == list(range(2, 22))
 
 
 def test_optional_message_body_allows_empty_caption_but_limits_length():

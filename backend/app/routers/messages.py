@@ -146,6 +146,12 @@ def normalize_message_cursor(value) -> int | None:
     return cursor
 
 
+def trim_message_page(rows, limit: int):
+    if limit <= 0:
+        return []
+    return list(rows)[-limit:]
+
+
 @router.get("/api/messages/unread-count")
 def direct_message_unread_count(user=Depends(require_user)):
     with engine.connect() as conn:
@@ -361,7 +367,7 @@ def get_message_conversation(
 
     return {
         "peer": dict(peer),
-        "items": [dict(row) for row in rows[:limit]],
+        "items": [dict(row) for row in trim_message_page(rows, limit)],
         "has_more": len(rows) > limit,
     }
 
