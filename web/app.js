@@ -50,8 +50,7 @@ let problemEditorState = null;
 let problemEditorTempId = 0;
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
-const MESSAGE_THREAD_PAGE_SIZE = 40;
-const MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX = 32;
+const MESSAGE_THREAD_PAGE_SIZE = 20;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
 const MESSAGE_LAYOUT_STACK_BREAKPOINT_PX = 960;
 const MESSAGE_SIDEBAR_STORAGE_KEY = 'aioj_message_sidebar_width';
@@ -3123,20 +3122,31 @@ function oldestRenderedMessageId(list = $('messageThreadList')) {
   return Number.isFinite(id) && id > 0 ? id : 0;
 }
 
-function renderMessageHistoryLoader() {
-  return `<div class="message-history-loader" data-message-history-loader hidden></div>`;
+function renderMessageHistoryLoader(hasMore = false) {
+  return `
+    <div class="message-history-loader" data-message-history-loader${hasMore ? '' : ' hidden'}>
+      <button class="btn btn-secondary btn-sm" type="button" data-message-history-button onclick="loadOlderMessages()">加载更早消息</button>
+    </div>
+  `;
 }
 
-function setMessageHistoryLoader(list, text = '') {
+function setMessageHistoryLoader(list, mode = 'ready') {
   const loader = list?.querySelector('[data-message-history-loader]');
+  const button = loader?.querySelector('[data-message-history-button]');
   if (!loader) return;
-  if (!text) {
+  if (mode === 'hidden') {
     loader.hidden = true;
-    loader.textContent = '';
+    if (button) {
+      button.disabled = false;
+      button.textContent = '加载更早消息';
+    }
     return;
   }
   loader.hidden = false;
-  loader.textContent = text;
+  if (button) {
+    button.disabled = mode === 'loading';
+    button.textContent = mode === 'loading' ? '加载中...' : '加载更早消息';
+  }
 }
 
 function clearMessageAttachmentCache() {
@@ -3639,7 +3649,7 @@ function renderMessageThread(peer, messages, options = {}) {
     </div>
 
     <div class="message-thread-list" id="messageThreadList" data-message-peer-id="${esc(peerId)}" data-has-more="${hasMore ? '1' : '0'}" data-loading-older="0">
-      ${renderMessageHistoryLoader()}
+      ${renderMessageHistoryLoader(hasMore)}
       ${messages.length === 0 ? `
         <div class="message-empty-panel">
           <div class="empty-icon">✉</div>
@@ -3671,19 +3681,7 @@ function initMessageThreadPagination(peerId, hasMore = false) {
   list.dataset.messagePeerId = String(normalizedPeerId);
   list.dataset.hasMore = hasMore ? '1' : '0';
   list.dataset.loadingOlder = '0';
-
-  list.addEventListener('scroll', () => {
-    if (list.scrollTop <= MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX) {
-      void loadOlderMessages(normalizedPeerId);
-    }
-  }, { passive: true });
-
-  setTimeout(() => {
-    if (!document.body.contains(list)) return;
-    if (list.scrollHeight <= list.clientHeight + 2) {
-      void loadOlderMessages(normalizedPeerId);
-    }
-  }, 0);
+  setMessageHistoryLoader(list, hasMore ? 'ready' : 'hidden');
 }
 
 async function loadOlderMessages(peerId = null) {
@@ -3702,7 +3700,7 @@ async function loadOlderMessages(peerId = null) {
   const previousHeight = list.scrollHeight;
   const previousTop = list.scrollTop;
   list.dataset.loadingOlder = '1';
-  setMessageHistoryLoader(list, '正在加载更早消息...');
+  setMessageHistoryLoader(list, 'loading');
 
   try {
     const data = await api(`/api/messages/conversations/${targetPeerId}?limit=${MESSAGE_THREAD_PAGE_SIZE}&before_id=${beforeId}`, { headers: authHeaders() });
@@ -3721,18 +3719,18 @@ async function loadOlderMessages(peerId = null) {
     }
 
     list.dataset.hasMore = data.has_more ? '1' : '0';
-    setMessageHistoryLoader(list, '');
+    setMessageHistoryLoader(list, data.has_more ? 'ready' : 'hidden');
     list.scrollTop = previousTop + (list.scrollHeight - previousHeight);
     hydrateMessageAttachments({ preserveScrollAbove: true });
   } catch (err) {
     if (document.body.contains(list)) {
-      setMessageHistoryLoader(list, '');
+      setMessageHistoryLoader(list, list.dataset.hasMore === '1' ? 'ready' : 'hidden');
       toast(`加载更早消息失败: ${err.message}`, 'error');
     }
   } finally {
     if (document.body.contains(list)) {
       list.dataset.loadingOlder = '0';
-      if (list.dataset.hasMore !== '1') setMessageHistoryLoader(list, '');
+      if (list.dataset.hasMore !== '1') setMessageHistoryLoader(list, 'hidden');
     }
   }
 }
