@@ -5,6 +5,17 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libreoffice-writer \
+        fontconfig \
+        fonts-dejavu \
+        fonts-liberation \
+        fonts-noto \
+        fonts-noto-cjk \
+        fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
