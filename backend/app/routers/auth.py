@@ -11,7 +11,7 @@ from app.security import hash_password, make_token, verify_password
 from app.services.audit import audit_log
 from app.services.system_settings import get_setting_bool
 from app.storage import S3_BUCKET_AVATARS, delete_object, get_bytes, put_bytes
-from app.user_profiles import serialize_user, validate_avatar_upload, validate_username
+from app.user_profiles import normalize_signature, serialize_user, validate_avatar_upload, validate_username
 
 router = APIRouter()
 
@@ -37,7 +37,7 @@ def register(payload: dict, request: Request):
                     """
                     insert into users(username, email, password_hash, role)
                     values (:username, :email, :password_hash, 'USER')
-                    returning id, username, email, role, created_at, avatar_object_key, avatar_updated_at
+                    returning id, username, email, role, signature, created_at, avatar_object_key, avatar_updated_at
                     """
                 ),
                 {"username": username, "email": email, "password_hash": hash_password(password)},
@@ -65,6 +65,7 @@ def login(payload: dict, request: Request):
                   email,
                   password_hash,
                   role,
+                  signature,
                   created_at,
                   avatar_object_key,
                   avatar_updated_at,
@@ -140,7 +141,7 @@ def auth_change_username(payload: dict, request: Request, user=Depends(require_u
                     update users
                     set username = :username
                     where id = :id
-                    returning id, username, email, role, created_at, avatar_object_key, avatar_updated_at
+                    returning id, username, email, role, signature, created_at, avatar_object_key, avatar_updated_at
                     """
                 ),
                 {"id": user["id"], "username": username},
@@ -169,6 +170,38 @@ def auth_change_username(payload: dict, request: Request, user=Depends(require_u
         "token": make_token(updated_user["id"], updated_user["username"], updated_user["role"]),
         "user": updated_user,
     }
+
+
+@router.post("/api/auth/signature")
+def auth_update_signature(payload: dict, request: Request, user=Depends(require_user)):
+    signature = normalize_signature(payload.get("signature"))
+    check_rate_limit(client_key(request, "auth-signature", str(user["id"])), max_calls=30, window_seconds=3600)
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text(
+                """
+                update users
+                set signature = :signature
+                where id = :id
+                returning id, username, email, role, signature, created_at, avatar_object_key, avatar_updated_at
+                """
+            ),
+            {"id": user["id"], "signature": signature},
+        ).mappings().first()
+        if not row:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="auth.signature.update",
+            resource_type="user",
+            resource_id=user["id"],
+            metadata={"signature_length": len(signature)},
+        )
+
+    return {"ok": True, "user": serialize_user(row)}
 
 
 @router.post("/api/auth/avatar")
@@ -209,7 +242,7 @@ async def auth_update_avatar(
                         avatar_content_type = :avatar_content_type,
                         avatar_updated_at = now()
                     where id = :id
-                    returning id, username, email, role, created_at, avatar_object_key, avatar_updated_at
+                    returning id, username, email, role, signature, created_at, avatar_object_key, avatar_updated_at
                     """
                 ),
                 {
@@ -257,6 +290,7 @@ def get_user_profile(username: str):
                   id,
                   username,
                   role,
+                  signature,
                   created_at,
                   avatar_object_key,
                   avatar_updated_at,

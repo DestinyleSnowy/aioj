@@ -3,7 +3,13 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
-from app.user_profiles import avatar_url_for_user, serialize_user, validate_avatar_upload, validate_username
+from app.user_profiles import (
+    avatar_url_for_user,
+    normalize_signature,
+    serialize_user,
+    validate_avatar_upload,
+    validate_username,
+)
 
 
 def test_validate_username_accepts_existing_registration_format():
@@ -16,6 +22,15 @@ def test_validate_username_rejects_short_long_or_invalid_values():
         with pytest.raises(HTTPException) as excinfo:
             validate_username(value)
         assert excinfo.value.status_code == 400
+
+
+def test_normalize_signature_trims_newlines_and_limits_length():
+    assert normalize_signature("  keep moving\nforward  ") == "keep moving forward"
+    assert normalize_signature(None) == ""
+
+    with pytest.raises(HTTPException) as excinfo:
+        normalize_signature("x" * 161)
+    assert excinfo.value.status_code == 400
 
 
 def test_validate_avatar_upload_accepts_supported_image_types():
@@ -56,6 +71,7 @@ def test_serialize_user_includes_avatar_url_and_created_at():
             "username": "alice",
             "email": "alice@example.com",
             "role": "USER",
+            "signature": "AI explorer",
             "created_at": created_at,
             "avatar_object_key": "avatars/3/current.png",
             "avatar_updated_at": updated_at,
@@ -63,4 +79,5 @@ def test_serialize_user_includes_avatar_url_and_created_at():
     )
 
     assert payload["created_at"] == created_at
+    assert payload["signature"] == "AI explorer"
     assert payload["avatar_url"] == "/api/users/3/avatar?v=1780488000"

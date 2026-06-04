@@ -9,6 +9,7 @@ def test_create_app_registers_core_routes():
     assert "/api/auth/login" in paths
     assert "/api/auth/avatar" in paths
     assert "/api/auth/change-username" in paths
+    assert "/api/auth/signature" in paths
     assert "/api/users/{username}/profile" in paths
     assert "/api/users/{user_id}/avatar" in paths
     assert "/api/problems/{slug}/resources" in paths

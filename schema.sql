@@ -8,6 +8,7 @@ create table if not exists users (
   password_hash text not null,
   role text not null default 'USER',
   is_disabled boolean not null default false,
+  signature text not null default '' check (length(signature) <= 160),
   avatar_object_key text,
   avatar_content_type text,
   avatar_updated_at timestamptz,

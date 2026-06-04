@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import HTTPException
 
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
+MAX_SIGNATURE_CHARS = 160
 USERNAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,49}")
 AVATAR_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
@@ -19,6 +20,13 @@ def validate_username(value: str | None) -> str:
     if not USERNAME_PATTERN.fullmatch(username):
         raise HTTPException(status_code=400, detail="Invalid username")
     return username
+
+
+def normalize_signature(value: str | None) -> str:
+    signature = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(signature) > MAX_SIGNATURE_CHARS:
+        raise HTTPException(status_code=400, detail=f"Signature must be at most {MAX_SIGNATURE_CHARS} characters")
+    return signature
 
 
 def normalize_avatar_content_type(filename: str | None, content_type: str | None) -> str:
@@ -70,7 +78,7 @@ def serialize_user(row) -> dict[str, Any]:
     data = dict(row)
     user = {
         key: data.get(key)
-        for key in ("id", "username", "email", "role", "created_at")
+        for key in ("id", "username", "email", "role", "signature", "created_at")
         if key in data
     }
     if "is_disabled" in data:

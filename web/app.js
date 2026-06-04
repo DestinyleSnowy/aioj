@@ -69,6 +69,7 @@ const MESSAGE_IMAGE_PREVIEW_MAX_SCALE = 12;
 const MESSAGE_IMAGE_PREVIEW_ZOOM_STEP = 1.18;
 const AVATAR_FILE_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
 const AVATAR_ACCEPT_ATTRIBUTE = 'image/png,image/jpeg,image/gif,image/webp';
+const DEFAULT_SIGNATURE = '这只咪很懒，什么也没有留下';
 const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
 const SIDEBAR_MODE_COLLAPSED = 'collapsed';
 const SIDEBAR_MODE_EXPANDED = 'expanded';
@@ -205,6 +206,11 @@ function renderAvatar(name, url = '', className = 'user-avatar', options = {}) {
 function userProfilePath(username) {
   const normalized = String(username || '').trim();
   return normalized ? `/users/${encodeURIComponent(normalized)}` : '/account';
+}
+
+function displaySignature(value) {
+  const signature = String(value || '').trim();
+  return signature || DEFAULT_SIGNATURE;
 }
 
 
@@ -791,12 +797,15 @@ function updateNav() {
 
   const footerEl = $('sidebarUser');
   if (state.user) {
+    const profilePath = userProfilePath(state.user.username);
     footerEl.innerHTML = `
-      ${renderAvatar(state.user.username, state.user.avatar_url, 'user-avatar')}
-      <div style="flex: 1; min-width: 0;">
+      <a class="sidebar-user-link" href="${esc(profilePath)}" data-link title="进入个人主页">
+        ${renderAvatar(state.user.username, state.user.avatar_url, 'user-avatar')}
+        <div class="sidebar-user-meta" style="flex: 1; min-width: 0;">
         <div style="font-weight: 600; color: var(--text-main); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${esc(state.user.username)}</div>
         <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase;">${esc(state.user.role)}</div>
-      </div>
+        </div>
+      </a>
     `;
   } else {
     footerEl.innerHTML = '<span class="text-muted">账户未登录</span>';
@@ -5294,6 +5303,7 @@ async function renderUserProfile(username) {
           ${renderAvatar(profile.username, profile.avatar_url, 'profile-avatar-container', { initialCount: 2 })}
           <h2>${esc(profile.username || '用户')}</h2>
           <span class="pill blue">${esc(profile.role || 'USER')}</span>
+          <p class="profile-signature">${esc(displaySignature(profile.signature))}</p>
           <div class="profile-summary-meta">
             <div>
               <span class="text-muted">加入时间</span>
@@ -5472,6 +5482,7 @@ async function renderAccount() {
           <div style="width: 100%; border-top: var(--border-subtle); margin-top: var(--space-lg); padding-top: var(--space-lg); text-align: left; display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
             <div style="display: flex; justify-content: space-between;"><span class="text-muted">关联邮箱</span><span style="font-weight:500;">${esc(state.user.email || '尚未绑定邮箱')}</span></div>
             <div style="display: flex; justify-content: space-between;"><span class="text-muted">安全角色组</span><span style="font-weight:500;">${esc(state.user.role === 'ADMIN' ? '裁判组 / 管理员' : '参赛选手')}</span></div>
+            <div style="display: flex; flex-direction: column; gap: 4px;"><span class="text-muted">个性签名</span><span style="font-weight:500; overflow-wrap:anywhere;">${esc(displaySignature(state.user.signature))}</span></div>
             <div style="display: flex; justify-content: space-between;"><span class="text-muted">注册时间</span><span class="text-muted">${state.user.created_at ? formatDate(state.user.created_at) : '—'}</span></div>
           </div>
         </div>
@@ -5517,6 +5528,34 @@ async function renderAccount() {
             </svg>
             保存用户名
           </button>
+        </div>
+
+        <div class="card" style="padding: var(--space-xl) var(--space-lg);">
+          <h3 class="card-title" style="margin-bottom: var(--space-lg); display: flex; align-items: center; gap: 10px;">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a4 4 0 0 1-4 4H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
+              <path d="M8 9h8"></path>
+              <path d="M8 13h5"></path>
+            </svg>
+            个性签名
+          </h3>
+
+          <div class="form-group">
+            <label for="signatureInput">主页签名</label>
+            <textarea id="signatureInput" maxlength="160" rows="3" placeholder="写一句会展示在个人主页上的签名">${esc(state.user.signature || '')}</textarea>
+          </div>
+
+          <div class="row flex-between" style="gap: var(--space-md); align-items: center; flex-wrap: wrap;">
+            <span class="text-muted" style="font-size: 12px;">最多 160 个字符</span>
+            <button class="btn btn-primary" id="signatureSaveBtn" onclick="changeSignature()">
+              <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 2px;">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              保存签名
+            </button>
+          </div>
+          <div id="signatureError" class="notice error" style="display:none; margin-top: var(--space-md);"></div>
+          <div id="signatureSuccess" class="notice success" style="display:none; margin-top: var(--space-md);"></div>
         </div>
 
         <div class="card" style="padding: var(--space-xl) var(--space-lg);">
@@ -5670,6 +5709,60 @@ async function changeUsername() {
     if (btn) {
       btn.disabled = false;
       btn.innerHTML = originalLabel || '保存用户名';
+    }
+  }
+}
+
+
+async function changeSignature() {
+  const input = $('signatureInput');
+  const signature = (input?.value || '').trim();
+  const errEl = $('signatureError');
+  const sucEl = $('signatureSuccess');
+  const btn = $('signatureSaveBtn');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  if (sucEl) { sucEl.style.display = 'none'; sucEl.textContent = ''; }
+
+  if (signature.length > 160) {
+    const message = '个性签名不能超过 160 个字符。';
+    if (errEl) { errEl.style.display = ''; errEl.textContent = message; }
+    toast(message, 'warning');
+    return;
+  }
+
+  const originalLabel = btn?.dataset.originalLabel || btn?.innerHTML || '保存签名';
+  if (btn) {
+    btn.dataset.originalLabel = originalLabel;
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+  }
+
+  try {
+    const data = await tryApi(
+      ['/api/auth/signature', '/api/account/signature'],
+      {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ signature }),
+      }
+    );
+    state.user = { ...(state.user || {}), ...((data && data.user) || {}) };
+    updateNav();
+    if (input) input.value = state.user.signature || '';
+    if (sucEl) {
+      sucEl.style.display = '';
+      sucEl.textContent = '个性签名已保存。';
+    }
+    toast('个性签名已更新。', 'success');
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel || '保存签名';
     }
   }
 }
@@ -8390,7 +8483,7 @@ Object.assign(window, {
   joinContest, submitInviteCode, leaveContest,
   showAskQuestionModal, submitQuestion,
   showAnswerQuestionModal, submitAnswer, closeQuestion,
-  changeUsername, changePassword, showResetPasswordModal, resetUserPassword,
+  changeUsername, changeSignature, changePassword, showResetPasswordModal, resetUserPassword,
   renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
   toggleUserRole, toggleUserDisabled,
   importProblem, updateProblemPackagePickerLabel, importProblemFromEditorPage,

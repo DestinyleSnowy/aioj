@@ -535,6 +535,23 @@ p {
   font-size: 12px;
 }
 
+.sidebar-user-link {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  color: inherit;
+  border-radius: var(--radius-md);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.sidebar-user-link:hover {
+  color: inherit;
+  background: hsla(0, 0%, 100%, 0.04);
+  transform: translateY(-1px);
+}
+
 .sidebar-footer .user-avatar {
   box-shadow: 0 0 12px hsla(var(--hue-accent), 85%, 63%, 0.2);
 }
@@ -622,8 +639,13 @@ p {
   }
 
   .app-shell.sidebar-collapsed .sidebar-footer .text-muted,
-  .app-shell.sidebar-collapsed .sidebar-footer > div:not(.user-avatar) {
+  .app-shell.sidebar-collapsed .sidebar-footer > div:not(.user-avatar),
+  .app-shell.sidebar-collapsed .sidebar-user-meta {
     display: none;
+  }
+
+  .app-shell.sidebar-collapsed .sidebar-user-link {
+    justify-content: center;
   }
 
   .app-shell.sidebar-collapsed .sidebar-collapse-btn .collapse-icon {
@@ -3534,6 +3556,15 @@ body.message-layout-resizing * {
   overflow-wrap: anywhere;
   font-size: 22px;
   font-weight: 750;
+}
+
+.profile-signature {
+  width: 100%;
+  margin-top: var(--space-md);
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .profile-summary-meta {

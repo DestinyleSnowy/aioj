@@ -25,6 +25,7 @@ def get_optional_user(authorization: Optional[str] = Header(None)):
                   username,
                   email,
                   role,
+                  signature,
                   created_at,
                   avatar_object_key,
                   avatar_updated_at,

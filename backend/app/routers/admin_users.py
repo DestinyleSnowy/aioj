@@ -21,6 +21,7 @@ def admin_users(user=Depends(require_admin)):
                   username,
                   email,
                   role,
+                  signature,
                   coalesce(is_disabled, false) as is_disabled,
                   created_at,
                   avatar_object_key,
@@ -52,6 +53,7 @@ def admin_set_user_role(user_id: int, payload: dict, user=Depends(require_admin)
                   username,
                   email,
                   role,
+                  signature,
                   coalesce(is_disabled, false) as is_disabled,
                   created_at,
                   avatar_object_key,
@@ -91,6 +93,7 @@ def admin_set_user_disabled(user_id: int, payload: dict, user=Depends(require_ad
                   username,
                   email,
                   role,
+                  signature,
                   coalesce(is_disabled, false) as is_disabled,
                   created_at,
                   avatar_object_key,
@@ -126,7 +129,7 @@ def admin_reset_user_password(user_id: int, payload: dict, user=Depends(require_
                 update users
                 set password_hash = :password_hash
                 where id = :id
-                returning id, username, email, role, created_at, avatar_object_key, avatar_updated_at
+                returning id, username, email, role, signature, created_at, avatar_object_key, avatar_updated_at
                 """
             ),
             {"id": user_id, "password_hash": hash_password(new_password)},
