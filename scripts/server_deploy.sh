@@ -41,6 +41,9 @@ docker compose run --rm api alembic upgrade head
 echo "[deploy] starting application services..."
 docker compose up -d --remove-orphans api worker caddy
 
+echo "[deploy] recreating caddy to pick up updated Caddyfile headers..."
+docker compose up -d --no-deps --force-recreate caddy
+
 echo "[deploy] checking legacy systemd judge agent..."
 if sudo -n systemctl cat aioj-judge-agent >/dev/null 2>&1; then
   if [ "${AIOJ_ENABLE_LEGACY_JUDGE_AGENT:-false}" = "true" ]; then
