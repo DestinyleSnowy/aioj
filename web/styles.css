@@ -2750,17 +2750,13 @@ tr:last-child td {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-md) var(--space-lg);
-  padding-right: calc(var(--space-lg) + 42px);
   border-bottom: var(--border-light);
   background: hsla(0, 0%, 100%, 0.018);
   position: relative;
 }
 
 .message-thread-unread-badge {
-  position: absolute;
-  top: 50%;
-  right: var(--space-lg);
-  transform: translateY(-50%);
+  flex: 0 0 auto;
   min-width: 24px;
   height: 24px;
   padding: 0 7px;
@@ -2782,7 +2778,6 @@ tr:last-child td {
 
 .message-thread-action {
   flex: 0 0 auto;
-  margin-right: 34px;
   white-space: nowrap;
 }
 
@@ -2812,7 +2807,7 @@ tr:last-child td {
 
 .message-row {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: flex-start;
   gap: 10px;
 }

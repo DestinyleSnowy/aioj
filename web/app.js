@@ -243,7 +243,7 @@ function messageSenderDisplayLabel(message) {
 function messageMetaLabel(message) {
   const timestamp = formatDate(message?.created_at);
   if (!isGroupConversationMessage(message)) {
-    return `${messageSenderDisplayLabel(message)} · ${timestamp}`;
+    return timestamp;
   }
   const username = String(message?.sender_username || '').trim();
   const nickname = String(message?.sender_group_nickname || '').trim();
@@ -3877,8 +3877,8 @@ function renderMessageThread(peer, messages, options = {}) {
         <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
         <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}</div>
       </div>
-      ${conversationType === 'group' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showMessageGroupSettings(${conversationId})">群设置</button>` : ''}
       <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${jsArg(conversationKey)})" aria-label="查看新消息">0</button>
+      ${conversationType === 'group' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showMessageGroupSettings(${conversationId})">群设置</button>` : ''}
     </div>
 
     <div class="message-thread-list" id="messageThreadList" data-message-conversation-key="${esc(conversationKey)}" data-message-peer-id="${conversationType === 'direct' ? esc(conversationId) : ''}" data-has-more="${hasMore ? '1' : '0'}" data-loading-older="0">
