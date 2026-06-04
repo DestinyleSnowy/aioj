@@ -49,6 +49,7 @@ const state = {
   currentProblem: null,
   activeProblemStatementId: '',
   problemStatementPdfObjectUrls: new Map(),
+  problemStatementPdfPreviewModes: new Map(),
   problemStatementPdfPreviewRequestId: 0,
   markdownConfigured: false,
 };
@@ -527,6 +528,7 @@ function clearProblemStatementPdfPreviewCache() {
     URL.revokeObjectURL(objectUrl);
   }
   state.problemStatementPdfObjectUrls.clear();
+  state.problemStatementPdfPreviewModes.clear();
 }
 
 function setProblemStatementPdfStatus(message, tone = 'loading', downloadUrl = '') {
@@ -543,6 +545,37 @@ function setProblemStatementPdfStatus(message, tone = 'loading', downloadUrl = '
   status.style.display = '';
 }
 
+function problemStatementPdfAllowsDirectFrame(res) {
+  const xFrameOptions = String(res.headers.get('x-frame-options') || '').trim().toUpperCase();
+  if (xFrameOptions === 'DENY') return false;
+
+  const csp = String(res.headers.get('content-security-policy') || '');
+  const frameAncestors = csp.match(/(?:^|;)\s*frame-ancestors\s+([^;]+)/i)?.[1]?.toLowerCase() || '';
+  if (frameAncestors.includes("'none'")) return false;
+  if (frameAncestors && !frameAncestors.includes("'self'") && !frameAncestors.includes("*")) return false;
+
+  return true;
+}
+
+async function detectProblemStatementPdfPreviewMode(downloadUrl) {
+  if (state.problemStatementPdfPreviewModes.has(downloadUrl)) {
+    return state.problemStatementPdfPreviewModes.get(downloadUrl);
+  }
+
+  let mode = 'blob';
+  try {
+    const res = await fetch(downloadUrl, { method: 'HEAD', headers: authHeaders() });
+    if (res.ok && problemStatementPdfAllowsDirectFrame(res)) {
+      mode = 'direct';
+    }
+  } catch {
+    mode = 'blob';
+  }
+
+  state.problemStatementPdfPreviewModes.set(downloadUrl, mode);
+  return mode;
+}
+
 async function hydrateProblemStatementPdfPreview(problem = state.currentProblem) {
   const active = problemActiveStatement(problem);
   const frame = $('problemStatementPdfFrame');
@@ -550,6 +583,43 @@ async function hydrateProblemStatementPdfPreview(problem = state.currentProblem)
 
   const downloadUrl = String(active.downloadUrl || '').trim();
   if (!downloadUrl) return;
+
+  const requestId = ++state.problemStatementPdfPreviewRequestId;
+  frame.onload = null;
+  frame.onerror = null;
+  frame.hidden = true;
+  frame.removeAttribute('src');
+  setProblemStatementPdfStatus('正在准备 PDF 页内预览...');
+
+  const mode = await detectProblemStatementPdfPreviewMode(downloadUrl);
+  const currentFrame = $('problemStatementPdfFrame');
+  const currentActive = problemActiveStatement(problem);
+  if (
+    requestId !== state.problemStatementPdfPreviewRequestId ||
+    currentFrame !== frame ||
+    currentActive?.kind !== 'pdf' ||
+    currentActive?.downloadUrl !== downloadUrl
+  ) {
+    return;
+  }
+
+  if (mode === 'direct') {
+    const directSrc = `${downloadUrl}#view=FitH`;
+    frame.onload = () => {
+      if (requestId !== state.problemStatementPdfPreviewRequestId) return;
+      const status = $('problemStatementPdfStatus');
+      if (status) status.style.display = 'none';
+    };
+    frame.onerror = () => {
+      if (requestId !== state.problemStatementPdfPreviewRequestId) return;
+      state.problemStatementPdfPreviewModes.set(downloadUrl, 'blob');
+      hydrateProblemStatementPdfPreview(problem);
+    };
+    frame.hidden = false;
+    setProblemStatementPdfStatus('正在加载 PDF 页内预览...');
+    frame.src = directSrc;
+    return;
+  }
 
   const cachedObjectUrl = state.problemStatementPdfObjectUrls.get(downloadUrl);
   if (cachedObjectUrl) {
@@ -560,7 +630,6 @@ async function hydrateProblemStatementPdfPreview(problem = state.currentProblem)
     return;
   }
 
-  const requestId = ++state.problemStatementPdfPreviewRequestId;
   frame.hidden = true;
   frame.removeAttribute('src');
   setProblemStatementPdfStatus('正在加载 PDF 页内预览...');

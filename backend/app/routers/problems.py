@@ -5,7 +5,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from sqlalchemy import text
 
 from app.db import engine
@@ -388,8 +388,8 @@ def get_problem_resource_file(slug: str, asset_path: str):
     )
 
 
-@router.get("/api/problems/{slug}/statement-pdfs/{asset_id}")
-def get_problem_statement_pdf(slug: str, asset_id: str):
+@router.api_route("/api/problems/{slug}/statement-pdfs/{asset_id}", methods=["GET", "HEAD"])
+def get_problem_statement_pdf(slug: str, asset_id: str, request: Request):
     slug = safe_slug(slug)
     with engine.connect() as conn:
         row = latest_problem_version(conn, slug, public_only=True)
@@ -403,11 +403,16 @@ def get_problem_statement_pdf(slug: str, asset_id: str):
         raise HTTPException(status_code=404, detail="Statement PDF not found")
 
     filename = str(match.get("filename") or f"{asset_id}.pdf")
+    media_type = guess_content_type(filename, "application/pdf")
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    if request.method == "HEAD":
+        return Response(media_type=media_type, headers=headers)
+
     content = get_bytes(S3_BUCKET_PROBLEMS, match["object_key"])
     return Response(
         content=content,
-        media_type=guess_content_type(filename, "application/pdf"),
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+        media_type=media_type,
+        headers=headers,
     )
 
 
