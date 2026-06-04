@@ -2878,6 +2878,7 @@ function copyTerminalText() {
 // ─── Notifications ──────────────────────────────────────────────────────────
 function notificationTypeLabel(kind) {
   return ({
+    ADMIN_BROADCAST: '管理员广播',
     SUBMISSION_RESULT: '评测结果',
     CONTEST_REGISTRATION: '报名状态',
     CONTEST_ANNOUNCEMENT: '比赛公告',
@@ -5869,8 +5870,9 @@ async function renderUsers() {
     const items = data.items || [];
     app.innerHTML = `
       <div class="card">
-        <div class="card-header">
+        <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
           <h3 class="card-title">系统注册选手列表 (${items.length} 个记录)</h3>
+          <button class="btn btn-primary" onclick="showAdminBroadcastModal()">发送管理员广播</button>
         </div>
         <div class="table-wrap">
           <table>
@@ -5974,6 +5976,56 @@ async function resetUserPassword(userId) {
     toast('选手安全密码已重置，请告知选手登录。', 'success');
   } catch (err) {
     toast(`更新选手密码失败: ${err.message}`, 'error');
+  }
+}
+
+function showAdminBroadcastModal() {
+  openModal({
+    title: '发送管理员广播通知',
+    body: `
+      <div class="notice info" style="margin-bottom: var(--space-md);">
+        广播会写入所有未被停权账号的站内通知中心，管理员本人也会收到一份。
+      </div>
+      <div class="form-group">
+        <label for="broadcastTitle">广播标题</label>
+        <input type="text" id="broadcastTitle" placeholder="如：平台维护窗口调整通知" />
+      </div>
+      <div class="form-group">
+        <label for="broadcastBody">广播内容</label>
+        <textarea id="broadcastBody" rows="6" placeholder="请填写需要通知全站用户的内容..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="broadcastLink">跳转链接（可选，站内路径，以 / 开头）</label>
+        <input type="text" id="broadcastLink" placeholder="/contests 或 /notifications" />
+      </div>
+      <div id="broadcastError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="publishAdminBroadcast()">发送广播</button>
+    `,
+  });
+}
+
+async function publishAdminBroadcast() {
+  const title = $('broadcastTitle')?.value?.trim();
+  const body = $('broadcastBody')?.value?.trim();
+  const link = $('broadcastLink')?.value?.trim();
+  if (!title) { toast('请输入广播标题', 'warning'); return; }
+  if (!body) { toast('请输入广播内容', 'warning'); return; }
+  if (link && !link.startsWith('/')) { toast('跳转链接必须以 / 开头', 'warning'); return; }
+  try {
+    const data = await api('/api/admin/notifications/broadcast', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, body_md: body, link: link || null }),
+    });
+    closeModal();
+    await refreshNotificationCount();
+    toast(`管理员广播已发送，覆盖 ${Number(data.notified_users || 0)} 个账号。`, 'success');
+  } catch (err) {
+    const el = $('broadcastError');
+    if (el) { el.style.display = ''; el.textContent = err.message; }
   }
 }
 
@@ -8485,7 +8537,7 @@ Object.assign(window, {
   showAnswerQuestionModal, submitAnswer, closeQuestion,
   changeUsername, changeSignature, changePassword, showResetPasswordModal, resetUserPassword,
   renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
-  toggleUserRole, toggleUserDisabled,
+  toggleUserRole, toggleUserDisabled, showAdminBroadcastModal, publishAdminBroadcast,
   importProblem, updateProblemPackagePickerLabel, importProblemFromEditorPage,
   setProblemStatus, showProblemVersionsModal, rerunProblemVersionSelfTest,
   showProblemEditorModal, refreshProblemEditorModal, selectProblemEditorAsset,

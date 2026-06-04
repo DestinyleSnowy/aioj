@@ -31,6 +31,7 @@ def test_create_app_registers_core_routes():
     assert "/api/internal/judge/heartbeat" in paths
     assert "/api/contests/{slug}/scoreboard-advanced" in paths
     assert "/api/notifications" in paths
+    assert "/api/admin/notifications/broadcast" in paths
     assert "/api/messages/conversations" in paths
     assert "/api/messages/unread-count" in paths
     assert "/api/messages/files" in paths

@@ -127,6 +127,29 @@ def notify_contest_announcement(conn, *, contest_id: int, contest_slug: str, tit
     return result.rowcount or 0
 
 
+def notify_admin_broadcast(conn, *, title: str, body_md: str, link: str | None = None) -> int:
+    result = conn.execute(
+        text(
+            """
+            insert into notifications(user_id, type, title, body_md, link)
+            select u.id,
+                   'ADMIN_BROADCAST',
+                   :title,
+                   :body_md,
+                   :link
+            from users u
+            where coalesce(u.is_disabled, false) = false
+            """
+        ),
+        {
+            "title": str(title or "").strip() or "管理员广播",
+            "body_md": body_md or "",
+            "link": str(link).strip() if link else None,
+        },
+    )
+    return result.rowcount or 0
+
+
 def notify_question_answered(
     conn,
     *,

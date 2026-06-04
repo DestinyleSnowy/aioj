@@ -2,7 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
 from app.db import engine
-from app.dependencies import require_user
+from app.dependencies import require_admin, require_user
+from app.services.audit import audit_log
+from app.services.notifications import notify_admin_broadcast
 
 router = APIRouter()
 
@@ -83,3 +85,39 @@ def mark_notification_read(notification_id: int, user=Depends(require_user)):
     if not row:
         raise HTTPException(status_code=404, detail="Notification not found")
     return {"ok": True, "notification": dict(row)}
+
+
+@router.post("/api/admin/notifications/broadcast")
+def admin_broadcast_notification(payload: dict, user=Depends(require_admin)):
+    title = str(payload.get("title") or "").strip()
+    body_md = str(payload.get("body_md") or "").strip()
+    link = str(payload.get("link") or "").strip() or None
+
+    if not title:
+        raise HTTPException(status_code=400, detail="Missing title")
+    if not body_md:
+        raise HTTPException(status_code=400, detail="Missing body_md")
+    if link and not link.startswith("/"):
+        raise HTTPException(status_code=400, detail="Link must start with /")
+
+    with engine.begin() as conn:
+        notified_users = notify_admin_broadcast(
+            conn,
+            title=title,
+            body_md=body_md,
+            link=link,
+        )
+        audit_log(
+            conn,
+            user_id=user["id"],
+            action="admin.notification.broadcast",
+            resource_type="notification",
+            resource_id=title[:120],
+            metadata={
+                "type": "ADMIN_BROADCAST",
+                "link": link,
+                "notified_users": notified_users,
+            },
+        )
+
+    return {"ok": True, "type": "ADMIN_BROADCAST", "notified_users": notified_users}
