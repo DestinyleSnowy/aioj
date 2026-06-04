@@ -3,7 +3,19 @@ from datetime import datetime, timezone
 import pytest
 from fastapi import HTTPException
 
-from app.user_profiles import avatar_url_for_user, serialize_user, validate_avatar_upload
+from app.user_profiles import avatar_url_for_user, serialize_user, validate_avatar_upload, validate_username
+
+
+def test_validate_username_accepts_existing_registration_format():
+    assert validate_username("Alice_2026") == "Alice_2026"
+    assert validate_username(" bob.dev ") == "bob.dev"
+
+
+def test_validate_username_rejects_short_long_or_invalid_values():
+    for value in ("ab", "-alice", "alice!", "a" * 51):
+        with pytest.raises(HTTPException) as excinfo:
+            validate_username(value)
+        assert excinfo.value.status_code == 400
 
 
 def test_validate_avatar_upload_accepts_supported_image_types():

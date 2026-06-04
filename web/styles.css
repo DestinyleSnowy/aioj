@@ -3513,6 +3513,75 @@ body.message-layout-resizing * {
   align-items: start;
 }
 
+.profile-home-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+.profile-summary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-xl) var(--space-lg);
+}
+
+.profile-summary h2 {
+  max-width: 100%;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+  font-size: 22px;
+  font-weight: 750;
+}
+
+.profile-summary-meta {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: var(--space-lg);
+  padding-top: var(--space-lg);
+  border-top: var(--border-subtle);
+  text-align: left;
+}
+
+.profile-summary-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-summary-meta strong {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.profile-actions {
+  width: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+
+.profile-home-content {
+  min-width: 0;
+}
+
+.profile-stats {
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+}
+
+.profile-table-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+}
+
 @media (max-width: 960px) {
   .content.messages-page {
     max-width: none;
@@ -3549,8 +3618,15 @@ body.message-layout-resizing * {
 }
 
 @media (max-width: 850px) {
-  .account-layout {
+  .account-layout,
+  .profile-home-layout {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .profile-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

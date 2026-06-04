@@ -202,6 +202,11 @@ function renderAvatar(name, url = '', className = 'user-avatar', options = {}) {
   return `<span class="${classes}" aria-hidden="true">${avatarInitial(name, options.initialCount || 1)}</span>`;
 }
 
+function userProfilePath(username) {
+  const normalized = String(username || '').trim();
+  return normalized ? `/users/${encodeURIComponent(normalized)}` : '/account';
+}
+
 
 function groupNickname(value, fallback = '用户') {
   const nickname = String(
@@ -766,6 +771,11 @@ function updateNav() {
     const unread = Number(state.messageUnreadCount || 0);
     messageBadge.style.display = state.user && unread > 0 ? '' : 'none';
     messageBadge.textContent = unread > 99 ? '99+' : String(unread);
+  }
+
+  const profileHomeLink = $('profileHomeLink');
+  if (profileHomeLink) {
+    profileHomeLink.href = userProfilePath(state.user?.username);
   }
 
   const userPill = $('userPill');
@@ -1814,7 +1824,7 @@ async function loadProblemLeaderboard(slug) {
         ${items.slice(0, 15).map((e, i) => `
           <div class="lb-row ${i < 3 ? 'lb-top' : ''}">
             <span class="lb-rank">${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1)}</span>
-            <span class="lb-name">${esc(e.username)}</span>
+            <a class="lb-name" href="${esc(userProfilePath(e.username))}" data-link>${esc(e.username)}</a>
             <span class="lb-score">${scoreDisplay(e.public_score)}</span>
           </div>
         `).join('')}
@@ -5253,6 +5263,146 @@ async function sendFilesToPeer(peerId, files, options = {}) {
   }
 }
 
+// ─── Public User Profile ───────────────────────────────────────────────────
+async function renderUserProfile(username) {
+  setPage('个人主页');
+  const app = $('app');
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在同步选手主页...</span>
+    </div>
+  `;
+
+  try {
+    const data = await api(`/api/users/${encodeURIComponent(username)}/profile`);
+    const profile = data.user || {};
+    const stats = data.stats || {};
+    const bestResults = data.best_results || [];
+    const recentSubmissions = data.recent_submissions || [];
+    const isOwnProfile = Number(state.user?.id || 0) === Number(profile.id || 0);
+    const totalPublicProblems = Number(stats.total_public_problems || 0);
+    const solvedCount = Number(stats.solved_count || 0);
+    const submissionCount = Number(stats.submission_count || 0);
+    const acceptedCount = Number(stats.accepted_submission_count || 0);
+    const solvedPercent = totalPublicProblems > 0 ? Math.round((solvedCount / totalPublicProblems) * 100) : 0;
+
+    setPage(`${profile.username || '用户'} 的主页`);
+    app.innerHTML = `
+      <div class="profile-home-layout">
+        <aside class="profile-summary card highlight">
+          ${renderAvatar(profile.username, profile.avatar_url, 'profile-avatar-container', { initialCount: 2 })}
+          <h2>${esc(profile.username || '用户')}</h2>
+          <span class="pill blue">${esc(profile.role || 'USER')}</span>
+          <div class="profile-summary-meta">
+            <div>
+              <span class="text-muted">加入时间</span>
+              <strong>${profile.created_at ? formatDate(profile.created_at) : '—'}</strong>
+            </div>
+            <div>
+              <span class="text-muted">最近提交</span>
+              <strong>${stats.last_submission_at ? formatDate(stats.last_submission_at) : '暂无记录'}</strong>
+            </div>
+          </div>
+          <div class="profile-actions">
+            ${isOwnProfile ? `<a class="btn btn-secondary btn-sm" href="/account" data-link>账户设置</a>` : ''}
+            ${state.user && !isOwnProfile ? `<a class="btn btn-primary btn-sm" href="/messages/${Number(profile.id)}" data-link>发送私信</a>` : ''}
+          </div>
+        </aside>
+
+        <section class="profile-home-content">
+          <div class="stats-row profile-stats">
+            <div class="stat-card">
+              <div class="stat-value">${solvedCount}</div>
+              <div class="stat-label">通过题目</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${solvedPercent}%</div>
+              <div class="stat-label">题库进度</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${submissionCount}</div>
+              <div class="stat-label">公开提交</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-value">${acceptedCount}</div>
+              <div class="stat-label">通过提交</div>
+            </div>
+          </div>
+
+          <div class="profile-table-grid">
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">榜单成绩</h3>
+              </div>
+              ${bestResults.length === 0 ? emptyBox('暂无公开榜单成绩') : `
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>题目</th>
+                        <th>公开分</th>
+                        <th>更新时间</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${bestResults.map(item => `
+                        <tr>
+                          <td>
+                            <a href="/problems/${esc(item.problem_slug)}" data-link style="font-weight: 700;">${esc(item.problem_title || item.problem_slug)}</a>
+                            <div class="text-muted" style="font-size: 12px; font-family: var(--font-mono);">${esc(item.problem_slug || '')}</div>
+                          </td>
+                          <td class="text-accent" style="font-family: var(--font-mono); font-weight: 700;">${scoreDisplay(item.public_score)}</td>
+                          <td style="font-size: 12px; color: var(--text-muted);">${formatDate(item.updated_at)}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              `}
+            </div>
+
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">最近提交</h3>
+              </div>
+              ${recentSubmissions.length === 0 ? emptyBox('暂无公开提交记录') : `
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>题目</th>
+                        <th>状态</th>
+                        <th>公开分</th>
+                        <th>提交时间</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${recentSubmissions.map(item => `
+                        <tr ${isOwnProfile ? `class="clickable-row" onclick="navigate('/submissions/${Number(item.id)}')"` : ''}>
+                          <td>
+                            <a href="/problems/${esc(item.problem_slug)}" style="font-weight: 700;" onclick="event.stopPropagation(); navigate(${jsArg(`/problems/${item.problem_slug || ''}`)}); return false;">${esc(item.problem_title || item.problem_slug)}</a>
+                            <div class="text-muted" style="font-size: 12px; font-family: var(--font-mono);">#${Number(item.id)} · ${esc(item.problem_slug || '')}</div>
+                          </td>
+                          <td>${statusPill(item.status)}</td>
+                          <td class="text-accent" style="font-family: var(--font-mono); font-weight: 700;">${scoreDisplay(item.public_score)}</td>
+                          <td style="font-size: 12px; color: var(--text-muted);">${formatDate(item.created_at)}</td>
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              `}
+            </div>
+          </div>
+        </section>
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
 // ─── Account Settings ───────────────────────────────────────────────────────
 async function renderAccount() {
   setPage('个人中心');
@@ -5301,6 +5451,8 @@ async function renderAccount() {
     console.error('Error fetching profile stats:', err);
   }
 
+  const profilePath = userProfilePath(state.user.username);
+
   app.innerHTML = `
     <div class="account-layout">
       <!-- Left Sidebar: Profile Avatar Card & Solved Stats -->
@@ -5315,6 +5467,7 @@ async function renderAccount() {
             <div class="text-muted avatar-help-text">支持 PNG / JPG / GIF / WebP，最大 5 MB</div>
             <div id="avatarError" class="notice error" style="display:none; width:100%; margin-top: var(--space-xs);"></div>
           </div>
+          <a class="btn btn-secondary btn-sm mt-md" href="${esc(profilePath)}" data-link>查看个人主页</a>
           
           <div style="width: 100%; border-top: var(--border-subtle); margin-top: var(--space-lg); padding-top: var(--space-lg); text-align: left; display: flex; flex-direction: column; gap: 12px; font-size: 13px;">
             <div style="display: flex; justify-content: space-between;"><span class="text-muted">关联邮箱</span><span style="font-weight:500;">${esc(state.user.email || '尚未绑定邮箱')}</span></div>
@@ -5339,8 +5492,33 @@ async function renderAccount() {
         </div>
       </div>
 
-      <!-- Right Main: Change Password Form -->
-      <div class="account-main">
+      <!-- Right Main: Account Forms -->
+      <div class="account-main" style="display: flex; flex-direction: column; gap: var(--space-lg);">
+        <div class="card" style="padding: var(--space-xl) var(--space-lg);">
+          <h3 class="card-title" style="margin-bottom: var(--space-lg); display: flex; align-items: center; gap: 10px;">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+            修改用户名
+          </h3>
+
+          <div class="form-group">
+            <label for="usernameInput">新的用户名</label>
+            <input type="text" id="usernameInput" value="${esc(state.user.username)}" placeholder="3-50 位英文字母、数字、下划线、点或横线" autocomplete="username" />
+          </div>
+
+          <div id="usernameError" class="notice error" style="display:none; margin-top: var(--space-md);"></div>
+          <div id="usernameSuccess" class="notice success" style="display:none; margin-top: var(--space-md);"></div>
+
+          <button class="btn btn-primary mt-lg" id="usernameSaveBtn" onclick="changeUsername()">
+            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 2px;">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            保存用户名
+          </button>
+        </div>
+
         <div class="card" style="padding: var(--space-xl) var(--space-lg);">
           <h3 class="card-title" style="margin-bottom: var(--space-lg); display: flex; align-items: center; gap: 10px;">
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -5437,6 +5615,62 @@ async function handleAvatarFileChange(input) {
       btn.textContent = originalLabel;
     }
     if (input) input.value = '';
+  }
+}
+
+
+async function changeUsername() {
+  const input = $('usernameInput');
+  const username = (input?.value || '').trim();
+  const errEl = $('usernameError');
+  const sucEl = $('usernameSuccess');
+  const btn = $('usernameSaveBtn');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  if (sucEl) { sucEl.style.display = 'none'; sucEl.textContent = ''; }
+
+  if (!username) {
+    toast('请填写新的用户名。', 'warning');
+    return;
+  }
+
+  const originalLabel = btn?.dataset.originalLabel || btn?.innerHTML || '保存用户名';
+  if (btn) {
+    btn.dataset.originalLabel = originalLabel;
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+  }
+
+  try {
+    const data = await tryApi(
+      ['/api/auth/change-username', '/api/account/username'],
+      {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username }),
+      }
+    );
+    if (data.token || data.access_token) {
+      state.token = data.token || data.access_token;
+      localStorage.setItem('aioj_token', state.token);
+    }
+    state.user = { ...(state.user || {}), ...((data && data.user) || {}) };
+    updateNav();
+    if (input) input.value = state.user.username || username;
+    if (sucEl) {
+      sucEl.style.display = '';
+      sucEl.textContent = '用户名已更新，个人主页地址也已同步。';
+    }
+    toast('用户名已更新。', 'success');
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalLabel || '保存用户名';
+    }
   }
 }
 
@@ -5562,7 +5796,7 @@ async function renderUsers() {
               ${items.map(u => `
                 <tr>
                   <td>#${u.id}</td>
-                  <td><strong>${esc(u.username)}</strong></td>
+                  <td><a href="${esc(userProfilePath(u.username))}" data-link style="font-weight: 700;">${esc(u.username)}</a></td>
                   <td>${esc(u.email || '—')}</td>
                   <td>${statusPill(u.role)}</td>
                   <td>${u.is_disabled ? '<span class="pill red">暂停服务</span>' : '<span class="pill green">正常通行</span>'}</td>
@@ -7485,6 +7719,9 @@ function route() {
   if ((match = path.match(/^\/messages\/(\d+)$/))) {
     return renderMessages(`direct:${match[1]}`);
   }
+  if ((match = path.match(/^\/users\/([^/]+)$/))) {
+    return renderUserProfile(decodeURIComponent(match[1]));
+  }
   if ((match = path.match(/^\/contests\/([^/]+)$/))) {
     return renderContestDetail(match[1]);
   }
@@ -8153,7 +8390,7 @@ Object.assign(window, {
   joinContest, submitInviteCode, leaveContest,
   showAskQuestionModal, submitQuestion,
   showAnswerQuestionModal, submitAnswer, closeQuestion,
-  changePassword, showResetPasswordModal, resetUserPassword,
+  changeUsername, changePassword, showResetPasswordModal, resetUserPassword,
   renderJudgeAdmin, retryJudgeJob, rejudgeSubmission, markJudgeJobFailed,
   toggleUserRole, toggleUserDisabled,
   importProblem, updateProblemPackagePickerLabel, importProblemFromEditorPage,

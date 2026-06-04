@@ -1,15 +1,24 @@
 import mimetypes
+import re
 from typing import Any
 
 from fastapi import HTTPException
 
 MAX_AVATAR_BYTES = 5 * 1024 * 1024
+USERNAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{2,49}")
 AVATAR_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/gif": ".gif",
     "image/webp": ".webp",
 }
+
+
+def validate_username(value: str | None) -> str:
+    username = str(value or "").strip()
+    if not USERNAME_PATTERN.fullmatch(username):
+        raise HTTPException(status_code=400, detail="Invalid username")
+    return username
 
 
 def normalize_avatar_content_type(filename: str | None, content_type: str | None) -> str:
