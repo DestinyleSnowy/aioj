@@ -967,6 +967,7 @@ input[type="email"],
 input[type="password"],
 input[type="number"],
 input[type="datetime-local"],
+input[type="search"],
 select,
 textarea {
   width: 100%;
@@ -979,6 +980,16 @@ textarea {
   color: var(--text-main);
   outline: none;
   transition: all var(--transition-base);
+}
+
+input[type="search"] {
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-muted);
 }
 
 input:focus,
