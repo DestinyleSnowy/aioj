@@ -1,5 +1,6 @@
 from pathlib import Path
 import mimetypes
+import re
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from sqlalchemy import text
 from app.db import engine
 from app.dependencies import require_user
 from app.rate_limit import check_rate_limit, client_key
+from app.services.notifications import create_notification
 from app.storage import S3_BUCKET_MESSAGES, get_bytes, put_bytes
 
 router = APIRouter()
@@ -17,6 +19,7 @@ MAX_MESSAGE_LENGTH = 4000
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_GROUP_NAME_LENGTH = 80
 MAX_GROUP_MEMBERS = 50
+MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])@([A-Za-z0-9][A-Za-z0-9_.-]{2,49}|all)\b", re.IGNORECASE)
 IMAGE_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -279,6 +282,125 @@ def list_group_members(conn, group_id: int):
         {"group_id": group_id},
     ).mappings().all()
     return [dict(row) for row in rows]
+
+
+def build_group_payload(group, members: list[dict] | None = None) -> dict:
+    payload = dict(group)
+    if members is not None:
+        payload["members"] = members
+        payload["member_count"] = len(members)
+    payload["current_user_member_role"] = payload.get("member_role")
+    payload["can_manage"] = payload.get("member_role") == "OWNER"
+    return payload
+
+
+def require_group_owner(group) -> None:
+    if dict(group).get("member_role") != "OWNER":
+        raise HTTPException(status_code=403, detail="Only the group owner can manage this group")
+
+
+def group_member_exists(conn, *, group_id: int, user_id: int) -> bool:
+    return bool(
+        conn.execute(
+            text(
+                """
+                select 1
+                from message_group_members
+                where group_id = :group_id
+                  and user_id = :user_id
+                """
+            ),
+            {"group_id": group_id, "user_id": user_id},
+        ).first()
+    )
+
+
+def transfer_group_owner(conn, *, group_id: int, new_owner_id: int) -> None:
+    if not group_member_exists(conn, group_id=group_id, user_id=new_owner_id):
+        raise HTTPException(status_code=404, detail="Group member not found")
+    conn.execute(
+        text(
+            """
+            update message_group_members
+            set role = case when user_id = :new_owner_id then 'OWNER' else 'MEMBER' end
+            where group_id = :group_id
+            """
+        ),
+        {"group_id": group_id, "new_owner_id": new_owner_id},
+    )
+    conn.execute(
+        text(
+            """
+            update message_groups
+            set owner_id = :new_owner_id,
+                updated_at = now()
+            where id = :group_id
+            """
+        ),
+        {"group_id": group_id, "new_owner_id": new_owner_id},
+    )
+
+
+def choose_next_group_owner(conn, *, group_id: int, leaving_user_id: int) -> int | None:
+    return conn.execute(
+        text(
+            """
+            select user_id
+            from message_group_members
+            where group_id = :group_id
+              and user_id <> :leaving_user_id
+            order by joined_at asc, user_id asc
+            limit 1
+            """
+        ),
+        {"group_id": group_id, "leaving_user_id": leaving_user_id},
+    ).scalar_one_or_none()
+
+
+def extract_message_mentions(body: str) -> list[str]:
+    mentions: list[str] = []
+    seen: set[str] = set()
+    for match in MENTION_PATTERN.finditer(body or ""):
+        mention = match.group(1).lower()
+        if mention in seen:
+            continue
+        seen.add(mention)
+        mentions.append(mention)
+    return mentions
+
+
+def notify_group_mentions(conn, *, group, body: str, sender) -> None:
+    mentions = extract_message_mentions(body)
+    if not mentions:
+        return
+
+    members = list_group_members(conn, group["id"])
+    by_username = {str(member["username"]).lower(): member for member in members}
+    target_ids: set[int] = set()
+    if "all" in mentions:
+        target_ids.update(int(member["id"]) for member in members)
+    for mention in mentions:
+        member = by_username.get(mention)
+        if member:
+            target_ids.add(int(member["id"]))
+
+    target_ids.discard(int(sender["id"]))
+    if not target_ids:
+        return
+
+    snippet = str(body or "").replace("\n", " ").strip()
+    if len(snippet) > 180:
+        snippet = f"{snippet[:179]}…"
+    title = f"{sender['username']} 在群聊「{group['name']}」提到了你"
+    for target_id in sorted(target_ids):
+        create_notification(
+            conn,
+            target_id,
+            "GROUP_MENTION",
+            title,
+            snippet,
+            f"/messages/groups/{group['id']}",
+        )
 
 
 def mark_group_messages_read(conn, *, group_id: int, user_id: int, joined_at):
@@ -751,9 +873,7 @@ def create_message_group(payload: dict, request: Request, user=Depends(require_u
         )
         members = list_group_members(conn, group["id"])
 
-    group_payload = dict(group)
-    group_payload["member_count"] = len(members)
-    group_payload["members"] = members
+    group_payload = build_group_payload({**dict(group), "member_role": "OWNER"}, members)
     return {"ok": True, "group": group_payload}
 
 
@@ -793,8 +913,7 @@ def get_group_message_conversation(
                 {"group_id": group_id, "joined_at": group["joined_at"], "before_id": before_id},
             ).mappings().first()
             if not anchor:
-                group_payload = dict(group)
-                group_payload["members"] = members
+                group_payload = build_group_payload(group, members)
                 return {"group": group_payload, "items": [], "has_more": False}
             params["before_id"] = before_id
             params["before_created_at"] = anchor["created_at"]
@@ -842,13 +961,216 @@ def get_group_message_conversation(
             params,
         ).mappings().all()
 
-    group_payload = dict(group)
-    group_payload["members"] = members
+    group_payload = build_group_payload(group, members)
     return {
         "group": group_payload,
         "items": [dict(row) for row in trim_message_page(rows, limit)],
         "has_more": len(rows) > limit,
     }
+
+
+@router.get("/api/messages/groups/{group_id}/members")
+def get_message_group_members(group_id: int, user=Depends(require_user)):
+    with engine.connect() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        members = list_group_members(conn, group_id)
+    return {"group": build_group_payload(group, members), "items": members}
+
+
+@router.patch("/api/messages/groups/{group_id}")
+def update_message_group(group_id: int, payload: dict, user=Depends(require_user)):
+    name = normalize_group_name(payload.get("name") or payload.get("group_name"))
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        require_group_owner(group)
+        conn.execute(
+            text(
+                """
+                update message_groups
+                set name = :name,
+                    updated_at = now()
+                where id = :group_id
+                """
+            ),
+            {"group_id": group_id, "name": name},
+        )
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        members = list_group_members(conn, group_id)
+    return {"ok": True, "group": build_group_payload(group, members)}
+
+
+@router.post("/api/messages/groups/{group_id}/members")
+def add_message_group_members(group_id: int, payload: dict, user=Depends(require_user)):
+    member_ids = payload.get("member_ids") or payload.get("members") or []
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        require_group_owner(group)
+        invited_members = resolve_group_members(conn, current_user_id=user["id"], member_ids=member_ids)
+        existing_ids = {
+            int(row["user_id"])
+            for row in conn.execute(
+                text("select user_id from message_group_members where group_id = :group_id"),
+                {"group_id": group_id},
+            ).mappings().all()
+        }
+        new_members = [member for member in invited_members if int(member["id"]) not in existing_ids]
+        if len(existing_ids) + len(new_members) > MAX_GROUP_MEMBERS:
+            raise HTTPException(status_code=400, detail=f"Group can have at most {MAX_GROUP_MEMBERS} members")
+
+        if new_members:
+            conn.execute(
+                text(
+                    """
+                    insert into message_group_members(group_id, user_id, role)
+                    values (:group_id, :user_id, 'MEMBER')
+                    on conflict (group_id, user_id) do nothing
+                    """
+                ),
+                [{"group_id": group_id, "user_id": member["id"]} for member in new_members],
+            )
+            conn.execute(
+                text("update message_groups set updated_at = now() where id = :group_id"),
+                {"group_id": group_id},
+            )
+            for member in new_members:
+                create_notification(
+                    conn,
+                    member["id"],
+                    "GROUP_MEMBER_ADDED",
+                    f"你已加入群聊「{group['name']}」",
+                    f"{user['username']} 将你加入了群聊。",
+                    f"/messages/groups/{group_id}",
+                )
+
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        members = list_group_members(conn, group_id)
+    return {"ok": True, "added": len(new_members), "group": build_group_payload(group, members)}
+
+
+@router.delete("/api/messages/groups/{group_id}/members/{member_id}")
+def remove_message_group_member(group_id: int, member_id: int, user=Depends(require_user)):
+    if member_id == user["id"]:
+        raise HTTPException(status_code=400, detail="Use leave group instead")
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        require_group_owner(group)
+        target = conn.execute(
+            text(
+                """
+                select u.id, u.username, mgm.role as member_role
+                from message_group_members mgm
+                join users u on u.id = mgm.user_id
+                where mgm.group_id = :group_id
+                  and mgm.user_id = :member_id
+                """
+            ),
+            {"group_id": group_id, "member_id": member_id},
+        ).mappings().first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Group member not found")
+        if target["member_role"] == "OWNER":
+            raise HTTPException(status_code=400, detail="Cannot remove the group owner")
+
+        conn.execute(
+            text(
+                """
+                delete from message_group_members
+                where group_id = :group_id
+                  and user_id = :member_id
+                """
+            ),
+            {"group_id": group_id, "member_id": member_id},
+        )
+        conn.execute(text("update message_groups set updated_at = now() where id = :group_id"), {"group_id": group_id})
+        create_notification(
+            conn,
+            member_id,
+            "GROUP_MEMBER_REMOVED",
+            f"你已被移出群聊「{group['name']}」",
+            f"{user['username']} 将你移出了群聊。",
+            None,
+        )
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        members = list_group_members(conn, group_id)
+    return {"ok": True, "removed": dict(target), "group": build_group_payload(group, members)}
+
+
+@router.post("/api/messages/groups/{group_id}/transfer-owner")
+def transfer_message_group_owner(group_id: int, payload: dict, user=Depends(require_user)):
+    new_owner_id = normalize_recipient_id(payload.get("new_owner_id") or payload.get("user_id"))
+    if new_owner_id is None:
+        raise HTTPException(status_code=400, detail="new_owner_id is required")
+    if new_owner_id == user["id"]:
+        raise HTTPException(status_code=400, detail="New owner must be another group member")
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        require_group_owner(group)
+        transfer_group_owner(conn, group_id=group_id, new_owner_id=new_owner_id)
+        create_notification(
+            conn,
+            new_owner_id,
+            "GROUP_OWNER_TRANSFERRED",
+            f"你已成为群聊「{group['name']}」的群主",
+            f"{user['username']} 已将群主转让给你。",
+            f"/messages/groups/{group_id}",
+        )
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        members = list_group_members(conn, group_id)
+    return {"ok": True, "group": build_group_payload(group, members)}
+
+
+@router.post("/api/messages/groups/{group_id}/leave")
+def leave_message_group(group_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        if group["member_role"] == "OWNER":
+            next_owner_id = choose_next_group_owner(conn, group_id=group_id, leaving_user_id=user["id"])
+            if next_owner_id is None:
+                conn.execute(text("delete from message_groups where id = :group_id"), {"group_id": group_id})
+                return {"ok": True, "deleted": True}
+            transfer_group_owner(conn, group_id=group_id, new_owner_id=next_owner_id)
+            create_notification(
+                conn,
+                next_owner_id,
+                "GROUP_OWNER_TRANSFERRED",
+                f"你已成为群聊「{group['name']}」的群主",
+                f"{user['username']} 退出群聊后，群主已自动转让给你。",
+                f"/messages/groups/{group_id}",
+            )
+
+        conn.execute(
+            text(
+                """
+                delete from message_group_members
+                where group_id = :group_id
+                  and user_id = :user_id
+                """
+            ),
+            {"group_id": group_id, "user_id": user["id"]},
+        )
+        conn.execute(text("update message_groups set updated_at = now() where id = :group_id"), {"group_id": group_id})
+    return {"ok": True, "left": True}
+
+
+@router.delete("/api/messages/groups/{group_id}")
+def delete_message_group(group_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        require_group_owner(group)
+        members = list_group_members(conn, group_id)
+        for member in members:
+            if int(member["id"]) == int(user["id"]):
+                continue
+            create_notification(
+                conn,
+                member["id"],
+                "GROUP_DELETED",
+                f"群聊「{group['name']}」已解散",
+                f"{user['username']} 解散了该群聊。",
+                None,
+            )
+        conn.execute(text("delete from message_groups where id = :group_id"), {"group_id": group_id})
+    return {"ok": True, "deleted": True}
 
 
 @router.post("/api/messages/groups/{group_id}/messages")
@@ -913,6 +1235,7 @@ def send_group_message(group_id: int, payload: dict, request: Request, user=Depe
             ),
             {"group_id": group_id, "user_id": user["id"], "message_id": row["id"]},
         )
+        notify_group_mentions(conn, group=group, body=body, sender=user)
 
     return {"ok": True, "message": dict(row), "group": dict(group)}
 
@@ -1022,6 +1345,7 @@ async def send_group_message_file(
             ),
             {"group_id": group_id, "user_id": user["id"], "message_id": row["id"]},
         )
+        notify_group_mentions(conn, group=group, body=body, sender=user)
 
     return {"ok": True, "message": dict(row), "group": dict(group)}
 

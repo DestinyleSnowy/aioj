@@ -43,6 +43,9 @@ const state = {
   messageImagePreview: null,
   newMessagePendingFiles: [],
   newGroupMembers: [],
+  messageActiveGroup: null,
+  groupSettingsGroup: null,
+  groupSettingsPendingMembers: [],
   currentProblem: null,
   activeProblemStatementId: '',
   markdownConfigured: false,
@@ -680,6 +683,7 @@ function stopMessageAutoRefresh() {
   state.messageRefreshInFlight = false;
   state.messageActivePeerId = 0;
   state.messageActiveConversationKey = '';
+  state.messageActiveGroup = null;
 }
 
 function updateNav() {
@@ -3691,6 +3695,7 @@ async function renderMessages(target = null, options = {}) {
     }
     state.messageActiveConversationKey = selected.key;
     state.messageActivePeerId = selected.type === 'direct' ? selected.id : 0;
+    state.messageActiveGroup = selected.type === 'group' ? activeConversation : null;
 
     updateMessageThreadUnreadBadge(0);
     scrollMessageThreadToBottom();
@@ -3810,10 +3815,11 @@ function renderMessageThread(peer, messages, options = {}) {
   return `
     <div class="message-thread-header">
       <div class="message-avatar ${conversationType === 'group' ? 'group' : ''}">${messagePeerInitial(title)}</div>
-      <div>
+      <div style="min-width: 0; flex: 1;">
         <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
         <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}</div>
       </div>
+      ${conversationType === 'group' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showMessageGroupSettings(${conversationId})">群设置</button>` : ''}
       <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${jsArg(conversationKey)})" aria-label="查看新消息">0</button>
     </div>
 
@@ -3833,6 +3839,7 @@ function renderMessageThread(peer, messages, options = {}) {
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
         <span class="text-muted message-composer-hint">最长 4000 字符 · 支持拖拽或粘贴文件，单个最大 20 MB</span>
         <div class="row gap-sm" style="flex-wrap: wrap;">
+          ${conversationType === 'group' ? `<button class="btn btn-secondary" type="button" onclick="showGroupMentionModal(${conversationId})">@</button>` : ''}
           <label class="btn btn-secondary message-file-button" for="messageFileInput">文件</label>
           <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${jsArg(conversationKey)}, this)" />
           <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${jsArg(conversationKey)})">发送</button>
@@ -4569,6 +4576,330 @@ async function createMessageGroup() {
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '创建群聊'; }
   }
+}
+
+async function loadMessageGroupSettings(groupId) {
+  const data = await api(`/api/messages/groups/${Number(groupId)}/members`, { headers: authHeaders() });
+  state.groupSettingsGroup = data.group || {};
+  state.groupSettingsPendingMembers = [];
+  return state.groupSettingsGroup;
+}
+
+function groupRoleLabel(role) {
+  return role === 'OWNER' ? '群主' : '成员';
+}
+
+function renderGroupSettingsPendingMembers() {
+  const wrap = $('groupSettingsPendingMembers');
+  if (!wrap) return;
+  const members = state.groupSettingsPendingMembers || [];
+  wrap.innerHTML = members.length
+    ? members.map(member => `
+      <span class="message-selected-user">
+        <span class="message-avatar small">${messagePeerInitial(member.username)}</span>
+        <span>${esc(member.username)}</span>
+        <button type="button" aria-label="移除待添加成员" title="移除" onclick="removeGroupSettingsPendingMember(${member.id})">×</button>
+      </span>
+    `).join('')
+    : '<span class="text-muted" style="font-size: 12px;">搜索并选择要加入群聊的用户。</span>';
+}
+
+function renderMessageGroupSettingsModal(group) {
+  const members = group.members || [];
+  const canManage = !!group.can_manage;
+  const groupId = Number(group.id || group.group_id || 0);
+  const body = `
+    <div class="message-group-settings">
+      <div class="form-group">
+        <label for="messageGroupNameInput">群聊名称</label>
+        <div class="row gap-sm" style="align-items: center;">
+          <input type="text" id="messageGroupNameInput" maxlength="80" value="${esc(group.name || group.group_name || '')}" ${canManage ? '' : 'disabled'} />
+          ${canManage ? `<button class="btn btn-secondary" type="button" onclick="saveMessageGroupName(${groupId})">保存</button>` : ''}
+        </div>
+      </div>
+
+      ${canManage ? `
+        <div class="form-group">
+          <label for="groupSettingsMemberSearch">添加成员</label>
+          <input type="text" id="groupSettingsMemberSearch" placeholder="搜索用户名" autocomplete="off" oninput="searchGroupSettingsUsers(this.value)" />
+          <div id="groupSettingsPendingMembers" class="message-selected-users"></div>
+          <div id="groupSettingsUserResults" class="message-user-results"></div>
+          <button class="btn btn-primary btn-sm mt-sm" type="button" onclick="addGroupSettingsMembers(${groupId})">加入群聊</button>
+        </div>
+      ` : ''}
+
+      <div class="message-group-member-list">
+        ${members.map(member => {
+          const isSelf = Number(member.id) === Number(state.user?.id || 0);
+          const isOwner = member.member_role === 'OWNER';
+          return `
+            <div class="message-group-member">
+              <span class="message-avatar small ${isOwner ? 'group' : ''}">${messagePeerInitial(member.username)}</span>
+              <span class="message-group-member-main">
+                <strong>${esc(member.username)}${isSelf ? '（我）' : ''}</strong>
+                <span>${esc(groupRoleLabel(member.member_role))} · ${esc(member.role || 'USER')}</span>
+              </span>
+              <span class="message-group-member-actions">
+                <button class="btn btn-secondary btn-sm" type="button" onclick="insertGroupMention(${jsArg(member.username)})">@</button>
+                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm" type="button" onclick="transferMessageGroupOwnerFromSettings(${groupId}, ${member.id}, ${jsArg(member.username)})">转让</button>` : ''}
+                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm text-danger" type="button" onclick="removeMessageGroupMemberFromSettings(${groupId}, ${member.id}, ${jsArg(member.username)})">移除</button>` : ''}
+              </span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div id="messageGroupSettingsError" class="notice error" style="display:none"></div>
+    </div>
+  `;
+  const footer = `
+    <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+    <button class="btn btn-secondary text-danger" onclick="leaveMessageGroup(${groupId})">退出群聊</button>
+    ${canManage ? `<button class="btn btn-secondary text-danger" onclick="deleteMessageGroup(${groupId})">解散群聊</button>` : ''}
+  `;
+  openModal({ title: '群设置', body, footer, wide: true });
+  renderGroupSettingsPendingMembers();
+}
+
+async function showMessageGroupSettings(groupId = null) {
+  const target = groupId ? messageConversationKey('group', groupId) : currentMessageConversationKey();
+  const parsed = parseMessageConversationKey(target, 'group');
+  if (parsed.type !== 'group' || !parsed.id) return;
+  openModal({
+    title: '群设置',
+    body: '<div class="message-empty-panel"><div class="spinner-ring"></div><div class="text-muted mt-md">正在加载群设置...</div></div>',
+    footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+    wide: true,
+  });
+  try {
+    const group = await loadMessageGroupSettings(parsed.id);
+    renderMessageGroupSettingsModal(group);
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+function setMessageGroupSettingsError(message = '') {
+  const el = $('messageGroupSettingsError');
+  if (!el) return;
+  el.style.display = message ? '' : 'none';
+  el.textContent = message;
+}
+
+async function refreshMessageGroupSettings(groupId) {
+  const group = await loadMessageGroupSettings(groupId);
+  renderMessageGroupSettingsModal(group);
+  await refreshMessages(messageConversationKey('group', groupId), { preserveComposer: true });
+}
+
+async function saveMessageGroupName(groupId) {
+  const name = $('messageGroupNameInput')?.value.trim();
+  if (!name) {
+    setMessageGroupSettingsError('请填写群聊名称。');
+    return;
+  }
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    toast('群聊名称已更新', 'success');
+    await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+let groupSettingsUserSearchTimer = null;
+
+function searchGroupSettingsUsers(query) {
+  const resultsEl = $('groupSettingsUserResults');
+  if (!resultsEl) return;
+  const q = String(query || '').trim();
+  if (!q) {
+    resultsEl.innerHTML = '';
+    return;
+  }
+  clearTimeout(groupSettingsUserSearchTimer);
+  groupSettingsUserSearchTimer = setTimeout(async () => {
+    try {
+      const group = state.groupSettingsGroup || {};
+      const existingIds = new Set((group.members || []).map(member => Number(member.id)));
+      const pendingIds = new Set((state.groupSettingsPendingMembers || []).map(member => Number(member.id)));
+      const data = await api(`/api/messages/users?q=${encodeURIComponent(q)}&limit=10`, { headers: authHeaders() });
+      const users = (data.items || []).filter(user => !existingIds.has(Number(user.id)) && !pendingIds.has(Number(user.id)));
+      resultsEl.innerHTML = users.length === 0
+        ? `<div class="message-user-result muted">未找到可添加用户</div>`
+        : users.map(u => `
+          <button type="button" class="message-user-result" onclick="selectGroupSettingsMember(${u.id}, ${jsArg(u.username)}, ${jsArg(u.role || 'USER')})">
+            <span class="message-avatar small">${messagePeerInitial(u.username)}</span>
+            <span>
+              <strong>${esc(u.username)}</strong>
+              <span class="text-muted">${esc(u.role || 'USER')}</span>
+            </span>
+          </button>
+        `).join('');
+    } catch (err) {
+      resultsEl.innerHTML = `<div class="message-user-result muted">${esc(err.message)}</div>`;
+    }
+  }, 200);
+}
+
+function selectGroupSettingsMember(userId, username, role = 'USER') {
+  const id = Number(userId || 0);
+  if (!id) return;
+  if (!(state.groupSettingsPendingMembers || []).some(member => Number(member.id) === id)) {
+    state.groupSettingsPendingMembers.push({ id, username, role });
+  }
+  if ($('groupSettingsMemberSearch')) $('groupSettingsMemberSearch').value = '';
+  if ($('groupSettingsUserResults')) $('groupSettingsUserResults').innerHTML = '';
+  renderGroupSettingsPendingMembers();
+}
+
+function removeGroupSettingsPendingMember(userId) {
+  const id = Number(userId || 0);
+  state.groupSettingsPendingMembers = (state.groupSettingsPendingMembers || []).filter(member => Number(member.id) !== id);
+  renderGroupSettingsPendingMembers();
+}
+
+async function addGroupSettingsMembers(groupId) {
+  const memberIds = (state.groupSettingsPendingMembers || []).map(member => Number(member.id)).filter(Boolean);
+  if (!memberIds.length) {
+    setMessageGroupSettingsError('请选择要添加的成员。');
+    return;
+  }
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}/members`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_ids: memberIds }),
+    });
+    toast('成员已加入群聊', 'success');
+    await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+async function removeMessageGroupMemberFromSettings(groupId, memberId, username) {
+  if (!confirm(`确认将 ${username} 移出群聊吗？`)) return;
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}/members/${Number(memberId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    toast('成员已移除', 'success');
+    await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+async function transferMessageGroupOwnerFromSettings(groupId, memberId, username) {
+  if (!confirm(`确认将群主转让给 ${username} 吗？转让后你将不再拥有群管理权限。`)) return;
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}/transfer-owner`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_owner_id: Number(memberId) }),
+    });
+    toast('群主已转让', 'success');
+    await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+async function leaveMessageGroup(groupId) {
+  if (!confirm('确认退出该群聊吗？')) return;
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}/leave`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    closeModal();
+    toast('已退出群聊', 'success');
+    history.pushState(null, '', '/messages');
+    await renderMessages(null, { silent: true, preserveComposer: false });
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+async function deleteMessageGroup(groupId) {
+  if (!confirm('确认解散该群聊吗？此操作会移除所有成员并删除群会话。')) return;
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    closeModal();
+    toast('群聊已解散', 'success');
+    history.pushState(null, '', '/messages');
+    await renderMessages(null, { silent: true, preserveComposer: false });
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+function insertGroupMention(username) {
+  const composer = $('messageComposer');
+  if (!composer) {
+    closeModal();
+    return;
+  }
+  const mention = username === 'all' ? '@all ' : `@${username} `;
+  const value = composer.value || '';
+  const start = composer.selectionStart ?? value.length;
+  const end = composer.selectionEnd ?? value.length;
+  const before = value.slice(0, start);
+  const after = value.slice(end);
+  const gap = before && !/\s$/.test(before) ? ' ' : '';
+  composer.value = `${before}${gap}${mention}${after}`;
+  const cursor = before.length + gap.length + mention.length;
+  composer.focus();
+  composer.setSelectionRange(cursor, cursor);
+  saveMessageComposerDraft(currentMessageConversationKey(), composer.value);
+  closeModal();
+}
+
+async function showGroupMentionModal(groupId = null) {
+  const parsed = parseMessageConversationKey(groupId ? messageConversationKey('group', groupId) : currentMessageConversationKey(), 'group');
+  if (parsed.type !== 'group' || !parsed.id) return;
+  let group = state.messageActiveGroup && Number(state.messageActiveGroup.id || state.messageActiveGroup.group_id) === Number(parsed.id)
+    ? state.messageActiveGroup
+    : null;
+  if (!Array.isArray(group?.members)) {
+    try {
+      group = await loadMessageGroupSettings(parsed.id);
+    } catch (err) {
+      openModal({
+        title: '@ 成员',
+        body: `<div class="notice error">${esc(err.message)}</div>`,
+        footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+      });
+      return;
+    }
+  }
+  const members = group.members || [];
+  openModal({
+    title: '@ 成员',
+    body: `
+      <div class="message-group-member-list">
+        <button type="button" class="message-user-result" onclick="insertGroupMention('all')">
+          <span class="message-avatar small group">@</span>
+          <span><strong>@all</strong><span class="text-muted">通知所有群成员</span></span>
+        </button>
+        ${members.map(member => `
+          <button type="button" class="message-user-result" onclick="insertGroupMention(${jsArg(member.username)})">
+            <span class="message-avatar small">${messagePeerInitial(member.username)}</span>
+            <span><strong>${esc(member.username)}</strong><span class="text-muted">${esc(groupRoleLabel(member.member_role))}</span></span>
+          </button>
+        `).join('')}
+      </div>
+    `,
+    footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+  });
 }
 
 function updateNewMessageFileLabel(input, explicitFiles = null) {
@@ -7746,6 +8077,9 @@ Object.assign(window, {
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
   showCreateMessageGroupModal, searchMessageGroupUsers, selectMessageGroupMember, removeMessageGroupMember, createMessageGroup,
+  showMessageGroupSettings, saveMessageGroupName, searchGroupSettingsUsers, selectGroupSettingsMember,
+  removeGroupSettingsPendingMember, addGroupSettingsMembers, removeMessageGroupMemberFromSettings,
+  transferMessageGroupOwnerFromSettings, leaveMessageGroup, deleteMessageGroup, insertGroupMention, showGroupMentionModal,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile,
