@@ -2812,15 +2812,41 @@ tr:last-child td {
 
 .message-row {
   display: flex;
+  align-items: flex-end;
   justify-content: flex-start;
+  gap: 10px;
 }
 
 .message-row.mine {
   justify-content: flex-end;
 }
 
-.message-bubble {
+.message-row.mine .message-avatar {
+  order: 2;
+}
+
+.message-content {
   max-width: min(78%, 780px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.message-row.mine .message-content {
+  align-items: flex-end;
+}
+
+.message-sender-name {
+  padding: 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.message-bubble {
+  max-width: 100%;
   padding: 10px 13px;
   border: var(--border-light);
   border-radius: var(--radius-md);
@@ -3519,6 +3545,10 @@ body.message-layout-resizing * {
   }
 
   .message-bubble {
+    max-width: 100%;
+  }
+
+  .message-content {
     max-width: 90%;
   }
 }

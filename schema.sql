@@ -244,9 +244,13 @@ create table if not exists message_group_members (
   group_id bigint not null references message_groups(id) on delete cascade,
   user_id bigint not null references users(id) on delete cascade,
   role text not null default 'MEMBER',
+  group_nickname text,
   joined_at timestamptz not null default now(),
   primary key (group_id, user_id),
-  constraint message_group_members_role_check check (role in ('OWNER', 'MEMBER'))
+  constraint message_group_members_role_check check (role in ('OWNER', 'MEMBER')),
+  constraint message_group_members_group_nickname_length_check check (
+    group_nickname is null or length(btrim(group_nickname)) between 1 and 50
+  )
 );
 
 create table if not exists group_messages (

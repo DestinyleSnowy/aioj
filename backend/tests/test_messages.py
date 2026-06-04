@@ -7,6 +7,7 @@ from app.routers.messages import (
     extract_message_mentions,
     normalize_group_member_ids,
     normalize_group_name,
+    normalize_group_nickname,
     normalize_message_body,
     normalize_message_cursor,
     normalize_optional_message_body,
@@ -94,6 +95,19 @@ def test_normalize_group_name_trims_and_limits_length():
     assert too_long.value.status_code == 400
 
 
+def test_normalize_group_nickname_supports_reset_and_length_validation():
+    assert normalize_group_nickname("  Alice  ") == "Alice"
+    assert normalize_group_nickname("   ", allow_empty=True) is None
+
+    with pytest.raises(HTTPException) as empty:
+        normalize_group_nickname("   ")
+    assert empty.value.status_code == 400
+
+    with pytest.raises(HTTPException) as too_long:
+        normalize_group_nickname("x" * 51)
+    assert too_long.value.status_code == 400
+
+
 def test_normalize_group_member_ids_dedupes_and_skips_current_user():
     assert normalize_group_member_ids([1, "2", 2, 3], current_user_id=1) == [2, 3]
     assert normalize_group_member_ids("2,3,2", current_user_id=1) == [2, 3]
@@ -114,10 +128,14 @@ def test_extract_message_mentions_dedupes_usernames_and_all():
 
 
 def test_build_group_payload_marks_owner_management_capability():
-    payload = build_group_payload({"id": 7, "name": "team", "member_role": "OWNER"}, [{"id": 1}, {"id": 2}])
+    payload = build_group_payload(
+        {"id": 7, "name": "team", "member_role": "OWNER", "group_nickname": "Captain"},
+        [{"id": 1}, {"id": 2}],
+    )
 
     assert payload["can_manage"] is True
     assert payload["current_user_member_role"] == "OWNER"
+    assert payload["current_user_group_nickname"] == "Captain"
     assert payload["member_count"] == 2
 
 

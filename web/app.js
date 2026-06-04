@@ -202,6 +202,57 @@ function renderAvatar(name, url = '', className = 'user-avatar', options = {}) {
   return `<span class="${classes}" aria-hidden="true">${avatarInitial(name, options.initialCount || 1)}</span>`;
 }
 
+
+function groupNickname(value, fallback = '用户') {
+  const nickname = String(
+    value?.group_nickname
+    || value?.sender_group_nickname
+    || value?.current_user_group_nickname
+    || value?.nickname
+    || ''
+  ).trim();
+  if (nickname) return nickname;
+  const username = String(value?.username || value?.sender_username || fallback || '用户').trim();
+  return username || '用户';
+}
+
+function renderMessageAvatar(name, url = '', extraClass = '', options = {}) {
+  const className = ['message-avatar', extraClass].filter(Boolean).join(' ');
+  return renderAvatar(name, url, className, options);
+}
+
+function renderConversationAvatar(type, name, url = '') {
+  if (type === 'group') {
+    return `<span class="message-avatar group">${messagePeerInitial(name)}</span>`;
+  }
+  return renderMessageAvatar(name, url);
+}
+
+function isGroupConversationMessage(message) {
+  return message?.message_type === 'group' || Number(message?.group_id || 0) > 0;
+}
+
+function messageSenderDisplayLabel(message) {
+  const mine = Number(message?.sender_id) === Number(state.user?.id || 0);
+  if (isGroupConversationMessage(message)) {
+    return groupNickname(message, message?.sender_username || '用户');
+  }
+  return mine ? '我' : (message?.sender_username || '用户');
+}
+
+function messageMetaLabel(message) {
+  const timestamp = formatDate(message?.created_at);
+  if (!isGroupConversationMessage(message)) {
+    return `${messageSenderDisplayLabel(message)} · ${timestamp}`;
+  }
+  const username = String(message?.sender_username || '').trim();
+  const nickname = String(message?.sender_group_nickname || '').trim();
+  if (username && nickname && username !== nickname) {
+    return `@${username} · ${timestamp}`;
+  }
+  return timestamp;
+}
+
 function isRelativeMdTarget(value) {
   const raw = String(value || '').trim();
   if (!raw || raw.startsWith('#') || raw.startsWith('/') || raw.startsWith('data:')) return false;
@@ -3635,7 +3686,7 @@ async function renderMessages(target = null, options = {}) {
               : esc(c.peer_role || 'USER');
             const previewPrefix = c.last_message_id
               ? (conversationType === 'group'
-                ? (incoming ? `${c.last_sender_username || '成员'}：` : '我：')
+                ? (incoming ? `${c.last_sender_group_nickname || c.last_sender_username || '成员'}：` : '我：')
                 : (incoming ? '' : '我：'))
               : '';
             const previewText = c.last_message_id
@@ -3643,7 +3694,7 @@ async function renderMessages(target = null, options = {}) {
               : (conversationType === 'group' ? '群聊已创建' : '空消息');
             return `
               <button class="message-conversation ${active ? 'active' : ''}" onclick="openMessageConversation(${jsArg(conversationKey)})">
-                <span class="message-avatar ${conversationType === 'group' ? 'group' : ''}">${messagePeerInitial(title)}</span>
+                ${renderConversationAvatar(conversationType, title, c.peer_avatar_url)}
                 <span class="message-conversation-body">
                   <span class="message-conversation-top">
                     <strong>${esc(title)}</strong>
@@ -3779,16 +3830,23 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
 
 function renderMessageRow(message) {
   const mine = Number(message.sender_id) === Number(state.user.id);
-  const senderLabel = mine ? '我' : (message.sender_username || '用户');
+  const senderLabel = messageSenderDisplayLabel(message);
   const attachmentLabel = messageAttachmentQuoteLabel(message);
+  const groupMessage = isGroupConversationMessage(message);
+  const avatarName = groupMessage ? senderLabel : (message.sender_username || senderLabel || '用户');
+  const avatarUrl = message.sender_avatar_url || (mine ? state.user?.avatar_url || '' : '');
   return `
     <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id)}">
-      <div class="message-bubble">
-        ${message.has_attachment ? renderMessageAttachment(message) : ''}
-        ${message.body_md ? renderMd(message.body_md) : ''}
-        <div class="message-meta">
-          <span>${esc(senderLabel)} · ${formatDate(message.created_at)}</span>
-          <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
+      ${renderMessageAvatar(avatarName, avatarUrl)}
+      <div class="message-content">
+        ${groupMessage ? `<div class="message-sender-name">${esc(mine ? `${senderLabel}（我）` : senderLabel)}</div>` : ''}
+        <div class="message-bubble">
+          ${message.has_attachment ? renderMessageAttachment(message) : ''}
+          ${message.body_md ? renderMd(message.body_md) : ''}
+          <div class="message-meta">
+            <span>${esc(messageMetaLabel(message))}</span>
+            <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
+          </div>
         </div>
       </div>
     </div>
@@ -3814,7 +3872,7 @@ function renderMessageThread(peer, messages, options = {}) {
     : (peer.role || peer.peer_role || 'USER');
   return `
     <div class="message-thread-header">
-      <div class="message-avatar ${conversationType === 'group' ? 'group' : ''}">${messagePeerInitial(title)}</div>
+      ${renderConversationAvatar(conversationType, title, peer.avatar_url || peer.peer_avatar_url)}
       <div style="min-width: 0; flex: 1;">
         <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
         <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}</div>
@@ -4484,7 +4542,7 @@ function renderSelectedMessageGroupMembers() {
   wrap.innerHTML = members.length
     ? members.map(member => `
       <span class="message-selected-user">
-        <span class="message-avatar small">${messagePeerInitial(member.username)}</span>
+        ${renderMessageAvatar(member.username, member.avatar_url, 'small')}
         <span>${esc(member.username)}</span>
         <button type="button" aria-label="移除成员" title="移除成员" onclick="removeMessageGroupMember(${member.id})">×</button>
       </span>
@@ -4513,8 +4571,8 @@ function searchMessageGroupUsers(query) {
       resultsEl.innerHTML = users.length === 0
         ? `<div class="message-user-result muted">未找到可添加用户</div>`
         : users.map(u => `
-          <button type="button" class="message-user-result" onclick="selectMessageGroupMember(${u.id}, ${jsArg(u.username)}, ${jsArg(u.role || 'USER')})">
-            <span class="message-avatar small">${messagePeerInitial(u.username)}</span>
+          <button type="button" class="message-user-result" onclick="selectMessageGroupMember(${u.id}, ${jsArg(u.username)}, ${jsArg(u.role || 'USER')}, ${jsArg(u.avatar_url || '')})">
+            ${renderMessageAvatar(u.username, u.avatar_url, 'small')}
             <span>
               <strong>${esc(u.username)}</strong>
               <span class="text-muted">${esc(u.role || 'USER')}</span>
@@ -4527,11 +4585,11 @@ function searchMessageGroupUsers(query) {
   }, 200);
 }
 
-function selectMessageGroupMember(userId, username, role = 'USER') {
+function selectMessageGroupMember(userId, username, role = 'USER', avatarUrl = '') {
   const id = Number(userId || 0);
   if (!id || id === Number(state.user?.id || 0)) return;
   if (!(state.newGroupMembers || []).some(member => Number(member.id) === id)) {
-    state.newGroupMembers.push({ id, username, role });
+    state.newGroupMembers.push({ id, username, role, avatar_url: avatarUrl });
   }
   if ($('newGroupMemberSearch')) $('newGroupMemberSearch').value = '';
   if ($('messageGroupUserResults')) $('messageGroupUserResults').innerHTML = '';
@@ -4596,7 +4654,7 @@ function renderGroupSettingsPendingMembers() {
   wrap.innerHTML = members.length
     ? members.map(member => `
       <span class="message-selected-user">
-        <span class="message-avatar small">${messagePeerInitial(member.username)}</span>
+        ${renderMessageAvatar(member.username, member.avatar_url, 'small')}
         <span>${esc(member.username)}</span>
         <button type="button" aria-label="移除待添加成员" title="移除" onclick="removeGroupSettingsPendingMember(${member.id})">×</button>
       </span>
@@ -4618,6 +4676,14 @@ function renderMessageGroupSettingsModal(group) {
         </div>
       </div>
 
+      <div class="form-group">
+        <label for="messageGroupNicknameInput">我的群昵称</label>
+        <div class="row gap-sm" style="align-items: center;">
+          <input type="text" id="messageGroupNicknameInput" maxlength="50" value="${esc(group.current_user_group_nickname || state.user?.username || '')}" placeholder="留空恢复为用户名" />
+          <button class="btn btn-secondary" type="button" onclick="saveMessageGroupNickname(${groupId})">保存</button>
+        </div>
+      </div>
+
       ${canManage ? `
         <div class="form-group">
           <label for="groupSettingsMemberSearch">添加成员</label>
@@ -4632,17 +4698,23 @@ function renderMessageGroupSettingsModal(group) {
         ${members.map(member => {
           const isSelf = Number(member.id) === Number(state.user?.id || 0);
           const isOwner = member.member_role === 'OWNER';
+          const displayName = groupNickname(member, member.username);
+          const detailText = [
+            displayName !== member.username ? `@${member.username}` : '',
+            groupRoleLabel(member.member_role),
+            member.role || 'USER',
+          ].filter(Boolean).join(' · ');
           return `
             <div class="message-group-member">
-              <span class="message-avatar small ${isOwner ? 'group' : ''}">${messagePeerInitial(member.username)}</span>
+              ${renderMessageAvatar(displayName, member.avatar_url, `small${isOwner ? ' group' : ''}`)}
               <span class="message-group-member-main">
-                <strong>${esc(member.username)}${isSelf ? '（我）' : ''}</strong>
-                <span>${esc(groupRoleLabel(member.member_role))} · ${esc(member.role || 'USER')}</span>
+                <strong>${esc(displayName)}${isSelf ? '（我）' : ''}</strong>
+                <span>${esc(detailText)}</span>
               </span>
               <span class="message-group-member-actions">
                 <button class="btn btn-secondary btn-sm" type="button" onclick="insertGroupMention(${jsArg(member.username)})">@</button>
-                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm" type="button" onclick="transferMessageGroupOwnerFromSettings(${groupId}, ${member.id}, ${jsArg(member.username)})">转让</button>` : ''}
-                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm text-danger" type="button" onclick="removeMessageGroupMemberFromSettings(${groupId}, ${member.id}, ${jsArg(member.username)})">移除</button>` : ''}
+                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm" type="button" onclick="transferMessageGroupOwnerFromSettings(${groupId}, ${member.id}, ${jsArg(displayName)})">转让</button>` : ''}
+                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm text-danger" type="button" onclick="removeMessageGroupMemberFromSettings(${groupId}, ${member.id}, ${jsArg(displayName)})">移除</button>` : ''}
               </span>
             </div>
           `;
@@ -4710,6 +4782,22 @@ async function saveMessageGroupName(groupId) {
   }
 }
 
+async function saveMessageGroupNickname(groupId) {
+  const nicknameInput = $('messageGroupNicknameInput');
+  const rawValue = nicknameInput?.value ?? '';
+  try {
+    await api(`/api/messages/groups/${Number(groupId)}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ group_nickname: rawValue }),
+    });
+    toast(rawValue.trim() ? '群昵称已更新' : '已恢复默认群昵称', 'success');
+    await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
 let groupSettingsUserSearchTimer = null;
 
 function searchGroupSettingsUsers(query) {
@@ -4731,8 +4819,8 @@ function searchGroupSettingsUsers(query) {
       resultsEl.innerHTML = users.length === 0
         ? `<div class="message-user-result muted">未找到可添加用户</div>`
         : users.map(u => `
-          <button type="button" class="message-user-result" onclick="selectGroupSettingsMember(${u.id}, ${jsArg(u.username)}, ${jsArg(u.role || 'USER')})">
-            <span class="message-avatar small">${messagePeerInitial(u.username)}</span>
+          <button type="button" class="message-user-result" onclick="selectGroupSettingsMember(${u.id}, ${jsArg(u.username)}, ${jsArg(u.role || 'USER')}, ${jsArg(u.avatar_url || '')})">
+            ${renderMessageAvatar(u.username, u.avatar_url, 'small')}
             <span>
               <strong>${esc(u.username)}</strong>
               <span class="text-muted">${esc(u.role || 'USER')}</span>
@@ -4745,11 +4833,11 @@ function searchGroupSettingsUsers(query) {
   }, 200);
 }
 
-function selectGroupSettingsMember(userId, username, role = 'USER') {
+function selectGroupSettingsMember(userId, username, role = 'USER', avatarUrl = '') {
   const id = Number(userId || 0);
   if (!id) return;
   if (!(state.groupSettingsPendingMembers || []).some(member => Number(member.id) === id)) {
-    state.groupSettingsPendingMembers.push({ id, username, role });
+    state.groupSettingsPendingMembers.push({ id, username, role, avatar_url: avatarUrl });
   }
   if ($('groupSettingsMemberSearch')) $('groupSettingsMemberSearch').value = '';
   if ($('groupSettingsUserResults')) $('groupSettingsUserResults').innerHTML = '';
@@ -4890,12 +4978,19 @@ async function showGroupMentionModal(groupId = null) {
           <span class="message-avatar small group">@</span>
           <span><strong>@all</strong><span class="text-muted">通知所有群成员</span></span>
         </button>
-        ${members.map(member => `
-          <button type="button" class="message-user-result" onclick="insertGroupMention(${jsArg(member.username)})">
-            <span class="message-avatar small">${messagePeerInitial(member.username)}</span>
-            <span><strong>${esc(member.username)}</strong><span class="text-muted">${esc(groupRoleLabel(member.member_role))}</span></span>
-          </button>
-        `).join('')}
+        ${members.map(member => {
+          const displayName = groupNickname(member, member.username);
+          const detailText = [
+            displayName !== member.username ? `@${member.username}` : '',
+            groupRoleLabel(member.member_role),
+          ].filter(Boolean).join(' · ');
+          return `
+            <button type="button" class="message-user-result" onclick="insertGroupMention(${jsArg(member.username)})">
+              ${renderMessageAvatar(displayName, member.avatar_url, 'small')}
+              <span><strong>${esc(displayName)}</strong><span class="text-muted">${esc(detailText)}</span></span>
+            </button>
+          `;
+        }).join('')}
       </div>
     `,
     footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
@@ -4944,7 +5039,7 @@ function searchMessageUsers(query) {
         ? `<div class="message-user-result muted">未找到匹配用户</div>`
         : users.map(u => `
           <button type="button" class="message-user-result" onclick="selectMessageRecipient(${u.id}, ${jsArg(u.username)})">
-            <span class="message-avatar small">${messagePeerInitial(u.username)}</span>
+            ${renderMessageAvatar(u.username, u.avatar_url, 'small')}
             <span>
               <strong>${esc(u.username)}</strong>
               <span class="text-muted">${esc(u.role || 'USER')}</span>
@@ -8077,7 +8172,7 @@ Object.assign(window, {
   renderNotifications, markNotificationRead, markAllNotificationsRead, openNotificationLink,
   renderMessages, openMessageConversation, showNewMessageModal, searchMessageUsers, selectMessageRecipient,
   showCreateMessageGroupModal, searchMessageGroupUsers, selectMessageGroupMember, removeMessageGroupMember, createMessageGroup,
-  showMessageGroupSettings, saveMessageGroupName, searchGroupSettingsUsers, selectGroupSettingsMember,
+  showMessageGroupSettings, saveMessageGroupName, saveMessageGroupNickname, searchGroupSettingsUsers, selectGroupSettingsMember,
   removeGroupSettingsPendingMember, addGroupSettingsMembers, removeMessageGroupMemberFromSettings,
   transferMessageGroupOwnerFromSettings, leaveMessageGroup, deleteMessageGroup, insertGroupMention, showGroupMentionModal,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,

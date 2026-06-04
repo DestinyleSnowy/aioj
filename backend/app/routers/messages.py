@@ -12,12 +12,14 @@ from app.dependencies import require_user
 from app.rate_limit import check_rate_limit, client_key
 from app.services.notifications import create_notification
 from app.storage import S3_BUCKET_MESSAGES, get_bytes, put_bytes
+from app.user_profiles import avatar_url_for_user, serialize_user
 
 router = APIRouter()
 
 MAX_MESSAGE_LENGTH = 4000
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_GROUP_NAME_LENGTH = 80
+MAX_GROUP_NICKNAME_LENGTH = 50
 MAX_GROUP_MEMBERS = 50
 MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])@([A-Za-z0-9][A-Za-z0-9_.-]{2,49}|all)\b", re.IGNORECASE)
 IMAGE_CONTENT_TYPES = {
@@ -63,6 +65,20 @@ def normalize_group_name(value) -> str:
     return name
 
 
+def normalize_group_nickname(value, *, allow_empty: bool = False) -> str | None:
+    nickname = str(value or "").strip()
+    if not nickname:
+        if allow_empty:
+            return None
+        raise HTTPException(status_code=400, detail="Group nickname is required")
+    if len(nickname) > MAX_GROUP_NICKNAME_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Group nickname must be at most {MAX_GROUP_NICKNAME_LENGTH} characters",
+        )
+    return nickname
+
+
 def normalize_group_member_ids(value, *, current_user_id: int | None = None) -> list[int]:
     if value in (None, ""):
         raw_items = []
@@ -102,7 +118,13 @@ def fetch_users_by_ids(conn, user_ids: list[int]):
     rows = conn.execute(
         text(
             f"""
-            select id, username, role, coalesce(is_disabled, false) as is_disabled
+            select
+              id,
+              username,
+              role,
+              avatar_object_key,
+              avatar_updated_at,
+              coalesce(is_disabled, false) as is_disabled
             from users
             where id in ({placeholders})
             """
@@ -117,14 +139,14 @@ def fetch_users_by_ids(conn, user_ids: list[int]):
     disabled = [row["username"] for row in rows if bool(row["is_disabled"])]
     if disabled:
         raise HTTPException(status_code=400, detail="Group member is disabled")
-    return [by_id[user_id] for user_id in user_ids]
+    return [serialize_user(by_id[user_id]) for user_id in user_ids]
 
 
 def resolve_group_members(conn, *, current_user_id: int, member_ids) -> list[dict]:
     normalized_ids = normalize_group_member_ids(member_ids, current_user_id=current_user_id)
     if not normalized_ids:
         raise HTTPException(status_code=400, detail="At least one group member is required")
-    return [dict(row) for row in fetch_users_by_ids(conn, normalized_ids)]
+    return fetch_users_by_ids(conn, normalized_ids)
 
 
 def resolve_recipient(conn, *, current_user_id: int, recipient_id=None, recipient_key: str = ""):
@@ -137,7 +159,13 @@ def resolve_recipient(conn, *, current_user_id: int, recipient_id=None, recipien
         recipient = conn.execute(
             text(
                 """
-                select id, username, role, coalesce(is_disabled, false) as is_disabled
+                select
+                  id,
+                  username,
+                  role,
+                  avatar_object_key,
+                  avatar_updated_at,
+                  coalesce(is_disabled, false) as is_disabled
                 from users
                 where id = :recipient_id
                 """
@@ -148,7 +176,13 @@ def resolve_recipient(conn, *, current_user_id: int, recipient_id=None, recipien
         recipient = conn.execute(
             text(
                 """
-                select id, username, role, coalesce(is_disabled, false) as is_disabled
+                select
+                  id,
+                  username,
+                  role,
+                  avatar_object_key,
+                  avatar_updated_at,
+                  coalesce(is_disabled, false) as is_disabled
                 from users
                 where username = :recipient_key
                    or email = :recipient_key
@@ -164,7 +198,7 @@ def resolve_recipient(conn, *, current_user_id: int, recipient_id=None, recipien
         raise HTTPException(status_code=400, detail="Cannot send a message to yourself")
     if bool(recipient["is_disabled"]):
         raise HTTPException(status_code=400, detail="Recipient is disabled")
-    return recipient
+    return serialize_user(recipient)
 
 
 def normalize_content_type(filename: str | None, content_type: str | None) -> str:
@@ -230,6 +264,65 @@ def trim_message_page(rows, limit: int):
     return list(rows)[-limit:]
 
 
+def serialize_group_member(row) -> dict:
+    data = dict(row)
+    username = str(data.get("username") or "").strip() or "用户"
+    nickname = str(data.get("group_nickname") or "").strip() or username
+    return {
+        "id": data.get("id"),
+        "username": username,
+        "role": data.get("role"),
+        "member_role": data.get("member_role"),
+        "joined_at": data.get("joined_at"),
+        "group_nickname": nickname,
+        "avatar_url": avatar_url_for_user(
+            data.get("id"),
+            data.get("avatar_updated_at"),
+            data.get("avatar_object_key"),
+        ),
+    }
+
+
+def serialize_message_row(row) -> dict:
+    data = dict(row)
+    data["sender_avatar_url"] = avatar_url_for_user(
+        data.get("sender_id"),
+        data.get("sender_avatar_updated_at"),
+        data.get("sender_avatar_object_key"),
+    )
+    data["recipient_avatar_url"] = avatar_url_for_user(
+        data.get("recipient_id"),
+        data.get("recipient_avatar_updated_at"),
+        data.get("recipient_avatar_object_key"),
+    )
+    sender_group_nickname = str(data.get("sender_group_nickname") or "").strip()
+    if "sender_group_nickname" in data:
+        data["sender_group_nickname"] = sender_group_nickname or data.get("sender_username")
+    for key in (
+        "sender_avatar_object_key",
+        "sender_avatar_updated_at",
+        "recipient_avatar_object_key",
+        "recipient_avatar_updated_at",
+    ):
+        data.pop(key, None)
+    return data
+
+
+def serialize_conversation_row(row) -> dict:
+    data = dict(row)
+    data["peer_avatar_url"] = avatar_url_for_user(
+        data.get("peer_id"),
+        data.get("peer_avatar_updated_at"),
+        data.get("peer_avatar_object_key"),
+    )
+    last_sender_group_nickname = str(data.get("last_sender_group_nickname") or "").strip()
+    if "last_sender_group_nickname" in data:
+        data["last_sender_group_nickname"] = last_sender_group_nickname or data.get("last_sender_username")
+    for key in ("peer_avatar_object_key", "peer_avatar_updated_at"):
+        data.pop(key, None)
+    return data
+
+
 def get_group_membership(conn, *, group_id: int, user_id: int):
     row = conn.execute(
         text(
@@ -241,6 +334,7 @@ def get_group_membership(conn, *, group_id: int, user_id: int):
               g.created_at,
               g.updated_at,
               mgm.role as member_role,
+              coalesce(nullif(btrim(mgm.group_nickname), ''), u.username) as group_nickname,
               mgm.joined_at,
               (
                 select count(*)
@@ -249,6 +343,7 @@ def get_group_membership(conn, *, group_id: int, user_id: int):
               ) as member_count
             from message_groups g
             join message_group_members mgm on mgm.group_id = g.id
+            join users u on u.id = mgm.user_id
             where g.id = :group_id
               and mgm.user_id = :user_id
             """
@@ -268,6 +363,9 @@ def list_group_members(conn, group_id: int):
               u.id,
               u.username,
               u.role,
+              u.avatar_object_key,
+              u.avatar_updated_at,
+              coalesce(nullif(btrim(mgm.group_nickname), ''), u.username) as group_nickname,
               mgm.role as member_role,
               mgm.joined_at
             from message_group_members mgm
@@ -281,7 +379,7 @@ def list_group_members(conn, group_id: int):
         ),
         {"group_id": group_id},
     ).mappings().all()
-    return [dict(row) for row in rows]
+    return [serialize_group_member(row) for row in rows]
 
 
 def build_group_payload(group, members: list[dict] | None = None) -> dict:
@@ -290,6 +388,7 @@ def build_group_payload(group, members: list[dict] | None = None) -> dict:
         payload["members"] = members
         payload["member_count"] = len(members)
     payload["current_user_member_role"] = payload.get("member_role")
+    payload["current_user_group_nickname"] = payload.get("group_nickname")
     payload["can_manage"] = payload.get("member_role") == "OWNER"
     return payload
 
@@ -509,7 +608,7 @@ def search_message_users(q: str = "", limit: int = 20, user=Depends(require_user
         rows = conn.execute(
             text(
                 f"""
-                select id, username, role
+                select id, username, role, avatar_object_key, avatar_updated_at
                 from users
                 where id <> :user_id
                   and coalesce(is_disabled, false) = false
@@ -520,7 +619,7 @@ def search_message_users(q: str = "", limit: int = 20, user=Depends(require_user
             ),
             params,
         ).mappings().all()
-    return {"items": [dict(row) for row in rows]}
+    return {"items": [serialize_user(row) for row in rows]}
 
 
 @router.get("/api/messages/conversations")
@@ -563,6 +662,8 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
                   ranked.peer_id,
                   u.username as peer_username,
                   u.role as peer_role,
+                  u.avatar_object_key as peer_avatar_object_key,
+                  u.avatar_updated_at as peer_avatar_updated_at,
                   null::bigint as group_id,
                   null::text as group_name,
                   null::bigint as group_owner_id,
@@ -639,6 +740,7 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
                   last_message.id as last_message_id,
                   last_message.sender_id as last_sender_id,
                   sender_user.username as last_sender_username,
+                  coalesce(nullif(btrim(sender_member.group_nickname), ''), sender_user.username) as last_sender_group_nickname,
                   null::bigint as last_recipient_id,
                   last_message.body_md as last_body_md,
                   (last_message.attachment_object_key is not null) as last_has_attachment,
@@ -661,12 +763,15 @@ def list_message_conversations(limit: int = 50, user=Depends(require_user)):
                   limit 1
                 ) last_message on true
                 left join users sender_user on sender_user.id = last_message.sender_id
+                left join message_group_members sender_member
+                  on sender_member.group_id = g.id
+                 and sender_member.user_id = last_message.sender_id
                 left join unread on unread.group_id = g.id
                 """
             ),
             {"user_id": user["id"]},
         ).mappings().all()
-    rows = [dict(row) for row in direct_rows] + [dict(row) for row in group_rows]
+    rows = [serialize_conversation_row(row) for row in direct_rows] + [serialize_conversation_row(row) for row in group_rows]
     rows.sort(key=lambda row: (row["sort_at"], row["sort_id"]), reverse=True)
     return {"items": rows[:limit]}
 
@@ -687,7 +792,13 @@ def get_message_conversation(
         peer = conn.execute(
             text(
                 """
-                select id, username, role, coalesce(is_disabled, false) as is_disabled
+                select
+                  id,
+                  username,
+                  role,
+                  avatar_object_key,
+                  avatar_updated_at,
+                  coalesce(is_disabled, false) as is_disabled
                 from users
                 where id = :peer_id
                 """
@@ -729,7 +840,7 @@ def get_message_conversation(
                 {"user_id": user["id"], "peer_id": peer_id, "before_id": before_id},
             ).mappings().first()
             if not anchor:
-                return {"peer": dict(peer), "items": [], "has_more": False}
+                return {"peer": serialize_user(peer), "items": [], "has_more": False}
             params["before_id"] = before_id
             params["before_created_at"] = anchor["created_at"]
             before_filter = """
@@ -748,8 +859,12 @@ def get_message_conversation(
                     dm.id,
                     dm.sender_id,
                     su.username as sender_username,
+                    su.avatar_object_key as sender_avatar_object_key,
+                    su.avatar_updated_at as sender_avatar_updated_at,
                     dm.recipient_id,
                     ru.username as recipient_username,
+                    ru.avatar_object_key as recipient_avatar_object_key,
+                    ru.avatar_updated_at as recipient_avatar_updated_at,
                     dm.body_md,
                     (dm.attachment_object_key is not null) as has_attachment,
                     case when dm.attachment_object_key is not null then dm.id end as attachment_id,
@@ -777,8 +892,8 @@ def get_message_conversation(
         ).mappings().all()
 
     return {
-        "peer": dict(peer),
-        "items": [dict(row) for row in trim_message_page(rows, limit)],
+        "peer": serialize_user(peer),
+        "items": [serialize_message_row(row) for row in trim_message_page(rows, limit)],
         "has_more": len(rows) > limit,
     }
 
@@ -813,8 +928,12 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
                   inserted.id,
                   inserted.sender_id,
                   su.username as sender_username,
+                  su.avatar_object_key as sender_avatar_object_key,
+                  su.avatar_updated_at as sender_avatar_updated_at,
                   inserted.recipient_id,
                   ru.username as recipient_username,
+                  ru.avatar_object_key as recipient_avatar_object_key,
+                  ru.avatar_updated_at as recipient_avatar_updated_at,
                   inserted.body_md,
                   inserted.has_attachment,
                   inserted.attachment_id,
@@ -832,7 +951,7 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
             {"sender_id": user["id"], "recipient_id": recipient["id"], "body_md": body},
         ).mappings().first()
 
-    return {"ok": True, "message": dict(row), "peer": dict(recipient)}
+    return {"ok": True, "message": serialize_message_row(row), "peer": recipient}
 
 
 @router.post("/api/messages/groups")
@@ -855,17 +974,27 @@ def create_message_group(payload: dict, request: Request, user=Depends(require_u
         ).mappings().first()
 
         member_rows = [
-            {"group_id": group["id"], "user_id": user["id"], "role": "OWNER"},
+            {
+                "group_id": group["id"],
+                "user_id": user["id"],
+                "role": "OWNER",
+                "group_nickname": user["username"],
+            },
             *[
-                {"group_id": group["id"], "user_id": member["id"], "role": "MEMBER"}
+                {
+                    "group_id": group["id"],
+                    "user_id": member["id"],
+                    "role": "MEMBER",
+                    "group_nickname": member["username"],
+                }
                 for member in invited_members
             ],
         ]
         conn.execute(
             text(
                 """
-                insert into message_group_members(group_id, user_id, role)
-                values (:group_id, :user_id, :role)
+                insert into message_group_members(group_id, user_id, role, group_nickname)
+                values (:group_id, :user_id, :role, :group_nickname)
                 on conflict (group_id, user_id) do nothing
                 """
             ),
@@ -873,7 +1002,10 @@ def create_message_group(payload: dict, request: Request, user=Depends(require_u
         )
         members = list_group_members(conn, group["id"])
 
-    group_payload = build_group_payload({**dict(group), "member_role": "OWNER"}, members)
+    group_payload = build_group_payload(
+        {**dict(group), "member_role": "OWNER", "group_nickname": user["username"]},
+        members,
+    )
     return {"ok": True, "group": group_payload}
 
 
@@ -936,8 +1068,13 @@ def get_group_message_conversation(
                     gm.group_id,
                     gm.sender_id,
                     su.username as sender_username,
+                    su.avatar_object_key as sender_avatar_object_key,
+                    su.avatar_updated_at as sender_avatar_updated_at,
+                    coalesce(nullif(btrim(mgm.group_nickname), ''), su.username) as sender_group_nickname,
                     null::bigint as recipient_id,
                     null::text as recipient_username,
+                    null::text as recipient_avatar_object_key,
+                    null::timestamptz as recipient_avatar_updated_at,
                     gm.body_md,
                     (gm.attachment_object_key is not null) as has_attachment,
                     case when gm.attachment_object_key is not null then gm.id end as attachment_id,
@@ -949,6 +1086,9 @@ def get_group_message_conversation(
                     null::timestamptz as read_at
                   from group_messages gm
                   join users su on su.id = gm.sender_id
+                  left join message_group_members mgm
+                    on mgm.group_id = gm.group_id
+                   and mgm.user_id = gm.sender_id
                   where gm.group_id = :group_id
                     and gm.created_at >= :joined_at
                   {before_filter}
@@ -964,7 +1104,7 @@ def get_group_message_conversation(
     group_payload = build_group_payload(group, members)
     return {
         "group": group_payload,
-        "items": [dict(row) for row in trim_message_page(rows, limit)],
+        "items": [serialize_message_row(row) for row in trim_message_page(rows, limit)],
         "has_more": len(rows) > limit,
     }
 
@@ -979,21 +1119,47 @@ def get_message_group_members(group_id: int, user=Depends(require_user)):
 
 @router.patch("/api/messages/groups/{group_id}")
 def update_message_group(group_id: int, payload: dict, user=Depends(require_user)):
-    name = normalize_group_name(payload.get("name") or payload.get("group_name"))
+    raw_name = payload.get("name")
+    if raw_name is None:
+        raw_name = payload.get("group_name")
+    raw_nickname = payload.get("group_nickname")
+    if raw_nickname is None:
+        raw_nickname = payload.get("nickname")
+
+    has_name = raw_name is not None
+    has_nickname = raw_nickname is not None
+    if not has_name and not has_nickname:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    name = normalize_group_name(raw_name) if has_name else None
+    group_nickname = normalize_group_nickname(raw_nickname, allow_empty=True) if has_nickname else None
     with engine.begin() as conn:
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
-        require_group_owner(group)
-        conn.execute(
-            text(
-                """
-                update message_groups
-                set name = :name,
-                    updated_at = now()
-                where id = :group_id
-                """
-            ),
-            {"group_id": group_id, "name": name},
-        )
+        if has_name:
+            require_group_owner(group)
+            conn.execute(
+                text(
+                    """
+                    update message_groups
+                    set name = :name,
+                        updated_at = now()
+                    where id = :group_id
+                    """
+                ),
+                {"group_id": group_id, "name": name},
+            )
+        if has_nickname:
+            conn.execute(
+                text(
+                    """
+                    update message_group_members
+                    set group_nickname = :group_nickname
+                    where group_id = :group_id
+                      and user_id = :user_id
+                    """
+                ),
+                {"group_id": group_id, "user_id": user["id"], "group_nickname": group_nickname},
+            )
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
         members = list_group_members(conn, group_id)
     return {"ok": True, "group": build_group_payload(group, members)}
@@ -1021,12 +1187,19 @@ def add_message_group_members(group_id: int, payload: dict, user=Depends(require
             conn.execute(
                 text(
                     """
-                    insert into message_group_members(group_id, user_id, role)
-                    values (:group_id, :user_id, 'MEMBER')
+                    insert into message_group_members(group_id, user_id, role, group_nickname)
+                    values (:group_id, :user_id, 'MEMBER', :group_nickname)
                     on conflict (group_id, user_id) do nothing
                     """
                 ),
-                [{"group_id": group_id, "user_id": member["id"]} for member in new_members],
+                [
+                    {
+                        "group_id": group_id,
+                        "user_id": member["id"],
+                        "group_nickname": member["username"],
+                    }
+                    for member in new_members
+                ],
             )
             conn.execute(
                 text("update message_groups set updated_at = now() where id = :group_id"),
@@ -1199,8 +1372,13 @@ def send_group_message(group_id: int, payload: dict, request: Request, user=Depe
                   inserted.group_id,
                   inserted.sender_id,
                   su.username as sender_username,
+                  su.avatar_object_key as sender_avatar_object_key,
+                  su.avatar_updated_at as sender_avatar_updated_at,
+                  coalesce(nullif(btrim(mgm.group_nickname), ''), su.username) as sender_group_nickname,
                   null::bigint as recipient_id,
                   null::text as recipient_username,
+                  null::text as recipient_avatar_object_key,
+                  null::timestamptz as recipient_avatar_updated_at,
                   inserted.body_md,
                   inserted.has_attachment,
                   inserted.attachment_id,
@@ -1212,6 +1390,9 @@ def send_group_message(group_id: int, payload: dict, request: Request, user=Depe
                   null::timestamptz as read_at
                 from inserted
                 join users su on su.id = inserted.sender_id
+                left join message_group_members mgm
+                  on mgm.group_id = inserted.group_id
+                 and mgm.user_id = inserted.sender_id
                 """
             ),
             {"group_id": group_id, "sender_id": user["id"], "body_md": body},
@@ -1237,7 +1418,7 @@ def send_group_message(group_id: int, payload: dict, request: Request, user=Depe
         )
         notify_group_mentions(conn, group=group, body=body, sender=user)
 
-    return {"ok": True, "message": dict(row), "group": dict(group)}
+    return {"ok": True, "message": serialize_message_row(row), "group": build_group_payload(group)}
 
 
 @router.post("/api/messages/groups/{group_id}/files")
@@ -1292,8 +1473,13 @@ async def send_group_message_file(
                   inserted.group_id,
                   inserted.sender_id,
                   su.username as sender_username,
+                  su.avatar_object_key as sender_avatar_object_key,
+                  su.avatar_updated_at as sender_avatar_updated_at,
+                  coalesce(nullif(btrim(mgm.group_nickname), ''), su.username) as sender_group_nickname,
                   null::bigint as recipient_id,
                   null::text as recipient_username,
+                  null::text as recipient_avatar_object_key,
+                  null::timestamptz as recipient_avatar_updated_at,
                   inserted.body_md,
                   inserted.has_attachment,
                   inserted.attachment_id,
@@ -1305,6 +1491,9 @@ async def send_group_message_file(
                   null::timestamptz as read_at
                 from inserted
                 join users su on su.id = inserted.sender_id
+                left join message_group_members mgm
+                  on mgm.group_id = inserted.group_id
+                 and mgm.user_id = inserted.sender_id
                 """
             ),
             {
@@ -1347,7 +1536,7 @@ async def send_group_message_file(
         )
         notify_group_mentions(conn, group=group, body=body, sender=user)
 
-    return {"ok": True, "message": dict(row), "group": dict(group)}
+    return {"ok": True, "message": serialize_message_row(row), "group": build_group_payload(group)}
 
 
 @router.post("/api/messages/files")
@@ -1406,8 +1595,12 @@ async def send_direct_message_file(
                   inserted.id,
                   inserted.sender_id,
                   su.username as sender_username,
+                  su.avatar_object_key as sender_avatar_object_key,
+                  su.avatar_updated_at as sender_avatar_updated_at,
                   inserted.recipient_id,
                   ru.username as recipient_username,
+                  ru.avatar_object_key as recipient_avatar_object_key,
+                  ru.avatar_updated_at as recipient_avatar_updated_at,
                   inserted.body_md,
                   inserted.has_attachment,
                   inserted.attachment_id,
@@ -1440,7 +1633,7 @@ async def send_direct_message_file(
             conn.execute(text("delete from direct_messages where id = :id"), {"id": row["id"]})
         raise HTTPException(status_code=500, detail="Failed to store message file") from exc
 
-    return {"ok": True, "message": dict(row), "peer": dict(peer)}
+    return {"ok": True, "message": serialize_message_row(row), "peer": peer}
 
 
 @router.post("/api/messages/images")
