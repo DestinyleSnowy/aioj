@@ -48,6 +48,8 @@ const state = {
   groupSettingsPendingMembers: [],
   currentProblem: null,
   activeProblemStatementId: '',
+  problemStatementPdfObjectUrls: new Map(),
+  problemStatementPdfPreviewRequestId: 0,
   markdownConfigured: false,
 };
 
@@ -515,6 +517,87 @@ function statementPdfForLanguage(problem = state.currentProblem, language = '') 
   return assets.pdfs.find(item => String(item.language || item.id || '').trim() === target) || null;
 }
 
+function invalidateProblemStatementPdfPreview() {
+  state.problemStatementPdfPreviewRequestId += 1;
+}
+
+function clearProblemStatementPdfPreviewCache() {
+  invalidateProblemStatementPdfPreview();
+  for (const objectUrl of state.problemStatementPdfObjectUrls.values()) {
+    URL.revokeObjectURL(objectUrl);
+  }
+  state.problemStatementPdfObjectUrls.clear();
+}
+
+function setProblemStatementPdfStatus(message, tone = 'loading', downloadUrl = '') {
+  const status = $('problemStatementPdfStatus');
+  if (!status) return;
+  if (tone === 'error') {
+    status.className = 'notice warning';
+    status.innerHTML = `${esc(message)}${downloadUrl ? ` <a href="${esc(downloadUrl)}" target="_blank">新标签打开 PDF</a>` : ''}`;
+    status.style.display = '';
+    return;
+  }
+  status.className = 'loading-text';
+  status.textContent = message;
+  status.style.display = '';
+}
+
+async function hydrateProblemStatementPdfPreview(problem = state.currentProblem) {
+  const active = problemActiveStatement(problem);
+  const frame = $('problemStatementPdfFrame');
+  if (!frame || !active || active.kind !== 'pdf' || !active.downloadUrl) return;
+
+  const downloadUrl = String(active.downloadUrl || '').trim();
+  if (!downloadUrl) return;
+
+  const cachedObjectUrl = state.problemStatementPdfObjectUrls.get(downloadUrl);
+  if (cachedObjectUrl) {
+    frame.src = `${cachedObjectUrl}#view=FitH`;
+    frame.hidden = false;
+    const status = $('problemStatementPdfStatus');
+    if (status) status.style.display = 'none';
+    return;
+  }
+
+  const requestId = ++state.problemStatementPdfPreviewRequestId;
+  frame.hidden = true;
+  frame.removeAttribute('src');
+  setProblemStatementPdfStatus('正在加载 PDF 页内预览...');
+
+  try {
+    const res = await fetch(downloadUrl, { headers: authHeaders() });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const currentFrame = $('problemStatementPdfFrame');
+    const currentActive = problemActiveStatement(problem);
+    if (
+      requestId !== state.problemStatementPdfPreviewRequestId ||
+      currentFrame !== frame ||
+      currentActive?.kind !== 'pdf' ||
+      currentActive?.downloadUrl !== downloadUrl
+    ) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+
+    state.problemStatementPdfObjectUrls.set(downloadUrl, objectUrl);
+    frame.src = `${objectUrl}#view=FitH`;
+    frame.hidden = false;
+    const status = $('problemStatementPdfStatus');
+    if (status) status.style.display = 'none';
+  } catch (err) {
+    if (requestId !== state.problemStatementPdfPreviewRequestId) return;
+    frame.hidden = true;
+    frame.removeAttribute('src');
+    setProblemStatementPdfStatus(`页内预览加载失败${err?.message ? `：${err.message}` : '。'}`, 'error', downloadUrl);
+  }
+}
+
 function renderProblemStatementSwitcher(problem = state.currentProblem) {
   const { variants } = problemStatementVariants(problem);
   if (variants.length <= 1) return '';
@@ -572,11 +655,13 @@ function renderProblemStatementBody(problem = state.currentProblem) {
           </div>
           <a href="${esc(active.downloadUrl)}" target="_blank" class="btn btn-secondary btn-sm">新标签打开</a>
         </div>
+        <div id="problemStatementPdfStatus" class="loading-text" style="margin-bottom: var(--space-sm);">正在加载 PDF 页内预览...</div>
         <iframe
+          id="problemStatementPdfFrame"
           class="statement-pdf-frame"
-          src="${esc(active.downloadUrl)}#view=FitH"
           title="${esc(active.label)} PDF"
           loading="lazy"
+          hidden
         ></iframe>
       </div>
     `;
@@ -585,6 +670,7 @@ function renderProblemStatementBody(problem = state.currentProblem) {
 }
 
 function switchProblemStatement(statementId) {
+  invalidateProblemStatementPdfPreview();
   state.activeProblemStatementId = statementId;
   const switcher = $('problemStatementSwitchWrap');
   if (switcher) switcher.innerHTML = renderProblemStatementSwitcher(state.currentProblem);
@@ -592,6 +678,7 @@ function switchProblemStatement(statementId) {
   if (actions) actions.innerHTML = renderProblemStatementActions(state.currentProblem);
   const body = $('problemStatementBody');
   if (body) body.innerHTML = renderProblemStatementBody(state.currentProblem);
+  hydrateProblemStatementPdfPreview(state.currentProblem);
 }
 
 function problemSampleSubmissionLabel(problem) {
@@ -731,6 +818,9 @@ function clearPageState() {
     clearInterval(state.countdownTimer);
     state.countdownTimer = null;
   }
+  clearProblemStatementPdfPreviewCache();
+  state.currentProblem = null;
+  state.activeProblemStatementId = '';
   destroyMessageLayoutInteractions();
   stopMessageAutoRefresh();
   $('sidebar').classList.remove('open');
@@ -1680,6 +1770,8 @@ async function renderProblemDetail(slug, contestSlug = null) {
         </div>
       </div>
     `;
+
+    hydrateProblemStatementPdfPreview(problem);
 
     // Load leaderboard
     loadProblemLeaderboard(slug);
