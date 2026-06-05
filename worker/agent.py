@@ -169,6 +169,20 @@ def docker_bind_path(path: Path) -> str:
 
 def docker_availability_error() -> str | None:
     try:
+        import docker
+
+        client = docker.from_env()
+        try:
+            client.ping()
+            return None
+        finally:
+            client.close()
+    except Exception as exc:
+        sdk_error = f"{type(exc).__name__}: {exc}"
+    else:
+        sdk_error = None
+
+    try:
         d_check = subprocess.run(
             ["docker", "ps"],
             text=True,
@@ -176,7 +190,7 @@ def docker_availability_error() -> str | None:
             timeout=10,
         )
     except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
+        return sdk_error or f"{type(exc).__name__}: {exc}"
 
     if d_check.returncode == 0:
         return None
@@ -184,7 +198,77 @@ def docker_availability_error() -> str | None:
     detail = (d_check.stderr or d_check.stdout or "").strip()
     if detail:
         return detail
-    return f"docker ps exited with code {d_check.returncode}"
+    return sdk_error or f"docker ps exited with code {d_check.returncode}"
+
+
+def run_docker_sandbox_via_sdk(
+    *,
+    runner_image: str,
+    run_command: list[str],
+    workspace: Path,
+    input_dir: Path,
+    public_dir: Path,
+    output_dir: Path,
+    cpu_count: int,
+    memory_limit_mb: int,
+    time_limit_sec: int,
+) -> subprocess.CompletedProcess:
+    try:
+        import docker
+    except Exception as exc:
+        raise RuntimeError(f"Docker SDK is unavailable: {type(exc).__name__}: {exc}") from exc
+
+    volumes = {
+        docker_bind_path(workspace): {"bind": "/workspace", "mode": "ro"},
+        docker_bind_path(input_dir): {"bind": "/input", "mode": "ro"},
+        docker_bind_path(public_dir): {"bind": "/public", "mode": "ro"},
+        docker_bind_path(output_dir): {"bind": "/output", "mode": "rw"},
+    }
+    client = docker.from_env()
+    container = None
+    try:
+        container = client.containers.run(
+            runner_image,
+            command=run_command,
+            detach=True,
+            network_mode="none",
+            cap_drop=["ALL"],
+            security_opt=["no-new-privileges"],
+            read_only=True,
+            tmpfs={"/tmp": "rw,nosuid,nodev,size=64m"},
+            nano_cpus=max(1, cpu_count) * 1_000_000_000,
+            mem_limit=f"{memory_limit_mb}m",
+            memswap_limit=f"{memory_limit_mb}m",
+            pids_limit=256,
+            volumes=volumes,
+        )
+        try:
+            result = container.wait(timeout=time_limit_sec + 10)
+        except requests.exceptions.ReadTimeout as exc:
+            try:
+                container.kill()
+            except Exception:
+                pass
+            raise subprocess.TimeoutExpired(cmd=run_command, timeout=time_limit_sec + 10) from exc
+
+        stdout = container.logs(stdout=True, stderr=False).decode("utf-8", errors="replace")
+        stderr = container.logs(stdout=False, stderr=True).decode("utf-8", errors="replace")
+        return subprocess.CompletedProcess(
+            args=["docker-sdk", runner_image, *run_command],
+            returncode=int((result or {}).get("StatusCode", 1)),
+            stdout=stdout,
+            stderr=stderr,
+        )
+    finally:
+        if container is not None:
+            try:
+                container.remove(force=True)
+            except Exception:
+                pass
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def run_job(job):
@@ -258,7 +342,7 @@ def run_job(job):
             ]
             runner_image = spec.get("runner_image") or "aioj-python-basic:latest"
             limits = spec.get("limits") or {}
-            cpu_count = str(limits.get("cpu_count", 1))
+            cpu_count = max(1, int(limits.get("cpu_count", 1)))
             memory_limit_mb = int(limits.get("memory_limit_mb", 1024))
             time_limit_sec = int(limits.get("time_limit_sec", 60))
             output_limit_mb = int(limits.get("output_limit_mb", 64))
@@ -267,49 +351,63 @@ def run_job(job):
             has_docker = docker_error is None
 
             if has_docker:
-                cmd = [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--network",
-                    "none",
-                    "--cap-drop",
-                    "ALL",
-                    "--security-opt",
-                    "no-new-privileges",
-                    "--read-only",
-                    "--tmpfs",
-                    "/tmp:rw,nosuid,nodev,size=64m",
-                    "--cpus",
-                    cpu_count,
-                    "--memory",
-                    f"{memory_limit_mb}m",
-                    "--memory-swap",
-                    f"{memory_limit_mb}m",
-                    "--pids-limit",
-                    "256",
-                    "-v",
-                    f"{docker_bind_path(workspace)}:/workspace:ro",
-                    "-v",
-                    f"{docker_bind_path(input_dir)}:/input:ro",
-                    "-v",
-                    f"{docker_bind_path(public_dir)}:/public:ro",
-                    "-v",
-                    f"{docker_bind_path(output_dir)}:/output",
-                    runner_image,
-                    *run_command,
-                ]
-
-                write("running docker sandbox...")
-                write("command: " + " ".join(cmd))
-
+                docker_bin = shutil.which("docker")
                 start = time.time()
-                proc = subprocess.run(
-                    cmd,
-                    text=True,
-                    capture_output=True,
-                    timeout=time_limit_sec + 10,
-                )
+                if docker_bin:
+                    cmd = [
+                        docker_bin,
+                        "run",
+                        "--rm",
+                        "--network",
+                        "none",
+                        "--cap-drop",
+                        "ALL",
+                        "--security-opt",
+                        "no-new-privileges",
+                        "--read-only",
+                        "--tmpfs",
+                        "/tmp:rw,nosuid,nodev,size=64m",
+                        "--cpus",
+                        str(cpu_count),
+                        "--memory",
+                        f"{memory_limit_mb}m",
+                        "--memory-swap",
+                        f"{memory_limit_mb}m",
+                        "--pids-limit",
+                        "256",
+                        "-v",
+                        f"{docker_bind_path(workspace)}:/workspace:ro",
+                        "-v",
+                        f"{docker_bind_path(input_dir)}:/input:ro",
+                        "-v",
+                        f"{docker_bind_path(public_dir)}:/public:ro",
+                        "-v",
+                        f"{docker_bind_path(output_dir)}:/output",
+                        runner_image,
+                        *run_command,
+                    ]
+                    write("running docker sandbox...")
+                    write("command: " + " ".join(cmd))
+                    proc = subprocess.run(
+                        cmd,
+                        text=True,
+                        capture_output=True,
+                        timeout=time_limit_sec + 10,
+                    )
+                else:
+                    write("running docker sandbox via Docker SDK...")
+                    write("command: docker-sdk " + runner_image + " " + " ".join(run_command))
+                    proc = run_docker_sandbox_via_sdk(
+                        runner_image=runner_image,
+                        run_command=run_command,
+                        workspace=workspace,
+                        input_dir=input_dir,
+                        public_dir=public_dir,
+                        output_dir=output_dir,
+                        cpu_count=cpu_count,
+                        memory_limit_mb=memory_limit_mb,
+                        time_limit_sec=time_limit_sec,
+                    )
                 runtime_ms = int((time.time() - start) * 1000)
             else:
                 if docker_error:

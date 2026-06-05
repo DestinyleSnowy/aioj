@@ -52,6 +52,17 @@ def put_bytes(bucket: str, key: str, body: bytes, content_type: str = "applicati
     s3_client().put_object(Bucket=bucket, Key=key, Body=body, ContentType=content_type)
 
 
+def head_object(bucket: str, key: str) -> dict:
+    return s3_client().head_object(Bucket=bucket, Key=key)
+
+
+def get_object(bucket: str, key: str, byte_range: str | None = None) -> dict:
+    kwargs = {"Bucket": bucket, "Key": key}
+    if byte_range:
+        kwargs["Range"] = byte_range
+    return s3_client().get_object(**kwargs)
+
+
 def get_bytes(bucket: str, key: str) -> bytes:
     obj = s3_client().get_object(Bucket=bucket, Key=key)
     return obj["Body"].read()

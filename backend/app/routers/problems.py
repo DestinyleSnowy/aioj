@@ -3,8 +3,10 @@ import json
 import re
 import tempfile
 import zipfile
+from email.utils import format_datetime
 from pathlib import Path, PurePosixPath
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from sqlalchemy import text
 
@@ -37,7 +39,7 @@ from app.services.problem_versions import (
     set_problem_version_status,
 )
 from app.settings import settings
-from app.storage import S3_BUCKET_PROBLEMS, get_bytes, get_text, put_bytes
+from app.storage import S3_BUCKET_PROBLEMS, get_bytes, get_object, get_text, head_object, put_bytes
 from app.uploads import parse_yaml, safe_extract_zip_bytes, safe_slug, validate_problem_archive
 
 router = APIRouter()
@@ -404,9 +406,39 @@ def get_problem_statement_pdf(slug: str, asset_id: str, request: Request):
 
     filename = str(match.get("filename") or f"{asset_id}.pdf")
     media_type = guess_content_type(filename, "application/pdf")
-    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    object_head = head_object(S3_BUCKET_PROBLEMS, match["object_key"])
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Content-Length": str(int(object_head.get("ContentLength") or 0)),
+    }
+    if object_head.get("ETag"):
+        headers["ETag"] = str(object_head["ETag"])
+    if object_head.get("LastModified"):
+        headers["Last-Modified"] = format_datetime(object_head["LastModified"], usegmt=True)
     if request.method == "HEAD":
         return Response(media_type=media_type, headers=headers)
+
+    byte_range = request.headers.get("range")
+    if byte_range:
+        try:
+            partial = get_object(S3_BUCKET_PROBLEMS, match["object_key"], byte_range=byte_range)
+        except ClientError as exc:
+            status_code = int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 500)
+            if status_code == 416 or str(exc.response.get("Error", {}).get("Code") or "") == "InvalidRange":
+                raise HTTPException(status_code=416, detail="Requested range not satisfiable") from exc
+            raise
+        content = partial["Body"].read()
+        range_headers = dict(headers)
+        range_headers["Content-Length"] = str(int(partial.get("ContentLength") or len(content)))
+        if partial.get("ContentRange"):
+            range_headers["Content-Range"] = str(partial["ContentRange"])
+        return Response(
+            content=content,
+            status_code=206,
+            media_type=media_type,
+            headers=range_headers,
+        )
 
     content = get_bytes(S3_BUCKET_PROBLEMS, match["object_key"])
     return Response(
