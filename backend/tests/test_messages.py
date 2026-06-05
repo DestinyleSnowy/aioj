@@ -6,6 +6,7 @@ from app.routers.messages import (
     clamp_limit,
     edit_direct_message,
     extract_message_mentions,
+    list_message_conversations,
     normalize_group_member_ids,
     normalize_group_name,
     normalize_group_nickname,
@@ -31,6 +32,9 @@ class _FakeResult:
 
     def first(self):
         return self.row
+
+    def all(self):
+        return self.row or []
 
 
 class _FakeConn:
@@ -59,6 +63,9 @@ class _FakeEngine:
         self.conn = conn
 
     def begin(self):
+        return _FakeBegin(self.conn)
+
+    def connect(self):
         return _FakeBegin(self.conn)
 
 
@@ -272,3 +279,18 @@ def test_report_message_rejects_reporting_own_group_message(monkeypatch):
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "Cannot report your own message"
     assert conn.calls == []
+
+
+def test_list_message_conversations_aligns_direct_and_group_union_columns(monkeypatch):
+    conn = _FakeConn(row=[])
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+
+    result = list_message_conversations(user={"id": 3})
+
+    assert result == {"items": []}
+    assert len(conn.calls) == 1
+    statement, params = conn.calls[0]
+    assert "null::text as last_sender_group_nickname" in statement
+    assert "null::text as peer_avatar_object_key" in statement
+    assert "null::timestamptz as peer_avatar_updated_at" in statement
+    assert params == {"user_id": 3, "limit": 50}
