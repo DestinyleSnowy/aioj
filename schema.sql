@@ -4,7 +4,7 @@
 create table if not exists users (
   id bigserial primary key,
   username text unique not null,
-  email text unique,
+  email text unique not null,
   password_hash text not null,
   role text not null default 'USER',
   is_disabled boolean not null default false,

@@ -6,6 +6,7 @@ def test_find_runtime_configuration_errors_flags_missing_or_reused_secrets():
         jwt_secret="shared-secret",
         internal_api_token="shared-secret",
         s3_secret_key="shared-secret",
+        admin_email="",
         admin_password="adminadmin",
     )
 
@@ -13,6 +14,7 @@ def test_find_runtime_configuration_errors_flags_missing_or_reused_secrets():
 
     assert any("JWT_SECRET must not reuse the S3 secret" in error for error in errors)
     assert any("INTERNAL_API_TOKEN must not reuse another application secret" in error for error in errors)
+    assert any("ADMIN_EMAIL must be configured" in error for error in errors)
     assert any("ADMIN_PASSWORD is too weak" in error for error in errors)
 
 

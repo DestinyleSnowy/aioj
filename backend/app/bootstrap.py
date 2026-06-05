@@ -28,7 +28,12 @@ def find_runtime_configuration_errors(settings_obj=settings) -> list[str]:
     }:
         errors.append("INTERNAL_API_TOKEN must not reuse another application secret")
     if settings_obj.bootstrap_admin_on_startup:
+        admin_email = settings_obj.admin_email.strip()
         admin_password = settings_obj.admin_password.strip()
+        if not admin_email:
+            errors.append("ADMIN_EMAIL must be configured when bootstrap_admin_on_startup is enabled")
+        elif len(admin_email) > 254 or "@" not in admin_email:
+            errors.append("ADMIN_EMAIL must be a valid email address")
         if not admin_password:
             errors.append("ADMIN_PASSWORD must be configured when bootstrap_admin_on_startup is enabled")
         if (
@@ -44,6 +49,8 @@ def validate_runtime_configuration(settings_obj=settings) -> None:
     errors = find_runtime_configuration_errors(settings_obj)
     if errors:
         raise RuntimeError("; ".join(errors))
+
+
 def ensure_admin() -> None:
     from app.db import engine
 
@@ -59,7 +66,10 @@ def ensure_admin() -> None:
                     """
                     update users
                     set role = 'ADMIN',
-                        email = coalesce(email, :email)
+                        email = case
+                          when email is null or length(btrim(email)) = 0 then :email
+                          else email
+                        end
                     where username = :username
                     """
                 ),
@@ -87,6 +97,7 @@ def build_settings_for_test(**overrides):
         "jwt_secret": "test-jwt-secret",
         "internal_api_token": "test-internal-token",
         "s3_secret_key": "test-s3-secret",
+        "admin_email": "admin@example.com",
         "admin_password": "a-strong-admin-password",
         "bootstrap_admin_on_startup": True,
         "allow_insecure_admin_password": False,

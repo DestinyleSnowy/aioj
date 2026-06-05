@@ -988,8 +988,8 @@ function showAuthModal(tab = 'login') {
         <input type="text" id="regUser" placeholder="大小写英文字母及数字" autocomplete="username" />
       </div>
       <div class="form-group">
-        <label for="regEmail">邮箱地址 (选填)</label>
-        <input type="email" id="regEmail" placeholder="email@address.com" autocomplete="email" />
+        <label for="regEmail">邮箱地址</label>
+        <input type="email" id="regEmail" placeholder="email@address.com" autocomplete="email" required />
       </div>
       <div class="form-group">
         <label for="regPass">设置密码</label>
@@ -1043,11 +1043,15 @@ async function submitAuth() {
       toast('欢迎登录 AIOJ 评测平台', 'success');
       route();
     } else {
+      const email = $('regEmail').value.trim();
+      if (!email) {
+        throw new Error('请输入邮箱地址。');
+      }
       const data = await api('/api/auth/register', {
         method: 'POST',
         body: JSON.stringify({
           username: $('regUser').value.trim(),
-          email: $('regEmail').value.trim() || undefined,
+          email,
           password: $('regPass').value,
         }),
       });

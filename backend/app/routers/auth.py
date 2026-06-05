@@ -1,3 +1,4 @@
+import logging
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
@@ -14,17 +15,41 @@ from app.storage import S3_BUCKET_AVATARS, delete_object, get_bytes, put_bytes
 from app.user_profiles import normalize_signature, serialize_user, validate_avatar_upload, validate_username
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _request_host(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _normalize_registration_email(value: str | None) -> str:
+    email = str(value or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    if len(email) > 254 or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email")
+    return email
+
+
+def _registration_conflict_detail(exc: IntegrityError) -> str:
+    diag = getattr(getattr(exc, "orig", None), "diag", None)
+    constraint_name = str(getattr(diag, "constraint_name", "") or "").lower()
+    message = str(getattr(exc, "orig", exc)).lower()
+
+    if constraint_name == "users_username_key" or "users_username_key" in message or "key (username)" in message:
+        return "Username already exists"
+    if constraint_name == "users_email_key" or "users_email_key" in message or "key (email)" in message:
+        return "Email already exists"
+    return "Username or email already exists"
 
 
 @router.post("/api/auth/register")
 def register(payload: dict, request: Request):
     username = validate_username(payload.get("username"))
-    email = (payload.get("email") or "").strip() or None
+    email = _normalize_registration_email(payload.get("email"))
     password = payload.get("password") or ""
     check_rate_limit(client_key(request, "auth-register", username.lower()), max_calls=5, window_seconds=600)
 
-    if email and (len(email) > 254 or "@" not in email):
-        raise HTTPException(status_code=400, detail="Invalid email")
     if len(password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     if not get_setting_bool("registration_enabled", True):
@@ -42,8 +67,23 @@ def register(payload: dict, request: Request):
                 ),
                 {"username": username, "email": email, "password_hash": hash_password(password)},
             ).mappings().first()
+        except IntegrityError as exc:
+            logger.info(
+                "Registration rejected for username=%s email=%s host=%s reason=%s",
+                username,
+                email,
+                _request_host(request),
+                str(getattr(exc, "orig", exc)),
+            )
+            raise HTTPException(status_code=400, detail=_registration_conflict_detail(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=400, detail="Username or email already exists") from exc
+            logger.exception(
+                "Registration failed for username=%s email=%s host=%s",
+                username,
+                email,
+                _request_host(request),
+            )
+            raise HTTPException(status_code=500, detail="Registration failed, please retry later") from exc
 
     user = serialize_user(row)
     return {"token": make_token(user["id"], user["username"], user["role"]), "user": user}
