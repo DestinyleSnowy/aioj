@@ -18,6 +18,8 @@ AIOJ is a FastAPI-based online judge for AI/ML style problems and contests. It i
    docker compose up -d --build
    ```
 
+   The API applies Alembic migrations automatically on startup by default.
+
 4. Open the site through Caddy, or use the API health check:
 
    ```bash
@@ -114,6 +116,12 @@ OPENROUTER_BASE_URL=...
 - Deploy to VM: `.github/workflows/deploy.yml` and `scripts/server_deploy.sh`
 - Backup: `ops/backup.sh`
 - Restore: `ops/restore.sh /path/to/aioj_backup_YYYYMMDD_HHMMSS.tar.gz --yes`
+
+If you deploy backend code without recreating the API container, restart it so startup migrations can run:
+
+```bash
+docker compose up -d --build api
+```
 
 Backups include database dumps, project files, MinIO object data, and Caddy data when mounted. Backup archives may contain secrets and should be stored privately.
 
