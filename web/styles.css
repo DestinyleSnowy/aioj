@@ -2892,6 +2892,17 @@ tr:last-child td {
   line-height: 1.6;
 }
 
+.message-reply-preview {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid hsla(var(--hue-primary), 90%, 60%, 0.5);
+  border-radius: 10px;
+  background: hsla(var(--hue-primary), 90%, 60%, 0.08);
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+ }
+
 .message-image-frame {
   margin-bottom: 8px;
   max-width: 100%;
@@ -3115,6 +3126,14 @@ body.message-image-panning {
   gap: var(--space-sm);
 }
 
+.message-action-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .message-quote-btn {
   flex: 0 0 auto;
   border: 0;
@@ -3128,6 +3147,89 @@ body.message-image-panning {
 
 .message-quote-btn:hover {
   color: var(--color-accent);
+}
+
+.message-reply-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: var(--border-light);
+  border-radius: var(--radius-md);
+  background: hsla(var(--hue-primary), 90%, 60%, 0.08);
+}
+
+.message-reply-banner-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.message-reply-banner-body strong {
+  font-size: 11px;
+  color: var(--color-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.message-reply-banner-body span {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.message-reply-banner-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+
+.message-file-button.disabled {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.message-block-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.message-block-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 12px 14px;
+  border: var(--border-light);
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.message-block-item-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.message-block-item-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.message-block-item-copy strong {
+  color: var(--text-main);
 }
 
 .message-composer {

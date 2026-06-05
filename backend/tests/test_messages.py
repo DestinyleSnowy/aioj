@@ -4,18 +4,62 @@ from fastapi import HTTPException
 from app.routers.messages import (
     build_group_payload,
     clamp_limit,
+    edit_direct_message,
     extract_message_mentions,
     normalize_group_member_ids,
     normalize_group_name,
     normalize_group_nickname,
     normalize_message_body,
     normalize_message_cursor,
+    normalize_edited_message_body,
     normalize_optional_message_body,
+    report_message,
     require_group_owner,
     safe_attachment_filename,
     trim_message_page,
+    update_message_conversation_preferences,
     validate_file_upload,
 )
+
+
+class _FakeResult:
+    def __init__(self, row=None):
+        self.row = row
+
+    def mappings(self):
+        return self
+
+    def first(self):
+        return self.row
+
+
+class _FakeConn:
+    def __init__(self, row=None):
+        self.row = row
+        self.calls: list[tuple[str, dict]] = []
+
+    def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+        return _FakeResult(self.row)
+
+
+class _FakeBegin:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def __enter__(self):
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeEngine:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def begin(self):
+        return _FakeBegin(self.conn)
 
 
 def test_normalize_message_body_trims_and_limits_length():
@@ -66,6 +110,15 @@ def test_optional_message_body_allows_empty_caption_but_limits_length():
     with pytest.raises(HTTPException) as too_long:
         normalize_optional_message_body("x" * 4001)
     assert too_long.value.status_code == 400
+
+
+def test_normalize_edited_message_body_allows_empty_attachment_caption():
+    assert normalize_edited_message_body({"attachment_object_key": "messages/demo.bin"}, {"body_md": "   "}) == ""
+    assert normalize_edited_message_body({"attachment_object_key": None}, {"body_md": "  updated  "}) == "updated"
+
+    with pytest.raises(HTTPException) as empty:
+        normalize_edited_message_body({"attachment_object_key": None}, {"body_md": "   "})
+    assert empty.value.status_code == 400
 
 
 def test_validate_file_upload_accepts_images_and_regular_files():
@@ -124,7 +177,13 @@ def test_normalize_group_member_ids_dedupes_and_skips_current_user():
 def test_extract_message_mentions_dedupes_usernames_and_all():
     mentions = extract_message_mentions("@alice hello @bob, @alice and @all")
 
-    assert mentions == ["alice", "bob", "all"]
+    assert mentions == {"usernames": ["alice", "bob"], "nicknames": [], "all": True}
+
+
+def test_extract_message_mentions_supports_braced_group_nicknames():
+    mentions = extract_message_mentions("@{火箭队} hi @{Data Crew} @{火箭队}")
+
+    assert mentions == {"usernames": [], "nicknames": ["火箭队", "Data Crew"], "all": False}
 
 
 def test_build_group_payload_marks_owner_management_capability():
@@ -144,3 +203,72 @@ def test_require_group_owner_rejects_regular_member():
         require_group_owner({"member_role": "MEMBER"})
 
     assert forbidden.value.status_code == 403
+
+
+def test_update_message_conversation_preferences_rejects_self_direct_conversation(monkeypatch):
+    with pytest.raises(HTTPException) as excinfo:
+        update_message_conversation_preferences("direct", 7, {"is_pinned": True}, user={"id": 7})
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Cannot update self conversation preferences"
+
+
+def test_edit_direct_message_allows_empty_attachment_caption(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_direct_message_for_user",
+        lambda *_args, **_kwargs: {
+            "sender_id": 9,
+            "deleted_at": None,
+            "attachment_object_key": "messages/demo.bin",
+        },
+    )
+
+    result = edit_direct_message(15, {"body_md": "   "}, user={"id": 9})
+
+    assert result == {"ok": True, "message_id": 15}
+    assert len(conn.calls) == 1
+    _, params = conn.calls[0]
+    assert params == {"message_id": 15, "body_md": ""}
+
+
+def test_report_message_rejects_reporting_own_direct_message(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_direct_message_for_user",
+        lambda *_args, **_kwargs: {"sender_id": 5},
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        report_message(
+            {"conversation_type": "direct", "message_id": 12, "reason": "spam"},
+            user={"id": 5},
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Cannot report your own message"
+    assert conn.calls == []
+
+
+def test_report_message_rejects_reporting_own_group_message(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_group_message_for_user",
+        lambda *_args, **_kwargs: {"sender_id": 6},
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        report_message(
+            {"conversation_type": "group", "message_id": 21, "reason": "abuse"},
+            user={"id": 6},
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Cannot report your own message"
+    assert conn.calls == []

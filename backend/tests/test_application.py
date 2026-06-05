@@ -45,6 +45,12 @@ def test_create_app_registers_core_routes():
     assert "/api/messages/groups/{group_id}/leave" in paths
     assert "/api/messages/groups/{group_id}/transfer-owner" in paths
     assert "/api/messages/groups/{group_id}/members/{member_id}" in paths
+    assert "/api/messages/conversation-preferences/{conversation_type}/{conversation_id}" in paths
+    assert "/api/messages/blocks" in paths
+    assert "/api/messages/blocks/{blocked_user_id}" in paths
+    assert "/api/messages/reports" in paths
+    assert "/api/messages/direct-messages/{message_id}" in paths
+    assert "/api/messages/group-messages/{message_id}" in paths
     assert "/api/messages/group-messages/{message_id}/attachment" in paths
     assert "/api/messages/{message_id}/attachment" in paths
     assert "/api/messages/{message_id}/image" in paths

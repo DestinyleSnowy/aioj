@@ -37,10 +37,13 @@ const state = {
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
   messageActiveConversationKey: '',
+  messageConversationSearch: '',
+  messageShowArchived: false,
   messageAttachmentCache: new Map(),
   messageComposerDrafts: new Map(),
   messageLayoutCleanup: null,
   messageImagePreview: null,
+  messageReplyTarget: null,
   newMessagePendingFiles: [],
   newGroupMembers: [],
   messageActiveGroup: null,
@@ -796,8 +799,8 @@ function clearPageState() {
   $('sidebarOverlay').classList.remove('open');
 }
 
-function stopMessageAutoRefresh() {
-  if (state.messageRefreshTimer) {
+function stopMessageAutoRefresh(options = {}) {
+  if (options.clearTimer && state.messageRefreshTimer) {
     clearInterval(state.messageRefreshTimer);
     state.messageRefreshTimer = null;
   }
@@ -805,6 +808,7 @@ function stopMessageAutoRefresh() {
   state.messageActivePeerId = 0;
   state.messageActiveConversationKey = '';
   state.messageActiveGroup = null;
+  state.messageReplyTarget = null;
 }
 
 function updateNav() {
@@ -913,6 +917,7 @@ async function checkHealth() {
 async function loadMe() {
   if (!state.token) {
     clearMessageAttachmentCache();
+    stopMessageAutoRefresh({ clearTimer: true });
     state.user = null;
     state.notificationUnreadCount = 0;
     state.messageUnreadCount = 0;
@@ -923,9 +928,11 @@ async function loadMe() {
     const data = await api('/api/auth/me', { headers: authHeaders() });
     state.user = data.user || data;
     await Promise.allSettled([refreshNotificationCount(), refreshMessageCount()]);
+    ensureMessageAutoRefresh();
     updateNav();
   } catch {
     clearMessageAttachmentCache();
+    stopMessageAutoRefresh({ clearTimer: true });
     state.token = '';
     localStorage.removeItem('aioj_token');
     state.user = null;
@@ -1082,6 +1089,7 @@ async function submitAuth() {
 
 function logout() {
   clearMessageAttachmentCache();
+  stopMessageAutoRefresh({ clearTimer: true });
   state.token = '';
   state.user = null;
   state.notificationUnreadCount = 0;
@@ -3155,6 +3163,7 @@ async function uploadMessageFiles({
   recipient = '',
   groupId = null,
   body = '',
+  replyToMessageId = null,
   files = [],
 }) {
   const selectedFiles = normalizeMessageFiles(files);
@@ -3165,6 +3174,7 @@ async function uploadMessageFiles({
     const fd = new FormData();
     if (conversationType === 'group') {
       fd.append('body_md', index === 0 ? body : '');
+      if (index === 0 && replyToMessageId) fd.append('reply_to_message_id', String(replyToMessageId));
       fd.append('file', file);
       lastResponse = await api(`/api/messages/groups/${Number(groupId)}/files`, {
         method: 'POST',
@@ -3178,6 +3188,7 @@ async function uploadMessageFiles({
         fd.append('recipient', recipient);
       }
       fd.append('body_md', index === 0 ? body : '');
+      if (index === 0 && replyToMessageId) fd.append('reply_to_message_id', String(replyToMessageId));
       fd.append('file', file);
       lastResponse = await api('/api/messages/files', {
         method: 'POST',
@@ -3241,16 +3252,20 @@ function parseMessageConversationKey(value, fallbackType = 'direct') {
   return { type: fallbackType, id: 0, key: '' };
 }
 
-function messageConversationFromPath(path = location.pathname) {
+function messageConversationFromState() {
+  return parseMessageConversationKey(state.messageActiveConversationKey || state.messageActivePeerId || '');
+}
+
+function messageConversationFromPath(path = location.pathname, { fallbackToState = false } = {}) {
   let match = String(path || '').match(/^\/messages\/groups\/(\d+)$/);
   if (match) return parseMessageConversationKey(`group:${match[1]}`);
   match = String(path || '').match(/^\/messages\/(\d+)$/);
   if (match) return parseMessageConversationKey(`direct:${match[1]}`);
-  return parseMessageConversationKey(state.messageActiveConversationKey || state.messageActivePeerId || '');
+  return fallbackToState ? messageConversationFromState() : parseMessageConversationKey('');
 }
 
-function currentMessageConversationKey() {
-  return messageConversationFromPath().key;
+function currentMessageConversationKey(options = {}) {
+  return messageConversationFromPath(location.pathname, options).key;
 }
 
 function messageConversationPath(target) {
@@ -3268,6 +3283,13 @@ function messageConversationApiPath(target, { beforeId = null } = {}) {
   const params = new URLSearchParams({ limit: String(MESSAGE_THREAD_PAGE_SIZE) });
   if (beforeId) params.set('before_id', String(beforeId));
   return `${base}?${params.toString()}`;
+}
+
+function messageConversationListApiPath(limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (state.messageConversationSearch) params.set('q', state.messageConversationSearch);
+  if (state.messageShowArchived) params.set('include_archived', '1');
+  return `/api/messages/conversations?${params.toString()}`;
 }
 
 function currentMessagePeerId() {
@@ -3374,6 +3396,13 @@ function messageThreadIsNearBottom(list = $('messageThreadList')) {
 
 function oldestRenderedMessageId(list = $('messageThreadList')) {
   const row = list?.querySelector('.message-row[data-message-id]');
+  const id = Number(row?.dataset.messageId || 0);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
+function newestRenderedMessageId(list = $('messageThreadList')) {
+  const rows = list?.querySelectorAll('.message-row[data-message-id]');
+  const row = rows?.length ? rows[rows.length - 1] : null;
   const id = Number(row?.dataset.messageId || 0);
   return Number.isFinite(id) && id > 0 ? id : 0;
 }
@@ -3653,7 +3682,7 @@ function waitForImageReady(img) {
 async function pollMessageUnreadState() {
   const [countData, conversationData] = await Promise.all([
     api('/api/messages/unread-count', { headers: authHeaders() }),
-    api('/api/messages/conversations?limit=100', { headers: authHeaders() }),
+    api(messageConversationListApiPath(100), { headers: authHeaders() }),
   ]);
 
   state.messageUnreadCount = Number(countData.unread_count || 0);
@@ -3663,21 +3692,34 @@ async function pollMessageUnreadState() {
   if (!conversationKey) return;
   const conversations = conversationData.items || [];
   const active = conversations.find(c => (c.conversation_key || messageConversationKey(c.conversation_type, c.group_id || c.peer_id)) === conversationKey);
+  const list = $('messageThreadList');
+  const currentNewestId = newestRenderedMessageId(list);
+  const nextNewestId = Number(active?.last_message_id || 0);
+  const shouldRefreshThread = !!active && nextNewestId > currentNewestId && (messageThreadIsNearBottom(list) || Number(active?.last_sender_id) === Number(state.user?.id || 0));
+  if (shouldRefreshThread) {
+    await refreshMessages(conversationKey, { preserveComposer: true, focusComposer: false, scrollToBottom: true });
+    updateMessageThreadUnreadBadge(0);
+    return;
+  }
   updateMessageThreadUnreadBadge(Number(active?.unread_count || 0));
 }
 
 function ensureMessageAutoRefresh() {
   if (state.messageRefreshTimer) return;
   state.messageRefreshTimer = setInterval(async () => {
-    if (!state.user || !location.pathname.startsWith('/messages')) {
-      stopMessageAutoRefresh();
+    if (!state.user) {
+      stopMessageAutoRefresh({ clearTimer: true });
       return;
     }
     if (state.messageRefreshInFlight) return;
 
     state.messageRefreshInFlight = true;
     try {
-      await pollMessageUnreadState();
+      if (location.pathname.startsWith('/messages')) {
+        await pollMessageUnreadState();
+      } else {
+        await Promise.allSettled([refreshNotificationCount(), refreshMessageCount()]);
+      }
     } catch {
       // Keep the timer quiet; normal navigation or manual actions will surface errors.
     } finally {
@@ -3711,12 +3753,14 @@ async function renderMessages(target = null, options = {}) {
   }
 
   try {
-    const conversationData = await api('/api/messages/conversations?limit=100', { headers: authHeaders() });
+    const conversationData = await api(messageConversationListApiPath(100), { headers: authHeaders() });
     const conversations = conversationData.items || [];
     const requested = target ? parseMessageConversationKey(target) : messageConversationFromPath();
-    const firstConversationKey = conversations[0]?.conversation_key ||
-      messageConversationKey(conversations[0]?.conversation_type, conversations[0]?.group_id || conversations[0]?.peer_id);
-    const selectedKey = requested.key || firstConversationKey || '';
+    const hasExplicitSelection = !!target || /^\/messages\/(?:groups\/\d+|\d+)$/.test(location.pathname || '');
+    const selectedKey = requested.key || (hasExplicitSelection ? (
+      conversations[0]?.conversation_key ||
+      messageConversationKey(conversations[0]?.conversation_type, conversations[0]?.group_id || conversations[0]?.peer_id)
+    ) : '') || '';
     const selected = parseMessageConversationKey(selectedKey);
     let thread = null;
 
@@ -3739,9 +3783,10 @@ async function renderMessages(target = null, options = {}) {
       <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
         <div>
           <h3 class="section-title">聊天</h3>
-          <div class="text-muted" style="font-size: 13px;">支持站内私聊和群聊，打开会话后会自动标记已读。</div>
+          <div class="text-muted" style="font-size: 13px;">支持站内私聊和群聊，打开会话后会标记已读；置顶、归档、静音与拉黑会即时生效。</div>
         </div>
         <div class="row gap-sm" style="flex-wrap: wrap;">
+          <button class="btn btn-secondary" onclick="showMessageBlocksModal()">拉黑名单</button>
           <button class="btn btn-secondary" onclick="showCreateMessageGroupModal()">新建群聊</button>
           <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
         </div>
@@ -3749,10 +3794,22 @@ async function renderMessages(target = null, options = {}) {
 
       <div class="messages-layout">
         <aside class="message-conversation-list">
+          <div class="row gap-sm mb-md" style="align-items: center; flex-wrap: wrap;">
+            <input
+              type="search"
+              value="${esc(state.messageConversationSearch)}"
+              placeholder="搜索会话"
+              style="flex: 1 1 180px;"
+              oninput="setMessageConversationSearch(this.value)"
+            />
+            <button class="btn btn-secondary btn-sm" type="button" onclick="toggleMessageArchivedFilter()">
+              ${state.messageShowArchived ? '隐藏归档' : '显示归档'}
+            </button>
+          </div>
           ${conversations.length === 0 ? `
             <div class="message-empty-panel">
               <div class="empty-icon">✉</div>
-              <div class="text-muted" style="font-size: 13px;">暂无会话</div>
+              <div class="text-muted" style="font-size: 13px;">${state.messageConversationSearch ? '没有匹配的会话' : '暂无会话'}</div>
               <div class="row gap-sm mt-md" style="flex-wrap: wrap; justify-content: center;">
                 <button class="btn btn-secondary btn-sm" onclick="showCreateMessageGroupModal()">新建群聊</button>
                 <button class="btn btn-primary btn-sm" onclick="showNewMessageModal()">开始私信</button>
@@ -3769,12 +3826,15 @@ async function renderMessages(target = null, options = {}) {
             const subtitle = conversationType === 'group'
               ? `${Number(c.group_member_count || 0)} 位成员`
               : esc(c.peer_role || 'USER');
+            const stateBits = [c.is_pinned ? 'PIN' : '', c.is_muted ? 'MUTE' : '', c.is_archived ? 'ARCH' : ''].filter(Boolean).join(' · ');
             const previewPrefix = c.last_message_id
               ? (conversationType === 'group'
                 ? (incoming ? `${c.last_sender_group_nickname || c.last_sender_username || '成员'}：` : '我：')
                 : (incoming ? '' : '我：'))
               : '';
-            const previewText = c.last_message_id
+            const previewText = c.last_deleted_at
+              ? '消息已删除'
+              : c.last_message_id
               ? messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : ''))
               : (conversationType === 'group' ? '群聊已创建' : '空消息');
             return `
@@ -3785,7 +3845,7 @@ async function renderMessages(target = null, options = {}) {
                     <strong>${esc(title)}</strong>
                     <span>${formatDate(c.last_created_at || c.sort_at)}</span>
                   </span>
-                  <span class="message-conversation-subtitle">${subtitle}</span>
+                  <span class="message-conversation-subtitle">${subtitle}${stateBits ? ` · ${esc(stateBits)}` : ''}</span>
                   <span class="message-preview">
                     ${esc(previewPrefix)}${esc(previewText)}
                   </span>
@@ -3832,9 +3892,13 @@ async function renderMessages(target = null, options = {}) {
     state.messageActiveConversationKey = selected.key;
     state.messageActivePeerId = selected.type === 'direct' ? selected.id : 0;
     state.messageActiveGroup = selected.type === 'group' ? activeConversation : null;
+    if (!selected.key) state.messageReplyTarget = null;
+    updateMessageReplyBanner();
 
     updateMessageThreadUnreadBadge(0);
-    scrollMessageThreadToBottom();
+    if (selected.id && activeConversation && options.scrollToBottom !== false) {
+      scrollMessageThreadToBottom();
+    }
     hydrateMessageAttachments();
     ensureMessageAutoRefresh();
   } catch (err) {
@@ -3843,6 +3907,154 @@ async function renderMessages(target = null, options = {}) {
     } else {
       app.innerHTML = errorBox(err);
     }
+  }
+}
+
+let messageConversationSearchTimer = null;
+
+function setMessageConversationSearch(value = '') {
+  state.messageConversationSearch = String(value || '').trim();
+  clearTimeout(messageConversationSearchTimer);
+  messageConversationSearchTimer = setTimeout(() => {
+    void renderMessages(currentMessageConversationKey() || null, {
+      silent: true,
+      preserveComposer: true,
+      scrollToBottom: false,
+    });
+  }, 160);
+}
+
+function toggleMessageArchivedFilter() {
+  state.messageShowArchived = !state.messageShowArchived;
+  void renderMessages(currentMessageConversationKey() || null, {
+    silent: true,
+    preserveComposer: true,
+    scrollToBottom: false,
+  });
+}
+
+async function updateMessageConversationPreferences(conversationKey, changes = {}) {
+  const parsed = parseMessageConversationKey(conversationKey);
+  if (!parsed.id) return null;
+  const data = await api(`/api/messages/conversation-preferences/${parsed.type}/${parsed.id}`, {
+    method: 'PATCH',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  });
+  return data.preferences || null;
+}
+
+async function toggleMessageConversationPinned(conversationKey, nextValue) {
+  try {
+    await updateMessageConversationPreferences(conversationKey, { is_pinned: !!nextValue });
+    await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
+  } catch (err) {
+    toast(`更新会话置顶失败: ${err.message}`, 'error');
+  }
+}
+
+async function toggleMessageConversationMuted(conversationKey, nextValue) {
+  try {
+    await updateMessageConversationPreferences(conversationKey, { is_muted: !!nextValue });
+    await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
+  } catch (err) {
+    toast(`更新会话静音失败: ${err.message}`, 'error');
+  }
+}
+
+async function toggleMessageConversationArchived(conversationKey, nextValue) {
+  try {
+    await updateMessageConversationPreferences(conversationKey, { is_archived: !!nextValue });
+    if (nextValue && !state.messageShowArchived) {
+      history.pushState(null, '', '/messages');
+      state.currentRoute = '/messages';
+      await renderMessages(null, { silent: true, preserveComposer: false, scrollToBottom: false });
+    } else {
+      await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
+    }
+  } catch (err) {
+    toast(`更新会话归档失败: ${err.message}`, 'error');
+  }
+}
+
+async function toggleDirectConversationBlock(peerId, shouldBlock = true) {
+  const normalizedPeerId = Number(peerId || 0);
+  if (!normalizedPeerId) return;
+  try {
+    if (shouldBlock) {
+      if (!confirm('确认拉黑该用户吗？拉黑后双方将无法继续发送私信。')) return;
+      await api('/api/messages/blocks', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blocked_user_id: normalizedPeerId }),
+      });
+    } else {
+      await api(`/api/messages/blocks/${normalizedPeerId}`, {
+        method: 'DELETE',
+        headers: authHeaders(),
+      });
+    }
+    await refreshMessages(messageConversationKey('direct', normalizedPeerId), { preserveComposer: true, scrollToBottom: false });
+  } catch (err) {
+    toast(`更新拉黑状态失败: ${err.message}`, 'error');
+  }
+}
+
+function renderMessageBlocksModalBody(items = []) {
+  if (!items.length) {
+    return `<div class="text-muted" style="font-size: 13px;">当前没有拉黑任何用户。</div>`;
+  }
+  return `
+    <div class="message-block-list">
+      ${items.map((user) => `
+        <div class="message-block-item">
+          <div class="message-block-item-main">
+            ${renderConversationAvatar('direct', user.username || '用户', user.avatar_url)}
+            <div class="message-block-item-copy">
+              <strong>${esc(user.username || '用户')}</strong>
+              <div class="text-muted" style="font-size: 12px;">${esc(user.role || 'USER')} · 拉黑于 ${esc(formatDate(user.blocked_at))}</div>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" type="button" onclick="unblockMessageUser(${Number(user.id)})">解除拉黑</button>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function showMessageBlocksModal() {
+  openModal({
+    title: '拉黑名单',
+    body: `<div class="text-muted" style="font-size: 13px;">正在加载...</div>`,
+    footer: `<button class="btn btn-secondary" onclick="closeModal()">关闭</button>`,
+  });
+
+  try {
+    const data = await api('/api/messages/blocks', { headers: authHeaders() });
+    $('modalBody').innerHTML = renderMessageBlocksModalBody(data.items || []);
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+async function unblockMessageUser(userId) {
+  const normalizedUserId = Number(userId || 0);
+  if (!normalizedUserId) return;
+  try {
+    await api(`/api/messages/blocks/${normalizedUserId}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    toast('已解除拉黑', 'success');
+    await showMessageBlocksModal();
+    const conversationKey = messageConversationKey('direct', normalizedUserId);
+    if (currentMessageConversationKey() === conversationKey) {
+      await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
+    } else if (location.pathname === '/messages') {
+      await renderMessages(null, { silent: true, preserveComposer: true, scrollToBottom: false });
+    }
+  } catch (err) {
+    toast(`解除拉黑失败: ${err.message}`, 'error');
   }
 }
 
@@ -3913,6 +4125,81 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
   saveMessageComposerDraft(currentMessageConversationKey(), textarea.value);
 }
 
+function replyPreviewText(sender, body = '', attachmentLabel = '', deleted = false) {
+  const senderLabel = String(sender || '用户').trim() || '用户';
+  if (deleted) return `${senderLabel}：已删除消息`;
+  const pieces = [String(attachmentLabel || '').trim(), String(body || '').trim()].filter(Boolean);
+  const content = (pieces.join(' ') || '空消息').replace(/\s+/g, ' ').trim();
+  const clipped = content.length > 120 ? `${content.slice(0, 119)}…` : content;
+  return `${senderLabel}：${clipped}`;
+}
+
+function replyAttachmentLabel(contentType = '', filename = '') {
+  if (!contentType) return '';
+  const base = isImageAttachment(contentType) ? '[图片]' : '[文件]';
+  return filename ? `${base} ${filename}` : base;
+}
+
+function renderMessageReplyPreview(message) {
+  if (!Number(message?.reply_to_message_id || 0)) return '';
+  const preview = replyPreviewText(
+    message.reply_to_sender_username || '用户',
+    message.reply_to_body_md || '',
+    message.reply_to_has_attachment ? replyAttachmentLabel(message.reply_to_attachment_content_type || '', message.reply_to_attachment_filename || '') : '',
+    !!message.reply_to_deleted_at,
+  );
+  return `<div class="message-reply-preview">${esc(preview)}</div>`;
+}
+
+function currentMessageReplyTarget(conversationKey = currentMessageConversationKey()) {
+  const target = state.messageReplyTarget;
+  if (!target) return null;
+  return parseMessageConversationKey(target.conversationKey || '').key === parseMessageConversationKey(conversationKey).key
+    ? target
+    : null;
+}
+
+function clearMessageReplyTarget(conversationKey = currentMessageConversationKey()) {
+  const target = currentMessageReplyTarget(conversationKey);
+  if (!target) return;
+  state.messageReplyTarget = null;
+  updateMessageReplyBanner();
+}
+
+function replyToMessage(messageId, sender, body = '', attachmentLabel = '', deleted = false) {
+  const conversationKey = currentMessageConversationKey();
+  if (!conversationKey || !Number(messageId || 0)) return;
+  state.messageReplyTarget = {
+    conversationKey,
+    messageId: Number(messageId),
+    sender: String(sender || '用户'),
+    body: String(body || ''),
+    attachmentLabel: String(attachmentLabel || ''),
+    deleted: !!deleted,
+  };
+  updateMessageReplyBanner();
+  $('messageComposer')?.focus({ preventScroll: true });
+}
+
+function updateMessageReplyBanner() {
+  const banner = $('messageReplyBanner');
+  if (!banner) return;
+  const target = currentMessageReplyTarget();
+  if (!target) {
+    banner.hidden = true;
+    banner.innerHTML = '';
+    return;
+  }
+  banner.hidden = false;
+  banner.innerHTML = `
+    <div class="message-reply-banner-body">
+      <strong>回复中</strong>
+      <span>${esc(replyPreviewText(target.sender, target.body, target.attachmentLabel, target.deleted))}</span>
+    </div>
+    <button class="message-reply-banner-close" type="button" onclick="clearMessageReplyTarget(${jsArg(target.conversationKey)})" aria-label="取消回复">×</button>
+  `;
+}
+
 function renderMessageRow(message) {
   const mine = Number(message.sender_id) === Number(state.user.id);
   const senderLabel = messageSenderDisplayLabel(message);
@@ -3920,17 +4207,33 @@ function renderMessageRow(message) {
   const groupMessage = isGroupConversationMessage(message);
   const avatarName = groupMessage ? senderLabel : (message.sender_username || senderLabel || '用户');
   const avatarUrl = message.sender_avatar_url || (mine ? state.user?.avatar_url || '' : '');
+  const deleted = !!message.is_deleted || !!message.deleted_at;
+  const canDelete = !deleted && (mine || (groupMessage && String(state.messageActiveGroup?.current_user_member_role || '') === 'OWNER'));
+  const canEdit = !deleted && mine;
+  const canReport = !mine;
+  const metaBits = [messageMetaLabel(message)];
+  if (!groupMessage && mine && message.read_at) metaBits.push('已读');
+  if (message.edited_at && !deleted) metaBits.push('已编辑');
+  if (deleted) metaBits.push('已删除');
   return `
     <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id)}">
       ${renderMessageAvatar(avatarName, avatarUrl)}
       <div class="message-content">
         ${groupMessage ? `<div class="message-sender-name">${esc(mine ? `${senderLabel}（我）` : senderLabel)}</div>` : ''}
         <div class="message-bubble">
-          ${message.has_attachment ? renderMessageAttachment(message) : ''}
-          ${message.body_md ? renderMd(message.body_md) : ''}
+          ${renderMessageReplyPreview(message)}
+          ${deleted ? '<div class="text-muted">此消息已删除</div>' : ''}
+          ${!deleted && message.has_attachment ? renderMessageAttachment(message) : ''}
+          ${!deleted && message.body_md ? renderMd(message.body_md) : ''}
           <div class="message-meta">
-            <span>${esc(messageMetaLabel(message))}</span>
-            <button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>
+            <span>${esc(metaBits.join(' · '))}</span>
+            <span class="message-action-row">
+              ${!deleted ? `<button class="message-quote-btn" type="button" onclick="replyToMessage(${Number(message.id)}, ${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)}, ${deleted ? 'true' : 'false'})">回复</button>` : ''}
+              ${!deleted ? `<button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>` : ''}
+              ${canEdit ? `<button class="message-quote-btn" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(groupMessage ? 'group' : 'direct')}, ${jsArg(message.body_md || '')})">编辑</button>` : ''}
+              ${canDelete ? `<button class="message-quote-btn" type="button" onclick="deleteMessageAction(${Number(message.id)}, ${jsArg(groupMessage ? 'group' : 'direct')})">删除</button>` : ''}
+              ${canReport ? `<button class="message-quote-btn" type="button" onclick="showMessageReportModal(${Number(message.id)}, ${jsArg(groupMessage ? 'group' : 'direct')})">举报</button>` : ''}
+            </span>
           </div>
         </div>
       </div>
@@ -3949,6 +4252,10 @@ function renderMessageThread(peer, messages, options = {}) {
     : (peer.id || peer.peer_id);
   const conversationKey = messageConversationKey(conversationType, conversationId);
   const hasMore = !!options.hasMore;
+  const canMessage = conversationType === 'group' ? true : !!peer.can_message;
+  const directBlockNotice = conversationType === 'direct' && !canMessage
+    ? (peer.is_blocked_by_me ? '你已拉黑对方，当前无法继续发送消息。' : '对方已阻止你发送消息。')
+    : '';
   const title = conversationType === 'group'
     ? (peer.name || peer.group_name)
     : (peer.username || peer.peer_username);
@@ -3960,9 +4267,13 @@ function renderMessageThread(peer, messages, options = {}) {
       ${renderConversationAvatar(conversationType, title, peer.avatar_url || peer.peer_avatar_url)}
       <div style="min-width: 0; flex: 1;">
         <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
-        <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}</div>
+        <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}${peer.is_pinned ? ' · PIN' : ''}${peer.is_muted ? ' · MUTE' : ''}${peer.is_archived ? ' · ARCH' : ''}</div>
       </div>
       <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${jsArg(conversationKey)})" aria-label="查看新消息">0</button>
+      <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationPinned(${jsArg(conversationKey)}, ${peer.is_pinned ? 'false' : 'true'})">${peer.is_pinned ? '取消置顶' : '置顶'}</button>
+      <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationMuted(${jsArg(conversationKey)}, ${peer.is_muted ? 'false' : 'true'})">${peer.is_muted ? '取消静音' : '静音'}</button>
+      <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationArchived(${jsArg(conversationKey)}, ${peer.is_archived ? 'false' : 'true'})">${peer.is_archived ? '取消归档' : '归档'}</button>
+      ${conversationType === 'direct' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleDirectConversationBlock(${conversationId}, ${peer.is_blocked_by_me ? 'false' : 'true'})">${peer.is_blocked_by_me ? '解除拉黑' : '拉黑'}</button>` : ''}
       ${conversationType === 'group' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showMessageGroupSettings(${conversationId})">群设置</button>` : ''}
     </div>
 
@@ -3977,15 +4288,17 @@ function renderMessageThread(peer, messages, options = {}) {
     </div>
 
     <div class="message-composer" id="messageComposerWrap">
-      <textarea id="messageComposer" rows="3" maxlength="4000" data-message-composer-key="${esc(conversationKey)}" data-message-composer-peer-id="${conversationType === 'direct' ? esc(conversationId) : ''}" placeholder="输入消息内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${jsArg(conversationKey)})"></textarea>
+      <div id="messageReplyBanner" class="message-reply-banner" hidden></div>
+      ${directBlockNotice ? `<div class="notice warning" style="margin-bottom: 0;">${esc(directBlockNotice)}</div>` : ''}
+      <textarea id="messageComposer" rows="3" maxlength="4000" data-message-composer-key="${esc(conversationKey)}" data-message-composer-peer-id="${conversationType === 'direct' ? esc(conversationId) : ''}" placeholder="输入消息内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}></textarea>
       <div class="message-drop-banner">松开以上传文件</div>
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
         <span class="text-muted message-composer-hint">最长 4000 字符 · 支持拖拽或粘贴文件，单个最大 20 MB</span>
         <div class="row gap-sm" style="flex-wrap: wrap;">
           ${conversationType === 'group' ? `<button class="btn btn-secondary" type="button" onclick="showGroupMentionModal(${conversationId})">@</button>` : ''}
-          <label class="btn btn-secondary message-file-button" for="messageFileInput">文件</label>
-          <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${jsArg(conversationKey)}, this)" />
-          <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${jsArg(conversationKey)})">发送</button>
+          <label class="btn btn-secondary message-file-button${canMessage ? '' : ' disabled'}" for="messageFileInput">文件</label>
+          <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${jsArg(conversationKey)}, this)" ${canMessage ? '' : 'disabled'} />
+          <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}>发送</button>
         </div>
       </div>
     </div>
@@ -5206,6 +5519,7 @@ async function sendMessageToPeer(peerId) {
   const textarea = $('messageComposer');
   const btn = $('sendMessageBtn');
   const body = textarea?.value.trim();
+  const replyTarget = currentMessageReplyTarget(target.key);
   if (!body) {
     toast('请输入消息内容', 'warning');
     return;
@@ -5217,17 +5531,18 @@ async function sendMessageToPeer(peerId) {
       await api(`/api/messages/groups/${target.id}/messages`, {
         method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body_md: body }),
+        body: JSON.stringify({ body_md: body, reply_to_message_id: replyTarget?.messageId || null }),
       });
     } else {
       await api('/api/messages', {
         method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipient_id: Number(target.id), body_md: body }),
+        body: JSON.stringify({ recipient_id: Number(target.id), body_md: body, reply_to_message_id: replyTarget?.messageId || null }),
       });
     }
     if (textarea) textarea.value = '';
     clearMessageComposerDraft(target.key);
+    clearMessageReplyTarget(target.key);
     await refreshMessages(target.key, { preserveComposer: false, focusComposer: true });
   } catch (err) {
     toast(`发送失败: ${err.message}`, 'error');
@@ -5313,6 +5628,7 @@ async function sendFilesToPeer(peerId, files, options = {}) {
   const btn = $('sendMessageBtn');
   const input = options.input || $('messageFileInput');
   const caption = textarea?.value.trim() || '';
+  const replyTarget = currentMessageReplyTarget(target.key);
 
   try {
     if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
@@ -5321,11 +5637,13 @@ async function sendFilesToPeer(peerId, files, options = {}) {
       recipientId: target.type === 'direct' ? Number(target.id) : null,
       groupId: target.type === 'group' ? Number(target.id) : null,
       body: caption,
+      replyToMessageId: replyTarget?.messageId || null,
       files: selectedFiles,
     });
     if (textarea) textarea.value = '';
     if (input) input.value = '';
     clearMessageComposerDraft(target.key);
+    clearMessageReplyTarget(target.key);
     if (selectedFiles.length > 1) {
       toast(`已发送 ${selectedFiles.length} 个文件`, 'success');
     }
@@ -5335,6 +5653,117 @@ async function sendFilesToPeer(peerId, files, options = {}) {
     textarea?.focus({ preventScroll: true });
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+  }
+}
+
+function showMessageEditModal(messageId, conversationType, currentBody = '') {
+  openModal({
+    title: '编辑消息',
+    body: `
+      <div class="form-group">
+        <label for="messageEditBody">消息内容</label>
+        <textarea id="messageEditBody" rows="6" maxlength="4000">${esc(currentBody)}</textarea>
+      </div>
+      <div id="messageEditError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="messageEditSubmitBtn" onclick="submitMessageEdit(${Number(messageId)}, ${jsArg(conversationType)})">保存</button>
+    `,
+  });
+}
+
+async function submitMessageEdit(messageId, conversationType) {
+  const btn = $('messageEditSubmitBtn');
+  const errEl = $('messageEditError');
+  const body = $('messageEditBody')?.value.trim() || '';
+  if (!body) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请输入消息内容。'; }
+    return;
+  }
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
+    const endpoint = conversationType === 'group'
+      ? `/api/messages/group-messages/${Number(messageId)}`
+      : `/api/messages/direct-messages/${Number(messageId)}`;
+    await api(endpoint, {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ body_md: body }),
+    });
+    closeModal();
+    await refreshMessageThreadNow();
+  } catch (err) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '保存'; }
+  }
+}
+
+async function deleteMessageAction(messageId, conversationType) {
+  if (!confirm('确认删除这条消息吗？')) return;
+  try {
+    const endpoint = conversationType === 'group'
+      ? `/api/messages/group-messages/${Number(messageId)}`
+      : `/api/messages/direct-messages/${Number(messageId)}`;
+    await api(endpoint, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    await refreshMessageThreadNow();
+  } catch (err) {
+    toast(`删除消息失败: ${err.message}`, 'error');
+  }
+}
+
+function showMessageReportModal(messageId, conversationType) {
+  openModal({
+    title: '举报消息',
+    body: `
+      <div class="form-group">
+        <label for="messageReportReason">举报原因</label>
+        <input id="messageReportReason" type="text" maxlength="80" placeholder="例如：骚扰、垃圾信息、违规内容" />
+      </div>
+      <div class="form-group">
+        <label for="messageReportDetails">补充说明</label>
+        <textarea id="messageReportDetails" rows="5" maxlength="2000" placeholder="可选，补充上下文帮助管理员判断"></textarea>
+      </div>
+      <div id="messageReportError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="messageReportSubmitBtn" onclick="submitMessageReport(${Number(messageId)}, ${jsArg(conversationType)})">提交举报</button>
+    `,
+  });
+}
+
+async function submitMessageReport(messageId, conversationType) {
+  const btn = $('messageReportSubmitBtn');
+  const errEl = $('messageReportError');
+  const reason = $('messageReportReason')?.value.trim() || '';
+  const details = $('messageReportDetails')?.value.trim() || '';
+  if (!reason) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '请填写举报原因。'; }
+    return;
+  }
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '提交中...'; }
+    await api('/api/messages/reports', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        conversation_type: conversationType,
+        message_id: Number(messageId),
+        reason,
+        details,
+      }),
+    });
+    closeModal();
+    toast('举报已提交', 'success');
+  } catch (err) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '提交举报'; }
   }
 }
 
@@ -8622,10 +9051,13 @@ Object.assign(window, {
   showMessageGroupSettings, saveMessageGroupName, saveMessageGroupNickname, searchGroupSettingsUsers, selectGroupSettingsMember,
   removeGroupSettingsPendingMember, addGroupSettingsMembers, removeMessageGroupMemberFromSettings,
   transferMessageGroupOwnerFromSettings, leaveMessageGroup, deleteMessageGroup, insertGroupMention, showGroupMentionModal,
+  setMessageConversationSearch, toggleMessageArchivedFilter, toggleMessageConversationPinned, toggleMessageConversationMuted,
+  toggleMessageConversationArchived, toggleDirectConversationBlock, showMessageBlocksModal, unblockMessageUser,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile,
-  refreshMessageThreadNow, quoteMessage,
+  refreshMessageThreadNow, quoteMessage, replyToMessage, clearMessageReplyTarget,
+  showMessageEditModal, submitMessageEdit, deleteMessageAction, showMessageReportModal, submitMessageReport,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });

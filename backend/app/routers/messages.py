@@ -21,7 +21,10 @@ MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_GROUP_NAME_LENGTH = 80
 MAX_GROUP_NICKNAME_LENGTH = 50
 MAX_GROUP_MEMBERS = 50
-MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])@([A-Za-z0-9][A-Za-z0-9_.-]{2,49}|all)\b", re.IGNORECASE)
+MAX_REPORT_REASON_LENGTH = 80
+MAX_REPORT_DETAILS_LENGTH = 2000
+PLAIN_MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])@([A-Za-z0-9][A-Za-z0-9_.-]{2,49}|all)\b", re.IGNORECASE)
+BRACED_MENTION_PATTERN = re.compile(r"@\{([^{}\r\n]{1,50})\}")
 IMAGE_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -42,6 +45,15 @@ def normalize_optional_message_body(value) -> str:
     if len(body) > MAX_MESSAGE_LENGTH:
         raise HTTPException(status_code=400, detail=f"Message body must be at most {MAX_MESSAGE_LENGTH} characters")
     return body
+
+
+def normalize_edited_message_body(message, payload: dict) -> str:
+    body = normalize_optional_message_body(payload.get("body_md") or payload.get("body"))
+    if body:
+        return body
+    if message.get("attachment_object_key"):
+        return ""
+    raise HTTPException(status_code=400, detail="Message body is required")
 
 
 def normalize_recipient_id(value) -> int | None:
@@ -258,6 +270,42 @@ def normalize_message_cursor(value) -> int | None:
     return cursor
 
 
+def normalize_conversation_type(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized not in {"direct", "group"}:
+        raise HTTPException(status_code=400, detail="Invalid conversation type")
+    return normalized
+
+
+def normalize_report_reason(value) -> str:
+    reason = str(value or "").strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Report reason is required")
+    if len(reason) > MAX_REPORT_REASON_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Report reason must be at most {MAX_REPORT_REASON_LENGTH} characters")
+    return reason
+
+
+def normalize_report_details(value) -> str:
+    details = str(value or "").strip()
+    if len(details) > MAX_REPORT_DETAILS_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Report details must be at most {MAX_REPORT_DETAILS_LENGTH} characters")
+    return details
+
+
+def normalize_optional_bool(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise HTTPException(status_code=400, detail="Invalid boolean value")
+
+
 def trim_message_page(rows, limit: int):
     if limit <= 0:
         return []
@@ -298,6 +346,10 @@ def serialize_message_row(row) -> dict:
     sender_group_nickname = str(data.get("sender_group_nickname") or "").strip()
     if "sender_group_nickname" in data:
         data["sender_group_nickname"] = sender_group_nickname or data.get("sender_username")
+    data["is_deleted"] = bool(data.get("deleted_at"))
+    if data["is_deleted"]:
+        data["has_attachment"] = False
+        data["attachment_id"] = None
     for key in (
         "sender_avatar_object_key",
         "sender_avatar_updated_at",
@@ -320,6 +372,9 @@ def serialize_conversation_row(row) -> dict:
         data["last_sender_group_nickname"] = last_sender_group_nickname or data.get("last_sender_username")
     for key in ("peer_avatar_object_key", "peer_avatar_updated_at"):
         data.pop(key, None)
+    data["is_pinned"] = bool(data.get("is_pinned"))
+    data["is_archived"] = bool(data.get("is_archived"))
+    data["is_muted"] = bool(data.get("is_muted"))
     return data
 
 
@@ -393,6 +448,17 @@ def build_group_payload(group, members: list[dict] | None = None) -> dict:
     return payload
 
 
+def apply_conversation_preferences_payload(payload: dict, preferences: dict | None = None) -> dict:
+    prefs = preferences or {}
+    payload["is_pinned"] = bool(prefs.get("is_pinned"))
+    payload["pinned_at"] = prefs.get("pinned_at")
+    payload["is_archived"] = bool(prefs.get("is_archived"))
+    payload["archived_at"] = prefs.get("archived_at")
+    payload["is_muted"] = bool(prefs.get("is_muted"))
+    payload["muted_at"] = prefs.get("muted_at")
+    return payload
+
+
 def require_group_owner(group) -> None:
     if dict(group).get("member_role") != "OWNER":
         raise HTTPException(status_code=403, detail="Only the group owner can manage this group")
@@ -412,6 +478,169 @@ def group_member_exists(conn, *, group_id: int, user_id: int) -> bool:
             {"group_id": group_id, "user_id": user_id},
         ).first()
     )
+
+
+def get_user_block_state(conn, *, current_user_id: int, other_user_id: int) -> dict:
+    row = conn.execute(
+        text(
+            """
+            select
+              exists(
+                select 1
+                from user_message_blocks
+                where blocker_id = :current_user_id
+                  and blocked_user_id = :other_user_id
+              ) as is_blocked_by_me,
+              exists(
+                select 1
+                from user_message_blocks
+                where blocker_id = :other_user_id
+                  and blocked_user_id = :current_user_id
+              ) as has_blocked_me
+            """
+        ),
+        {"current_user_id": current_user_id, "other_user_id": other_user_id},
+    ).mappings().first()
+    data = dict(row or {})
+    return {
+        "is_blocked_by_me": bool(data.get("is_blocked_by_me")),
+        "has_blocked_me": bool(data.get("has_blocked_me")),
+    }
+
+
+def require_direct_message_allowed(conn, *, current_user_id: int, other_user_id: int) -> None:
+    block_state = get_user_block_state(conn, current_user_id=current_user_id, other_user_id=other_user_id)
+    if block_state["is_blocked_by_me"]:
+        raise HTTPException(status_code=403, detail="You blocked this user")
+    if block_state["has_blocked_me"]:
+        raise HTTPException(status_code=403, detail="This user is not accepting your messages")
+
+
+def get_conversation_preferences(conn, *, user_id: int, conversation_type: str, conversation_id: int) -> dict:
+    normalized_type = normalize_conversation_type(conversation_type).upper()
+    row = conn.execute(
+        text(
+            """
+            select
+              is_pinned,
+              pinned_at,
+              is_archived,
+              archived_at,
+              is_muted,
+              muted_at,
+              updated_at
+            from message_conversation_preferences
+            where user_id = :user_id
+              and conversation_type = :conversation_type
+              and conversation_id = :conversation_id
+            """
+        ),
+        {
+            "user_id": user_id,
+            "conversation_type": normalized_type,
+            "conversation_id": conversation_id,
+        },
+    ).mappings().first()
+    data = dict(row or {})
+    return {
+        "is_pinned": bool(data.get("is_pinned")),
+        "pinned_at": data.get("pinned_at"),
+        "is_archived": bool(data.get("is_archived")),
+        "archived_at": data.get("archived_at"),
+        "is_muted": bool(data.get("is_muted")),
+        "muted_at": data.get("muted_at"),
+        "updated_at": data.get("updated_at"),
+    }
+
+
+def upsert_conversation_preferences(
+    conn,
+    *,
+    user_id: int,
+    conversation_type: str,
+    conversation_id: int,
+    is_pinned: bool | None = None,
+    is_archived: bool | None = None,
+    is_muted: bool | None = None,
+) -> dict:
+    normalized_type = normalize_conversation_type(conversation_type).upper()
+    current = get_conversation_preferences(
+        conn,
+        user_id=user_id,
+        conversation_type=normalized_type,
+        conversation_id=conversation_id,
+    )
+    pinned = current["is_pinned"] if is_pinned is None else bool(is_pinned)
+    archived = current["is_archived"] if is_archived is None else bool(is_archived)
+    muted = current["is_muted"] if is_muted is None else bool(is_muted)
+    row = conn.execute(
+        text(
+            """
+            insert into message_conversation_preferences(
+              user_id,
+              conversation_type,
+              conversation_id,
+              is_pinned,
+              pinned_at,
+              is_archived,
+              archived_at,
+              is_muted,
+              muted_at,
+              updated_at
+            )
+            values (
+              :user_id,
+              :conversation_type,
+              :conversation_id,
+              :is_pinned,
+              case when :is_pinned then now() else null end,
+              :is_archived,
+              case when :is_archived then now() else null end,
+              :is_muted,
+              case when :is_muted then now() else null end,
+              now()
+            )
+            on conflict (user_id, conversation_type, conversation_id) do update
+            set is_pinned = excluded.is_pinned,
+                pinned_at = case
+                  when excluded.is_pinned and message_conversation_preferences.is_pinned = false then now()
+                  when excluded.is_pinned then coalesce(message_conversation_preferences.pinned_at, now())
+                  else null
+                end,
+                is_archived = excluded.is_archived,
+                archived_at = case
+                  when excluded.is_archived and message_conversation_preferences.is_archived = false then now()
+                  when excluded.is_archived then coalesce(message_conversation_preferences.archived_at, now())
+                  else null
+                end,
+                is_muted = excluded.is_muted,
+                muted_at = case
+                  when excluded.is_muted and message_conversation_preferences.is_muted = false then now()
+                  when excluded.is_muted then coalesce(message_conversation_preferences.muted_at, now())
+                  else null
+                end,
+                updated_at = now()
+            returning is_pinned, pinned_at, is_archived, archived_at, is_muted, muted_at, updated_at
+            """
+        ),
+        {
+            "user_id": user_id,
+            "conversation_type": normalized_type,
+            "conversation_id": conversation_id,
+            "is_pinned": pinned,
+            "is_archived": archived,
+            "is_muted": muted,
+        },
+    ).mappings().first()
+    return {
+        "is_pinned": bool(row["is_pinned"]),
+        "pinned_at": row["pinned_at"],
+        "is_archived": bool(row["is_archived"]),
+        "archived_at": row["archived_at"],
+        "is_muted": bool(row["is_muted"]),
+        "muted_at": row["muted_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 def transfer_group_owner(conn, *, group_id: int, new_owner_id: int) -> None:
@@ -456,30 +685,62 @@ def choose_next_group_owner(conn, *, group_id: int, leaving_user_id: int) -> int
     ).scalar_one_or_none()
 
 
-def extract_message_mentions(body: str) -> list[str]:
-    mentions: list[str] = []
-    seen: set[str] = set()
-    for match in MENTION_PATTERN.finditer(body or ""):
-        mention = match.group(1).lower()
-        if mention in seen:
+def extract_message_mentions(body: str) -> dict[str, object]:
+    usernames: list[str] = []
+    username_seen: set[str] = set()
+    nicknames: list[str] = []
+    nickname_seen: set[str] = set()
+    mention_all = False
+
+    for match in PLAIN_MENTION_PATTERN.finditer(body or ""):
+        mention = str(match.group(1) or "").strip().lower()
+        if not mention:
             continue
-        seen.add(mention)
-        mentions.append(mention)
-    return mentions
+        if mention == "all":
+            mention_all = True
+            continue
+        if mention in username_seen:
+            continue
+        username_seen.add(mention)
+        usernames.append(mention)
+
+    for match in BRACED_MENTION_PATTERN.finditer(body or ""):
+        mention = str(match.group(1) or "").strip()
+        if not mention:
+            continue
+        lowered = mention.lower()
+        if lowered == "all":
+            mention_all = True
+            continue
+        if lowered in nickname_seen:
+            continue
+        nickname_seen.add(lowered)
+        nicknames.append(mention)
+
+    return {"usernames": usernames, "nicknames": nicknames, "all": mention_all}
 
 
 def notify_group_mentions(conn, *, group, body: str, sender) -> None:
     mentions = extract_message_mentions(body)
-    if not mentions:
+    if not mentions["all"] and not mentions["usernames"] and not mentions["nicknames"]:
         return
 
     members = list_group_members(conn, group["id"])
     by_username = {str(member["username"]).lower(): member for member in members}
+    by_nickname = {
+        str(member["group_nickname"]).strip().lower(): member
+        for member in members
+        if str(member["group_nickname"] or "").strip()
+    }
     target_ids: set[int] = set()
-    if "all" in mentions:
+    if mentions["all"]:
         target_ids.update(int(member["id"]) for member in members)
-    for mention in mentions:
+    for mention in mentions["usernames"]:
         member = by_username.get(mention)
+        if member:
+            target_ids.add(int(member["id"]))
+    for mention in mentions["nicknames"]:
+        member = by_nickname.get(str(mention).strip().lower())
         if member:
             target_ids.add(int(member["id"]))
 
@@ -533,6 +794,92 @@ def mark_group_messages_read(conn, *, group_id: int, user_id: int, joined_at):
         ),
         {"group_id": group_id, "user_id": user_id, "last_message_id": last_message_id},
     )
+
+
+def resolve_direct_reply_target(conn, *, current_user_id: int, peer_id: int, reply_to_message_id) -> int | None:
+    target_id = normalize_message_cursor(reply_to_message_id)
+    if target_id is None:
+        return None
+    row = conn.execute(
+        text(
+            """
+            select id
+            from direct_messages
+            where id = :message_id
+              and (
+                (sender_id = :current_user_id and recipient_id = :peer_id)
+                or (sender_id = :peer_id and recipient_id = :current_user_id)
+              )
+            """
+        ),
+        {"message_id": target_id, "current_user_id": current_user_id, "peer_id": peer_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Reply target not found")
+    return int(row["id"])
+
+
+def resolve_group_reply_target(conn, *, group_id: int, joined_at, reply_to_message_id) -> int | None:
+    target_id = normalize_message_cursor(reply_to_message_id)
+    if target_id is None:
+        return None
+    row = conn.execute(
+        text(
+            """
+            select id
+            from group_messages
+            where id = :message_id
+              and group_id = :group_id
+              and created_at >= :joined_at
+            """
+        ),
+        {"message_id": target_id, "group_id": group_id, "joined_at": joined_at},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Reply target not found")
+    return int(row["id"])
+
+
+def get_direct_message_for_user(conn, *, message_id: int, user_id: int):
+    row = conn.execute(
+        text(
+            """
+            select
+              dm.*,
+              case when dm.sender_id = :user_id then dm.recipient_id else dm.sender_id end as peer_id
+            from direct_messages dm
+            where dm.id = :message_id
+              and (dm.sender_id = :user_id or dm.recipient_id = :user_id)
+            """
+        ),
+        {"message_id": message_id, "user_id": user_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return row
+
+
+def get_group_message_for_user(conn, *, message_id: int, user_id: int):
+    row = conn.execute(
+        text(
+            """
+            select
+              gm.*,
+              mgm.role as current_member_role,
+              mgm.joined_at as current_member_joined_at
+            from group_messages gm
+            join message_group_members mgm
+              on mgm.group_id = gm.group_id
+             and mgm.user_id = :user_id
+            where gm.id = :message_id
+              and gm.created_at >= mgm.joined_at
+            """
+        ),
+        {"message_id": message_id, "user_id": user_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found")
+    return row
 
 
 def message_attachment_response(row):
@@ -601,19 +948,31 @@ def search_message_users(q: str = "", limit: int = 20, user=Depends(require_user
     params = {"user_id": user["id"], "limit": limit}
     where_query = ""
     if query:
-        where_query = "and username ilike :query"
+        where_query = "and u.username ilike :query"
         params["query"] = f"%{query}%"
 
     with engine.connect() as conn:
         rows = conn.execute(
             text(
                 f"""
-                select id, username, role, avatar_object_key, avatar_updated_at
-                from users
-                where id <> :user_id
-                  and coalesce(is_disabled, false) = false
+                select u.id, u.username, u.role, u.avatar_object_key, u.avatar_updated_at
+                from users u
+                where u.id <> :user_id
+                  and coalesce(u.is_disabled, false) = false
+                  and not exists (
+                    select 1
+                    from user_message_blocks umb
+                    where umb.blocker_id = :user_id
+                      and umb.blocked_user_id = u.id
+                  )
+                  and not exists (
+                    select 1
+                    from user_message_blocks umb
+                    where umb.blocker_id = u.id
+                      and umb.blocked_user_id = :user_id
+                  )
                   {where_query}
-                order by username asc, id asc
+                order by u.username asc, u.id asc
                 limit :limit
                 """
             ),
@@ -623,157 +982,200 @@ def search_message_users(q: str = "", limit: int = 20, user=Depends(require_user
 
 
 @router.get("/api/messages/conversations")
-def list_message_conversations(limit: int = 50, user=Depends(require_user)):
+def list_message_conversations(limit: int = 50, q: str = "", include_archived: bool = False, user=Depends(require_user)):
     limit = clamp_limit(limit, default=50, max_value=200)
+    query = str(q or "").strip()
+    params = {"user_id": user["id"], "limit": limit}
+    direct_search_filter = ""
+    group_search_filter = ""
+    archived_filter = "where coalesce(is_archived, false) = false"
+    if include_archived:
+        archived_filter = ""
+    if query:
+        params["query"] = f"%{query}%"
+        direct_search_filter = "and u.username ilike :query"
+        group_search_filter = "and g.name ilike :query"
     with engine.connect() as conn:
-        direct_rows = conn.execute(
+        rows = conn.execute(
             text(
-                """
-                with scoped as (
+                f"""
+                with direct_rows as (
+                  with scoped as (
+                    select
+                      dm.*,
+                      case
+                        when dm.sender_id = :user_id then dm.recipient_id
+                        else dm.sender_id
+                      end as peer_id
+                    from direct_messages dm
+                    where dm.sender_id = :user_id
+                       or dm.recipient_id = :user_id
+                  ),
+                  ranked as (
+                    select
+                      scoped.*,
+                      row_number() over (
+                        partition by peer_id
+                        order by created_at desc, id desc
+                      ) as rn
+                    from scoped
+                  ),
+                  unread as (
+                    select sender_id as peer_id, count(*) as unread_count
+                    from direct_messages
+                    where recipient_id = :user_id
+                      and is_read = false
+                    group by sender_id
+                  )
                   select
-                    dm.*,
-                    case
-                      when dm.sender_id = :user_id then dm.recipient_id
-                      else dm.sender_id
-                    end as peer_id
-                  from direct_messages dm
-                  where dm.sender_id = :user_id
-                     or dm.recipient_id = :user_id
+                    'direct' as conversation_type,
+                    ('direct:' || ranked.peer_id::text) as conversation_key,
+                    ranked.peer_id,
+                    u.username as peer_username,
+                    u.role as peer_role,
+                    u.avatar_object_key as peer_avatar_object_key,
+                    u.avatar_updated_at as peer_avatar_updated_at,
+                    null::bigint as group_id,
+                    null::text as group_name,
+                    null::bigint as group_owner_id,
+                    null::bigint as group_member_count,
+                    ranked.id as last_message_id,
+                    ranked.sender_id as last_sender_id,
+                    sender_user.username as last_sender_username,
+                    ranked.recipient_id as last_recipient_id,
+                    ranked.body_md as last_body_md,
+                    (ranked.attachment_object_key is not null and ranked.deleted_at is null) as last_has_attachment,
+                    ranked.attachment_content_type as last_attachment_content_type,
+                    ranked.attachment_filename as last_attachment_filename,
+                    ranked.attachment_size_bytes as last_attachment_size_bytes,
+                    ranked.is_read as last_is_read,
+                    ranked.created_at as last_created_at,
+                    ranked.read_at as last_read_at,
+                    ranked.deleted_at as last_deleted_at,
+                    coalesce(unread.unread_count, 0) as unread_count,
+                    ranked.created_at as sort_at,
+                    ranked.id as sort_id,
+                    coalesce(prefs.is_pinned, false) as is_pinned,
+                    prefs.pinned_at,
+                    coalesce(prefs.is_archived, false) as is_archived,
+                    prefs.archived_at,
+                    coalesce(prefs.is_muted, false) as is_muted,
+                    prefs.muted_at
+                  from ranked
+                  join users u on u.id = ranked.peer_id
+                  join users sender_user on sender_user.id = ranked.sender_id
+                  left join unread on unread.peer_id = ranked.peer_id
+                  left join message_conversation_preferences prefs
+                    on prefs.user_id = :user_id
+                   and prefs.conversation_type = 'DIRECT'
+                   and prefs.conversation_id = ranked.peer_id
+                  where ranked.rn = 1
+                    {direct_search_filter}
                 ),
-                ranked as (
+                group_rows as (
+                  with my_groups as (
+                    select
+                      g.id,
+                      g.name,
+                      g.owner_id,
+                      g.created_at,
+                      g.updated_at,
+                      mgm.joined_at,
+                      (
+                        select count(*)
+                        from message_group_members members
+                        where members.group_id = g.id
+                      ) as member_count
+                    from message_groups g
+                    join message_group_members mgm on mgm.group_id = g.id
+                    where mgm.user_id = :user_id
+                  ),
+                  unread as (
+                    select gm.group_id, count(*) as unread_count
+                    from group_messages gm
+                    join message_group_members mgm
+                      on mgm.group_id = gm.group_id
+                     and mgm.user_id = :user_id
+                    left join group_message_reads gmr
+                      on gmr.group_id = gm.group_id
+                     and gmr.user_id = :user_id
+                    where gm.sender_id <> :user_id
+                      and gm.created_at >= mgm.joined_at
+                      and gm.id > coalesce(gmr.last_read_message_id, 0)
+                    group by gm.group_id
+                  )
                   select
-                    scoped.*,
-                    row_number() over (
-                      partition by peer_id
-                      order by created_at desc, id desc
-                    ) as rn
-                  from scoped
-                ),
-                unread as (
-                  select sender_id as peer_id, count(*) as unread_count
-                  from direct_messages
-                  where recipient_id = :user_id
-                    and is_read = false
-                  group by sender_id
+                    'group' as conversation_type,
+                    ('group:' || g.id::text) as conversation_key,
+                    null::bigint as peer_id,
+                    null::text as peer_username,
+                    null::text as peer_role,
+                    g.id as group_id,
+                    g.name as group_name,
+                    g.owner_id as group_owner_id,
+                    g.member_count as group_member_count,
+                    last_message.id as last_message_id,
+                    last_message.sender_id as last_sender_id,
+                    sender_user.username as last_sender_username,
+                    coalesce(nullif(btrim(sender_member.group_nickname), ''), sender_user.username) as last_sender_group_nickname,
+                    null::bigint as last_recipient_id,
+                    last_message.body_md as last_body_md,
+                    (last_message.attachment_object_key is not null and last_message.deleted_at is null) as last_has_attachment,
+                    last_message.attachment_content_type as last_attachment_content_type,
+                    last_message.attachment_filename as last_attachment_filename,
+                    last_message.attachment_size_bytes as last_attachment_size_bytes,
+                    null::boolean as last_is_read,
+                    last_message.created_at as last_created_at,
+                    null::timestamptz as last_read_at,
+                    last_message.deleted_at as last_deleted_at,
+                    coalesce(unread.unread_count, 0) as unread_count,
+                    coalesce(last_message.created_at, g.created_at) as sort_at,
+                    coalesce(last_message.id, 0) as sort_id,
+                    coalesce(prefs.is_pinned, false) as is_pinned,
+                    prefs.pinned_at,
+                    coalesce(prefs.is_archived, false) as is_archived,
+                    prefs.archived_at,
+                    coalesce(prefs.is_muted, false) as is_muted,
+                    prefs.muted_at
+                  from my_groups g
+                  left join lateral (
+                    select gm.*
+                    from group_messages gm
+                    where gm.group_id = g.id
+                      and gm.created_at >= g.joined_at
+                    order by gm.created_at desc, gm.id desc
+                    limit 1
+                  ) last_message on true
+                  left join users sender_user on sender_user.id = last_message.sender_id
+                  left join message_group_members sender_member
+                    on sender_member.group_id = g.id
+                   and sender_member.user_id = last_message.sender_id
+                  left join unread on unread.group_id = g.id
+                  left join message_conversation_preferences prefs
+                    on prefs.user_id = :user_id
+                   and prefs.conversation_type = 'GROUP'
+                   and prefs.conversation_id = g.id
+                  where true
+                    {group_search_filter}
                 )
-                select
-                  'direct' as conversation_type,
-                  ('direct:' || ranked.peer_id::text) as conversation_key,
-                  ranked.peer_id,
-                  u.username as peer_username,
-                  u.role as peer_role,
-                  u.avatar_object_key as peer_avatar_object_key,
-                  u.avatar_updated_at as peer_avatar_updated_at,
-                  null::bigint as group_id,
-                  null::text as group_name,
-                  null::bigint as group_owner_id,
-                  null::bigint as group_member_count,
-                  ranked.id as last_message_id,
-                  ranked.sender_id as last_sender_id,
-                  sender_user.username as last_sender_username,
-                  ranked.recipient_id as last_recipient_id,
-                  ranked.body_md as last_body_md,
-                  (ranked.attachment_object_key is not null) as last_has_attachment,
-                  ranked.attachment_content_type as last_attachment_content_type,
-                  ranked.attachment_filename as last_attachment_filename,
-                  ranked.attachment_size_bytes as last_attachment_size_bytes,
-                  ranked.is_read as last_is_read,
-                  ranked.created_at as last_created_at,
-                  ranked.read_at as last_read_at,
-                  coalesce(unread.unread_count, 0) as unread_count,
-                  ranked.created_at as sort_at,
-                  ranked.id as sort_id
-                from ranked
-                join users u on u.id = ranked.peer_id
-                join users sender_user on sender_user.id = ranked.sender_id
-                left join unread on unread.peer_id = ranked.peer_id
-                where ranked.rn = 1
-                order by ranked.created_at desc, ranked.id desc
+                select *
+                from (
+                  select * from direct_rows
+                  union all
+                  select * from group_rows
+                ) conversations
+                {archived_filter}
+                order by
+                  coalesce(is_pinned, false) desc,
+                  pinned_at desc nulls last,
+                  sort_at desc,
+                  sort_id desc
+                limit :limit
                 """
             ),
-            {"user_id": user["id"]},
+            params,
         ).mappings().all()
-        group_rows = conn.execute(
-            text(
-                """
-                with my_groups as (
-                  select
-                    g.id,
-                    g.name,
-                    g.owner_id,
-                    g.created_at,
-                    g.updated_at,
-                    mgm.joined_at,
-                    (
-                      select count(*)
-                      from message_group_members members
-                      where members.group_id = g.id
-                    ) as member_count
-                  from message_groups g
-                  join message_group_members mgm on mgm.group_id = g.id
-                  where mgm.user_id = :user_id
-                ),
-                unread as (
-                  select gm.group_id, count(*) as unread_count
-                  from group_messages gm
-                  join message_group_members mgm
-                    on mgm.group_id = gm.group_id
-                   and mgm.user_id = :user_id
-                  left join group_message_reads gmr
-                    on gmr.group_id = gm.group_id
-                   and gmr.user_id = :user_id
-                  where gm.sender_id <> :user_id
-                    and gm.created_at >= mgm.joined_at
-                    and gm.id > coalesce(gmr.last_read_message_id, 0)
-                  group by gm.group_id
-                )
-                select
-                  'group' as conversation_type,
-                  ('group:' || g.id::text) as conversation_key,
-                  null::bigint as peer_id,
-                  null::text as peer_username,
-                  null::text as peer_role,
-                  g.id as group_id,
-                  g.name as group_name,
-                  g.owner_id as group_owner_id,
-                  g.member_count as group_member_count,
-                  last_message.id as last_message_id,
-                  last_message.sender_id as last_sender_id,
-                  sender_user.username as last_sender_username,
-                  coalesce(nullif(btrim(sender_member.group_nickname), ''), sender_user.username) as last_sender_group_nickname,
-                  null::bigint as last_recipient_id,
-                  last_message.body_md as last_body_md,
-                  (last_message.attachment_object_key is not null) as last_has_attachment,
-                  last_message.attachment_content_type as last_attachment_content_type,
-                  last_message.attachment_filename as last_attachment_filename,
-                  last_message.attachment_size_bytes as last_attachment_size_bytes,
-                  null::boolean as last_is_read,
-                  last_message.created_at as last_created_at,
-                  null::timestamptz as last_read_at,
-                  coalesce(unread.unread_count, 0) as unread_count,
-                  coalesce(last_message.created_at, g.created_at) as sort_at,
-                  coalesce(last_message.id, 0) as sort_id
-                from my_groups g
-                left join lateral (
-                  select gm.*
-                  from group_messages gm
-                  where gm.group_id = g.id
-                    and gm.created_at >= g.joined_at
-                  order by gm.created_at desc, gm.id desc
-                  limit 1
-                ) last_message on true
-                left join users sender_user on sender_user.id = last_message.sender_id
-                left join message_group_members sender_member
-                  on sender_member.group_id = g.id
-                 and sender_member.user_id = last_message.sender_id
-                left join unread on unread.group_id = g.id
-                """
-            ),
-            {"user_id": user["id"]},
-        ).mappings().all()
-    rows = [serialize_conversation_row(row) for row in direct_rows] + [serialize_conversation_row(row) for row in group_rows]
-    rows.sort(key=lambda row: (row["sort_at"], row["sort_id"]), reverse=True)
-    return {"items": rows[:limit]}
+    return {"items": [serialize_conversation_row(row) for row in rows]}
 
 
 @router.get("/api/messages/conversations/{peer_id}")
@@ -807,6 +1209,11 @@ def get_message_conversation(
         ).mappings().first()
         if not peer:
             raise HTTPException(status_code=404, detail="User not found")
+        block_state = get_user_block_state(conn, current_user_id=user["id"], other_user_id=peer_id)
+        preferences = get_conversation_preferences(conn, user_id=user["id"], conversation_type="direct", conversation_id=peer_id)
+        peer_payload = apply_conversation_preferences_payload(serialize_user(peer), preferences)
+        peer_payload.update(block_state)
+        peer_payload["can_message"] = not (block_state["is_blocked_by_me"] or block_state["has_blocked_me"])
 
         conn.execute(
             text(
@@ -840,7 +1247,7 @@ def get_message_conversation(
                 {"user_id": user["id"], "peer_id": peer_id, "before_id": before_id},
             ).mappings().first()
             if not anchor:
-                return {"peer": serialize_user(peer), "items": [], "has_more": False}
+                return {"peer": peer_payload, "items": [], "has_more": False}
             params["before_id"] = before_id
             params["before_created_at"] = anchor["created_at"]
             before_filter = """
@@ -866,17 +1273,29 @@ def get_message_conversation(
                     ru.avatar_object_key as recipient_avatar_object_key,
                     ru.avatar_updated_at as recipient_avatar_updated_at,
                     dm.body_md,
-                    (dm.attachment_object_key is not null) as has_attachment,
-                    case when dm.attachment_object_key is not null then dm.id end as attachment_id,
+                    dm.reply_to_message_id,
+                    (dm.attachment_object_key is not null and dm.deleted_at is null) as has_attachment,
+                    case when dm.attachment_object_key is not null and dm.deleted_at is null then dm.id end as attachment_id,
                     dm.attachment_content_type,
                     dm.attachment_filename,
                     dm.attachment_size_bytes,
                     dm.is_read,
                     dm.created_at,
-                    dm.read_at
+                    dm.read_at,
+                    dm.edited_at,
+                    dm.deleted_at,
+                    dm.deleted_by_user_id,
+                    reply.body_md as reply_to_body_md,
+                    (reply.attachment_object_key is not null and reply.deleted_at is null) as reply_to_has_attachment,
+                    reply.attachment_content_type as reply_to_attachment_content_type,
+                    reply.attachment_filename as reply_to_attachment_filename,
+                    reply.deleted_at as reply_to_deleted_at,
+                    reply_sender.username as reply_to_sender_username
                   from direct_messages dm
                   join users su on su.id = dm.sender_id
                   join users ru on ru.id = dm.recipient_id
+                  left join direct_messages reply on reply.id = dm.reply_to_message_id
+                  left join users reply_sender on reply_sender.id = reply.sender_id
                   where (
                     (dm.sender_id = :user_id and dm.recipient_id = :peer_id)
                     or (dm.sender_id = :peer_id and dm.recipient_id = :user_id)
@@ -892,7 +1311,7 @@ def get_message_conversation(
         ).mappings().all()
 
     return {
-        "peer": serialize_user(peer),
+        "peer": peer_payload,
         "items": [serialize_message_row(row) for row in trim_message_page(rows, limit)],
         "has_more": len(rows) > limit,
     }
@@ -904,6 +1323,7 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
     body = normalize_message_body(payload.get("body_md") or payload.get("body"))
     recipient_id = payload.get("recipient_id")
     recipient_key = str(payload.get("recipient_username") or payload.get("recipient") or "").strip()
+    reply_to_message_id = payload.get("reply_to_message_id")
 
     with engine.begin() as conn:
         recipient = resolve_recipient(
@@ -912,17 +1332,24 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
             recipient_id=recipient_id,
             recipient_key=recipient_key,
         )
+        require_direct_message_allowed(conn, current_user_id=user["id"], other_user_id=recipient["id"])
+        reply_target_id = resolve_direct_reply_target(
+            conn,
+            current_user_id=user["id"],
+            peer_id=recipient["id"],
+            reply_to_message_id=reply_to_message_id,
+        )
         row = conn.execute(
             text(
                 """
                 with inserted as (
-                  insert into direct_messages(sender_id, recipient_id, body_md)
-                  values (:sender_id, :recipient_id, :body_md)
-                  returning id, sender_id, recipient_id, body_md,
+                  insert into direct_messages(sender_id, recipient_id, body_md, reply_to_message_id)
+                  values (:sender_id, :recipient_id, :body_md, :reply_to_message_id)
+                  returning id, sender_id, recipient_id, body_md, reply_to_message_id,
                             false as has_attachment,
                             null::bigint as attachment_id,
                             attachment_content_type, attachment_filename, attachment_size_bytes,
-                            is_read, created_at, read_at
+                            is_read, created_at, read_at, edited_at, deleted_at, deleted_by_user_id
                 )
                 select
                   inserted.id,
@@ -935,6 +1362,7 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
                   ru.avatar_object_key as recipient_avatar_object_key,
                   ru.avatar_updated_at as recipient_avatar_updated_at,
                   inserted.body_md,
+                  inserted.reply_to_message_id,
                   inserted.has_attachment,
                   inserted.attachment_id,
                   inserted.attachment_content_type,
@@ -942,13 +1370,29 @@ def send_direct_message(payload: dict, request: Request, user=Depends(require_us
                   inserted.attachment_size_bytes,
                   inserted.is_read,
                   inserted.created_at,
-                  inserted.read_at
+                  inserted.read_at,
+                  inserted.edited_at,
+                  inserted.deleted_at,
+                  inserted.deleted_by_user_id,
+                  reply.body_md as reply_to_body_md,
+                  (reply.attachment_object_key is not null and reply.deleted_at is null) as reply_to_has_attachment,
+                  reply.attachment_content_type as reply_to_attachment_content_type,
+                  reply.attachment_filename as reply_to_attachment_filename,
+                  reply.deleted_at as reply_to_deleted_at,
+                  reply_sender.username as reply_to_sender_username
                 from inserted
                 join users su on su.id = inserted.sender_id
                 join users ru on ru.id = inserted.recipient_id
+                left join direct_messages reply on reply.id = inserted.reply_to_message_id
+                left join users reply_sender on reply_sender.id = reply.sender_id
                 """
             ),
-            {"sender_id": user["id"], "recipient_id": recipient["id"], "body_md": body},
+            {
+                "sender_id": user["id"],
+                "recipient_id": recipient["id"],
+                "body_md": body,
+                "reply_to_message_id": reply_target_id,
+            },
         ).mappings().first()
 
     return {"ok": True, "message": serialize_message_row(row), "peer": recipient}
@@ -1021,6 +1465,7 @@ def get_group_message_conversation(
 
     with engine.begin() as conn:
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        preferences = get_conversation_preferences(conn, user_id=user["id"], conversation_type="group", conversation_id=group_id)
         mark_group_messages_read(
             conn,
             group_id=group_id,
@@ -1045,7 +1490,7 @@ def get_group_message_conversation(
                 {"group_id": group_id, "joined_at": group["joined_at"], "before_id": before_id},
             ).mappings().first()
             if not anchor:
-                group_payload = build_group_payload(group, members)
+                group_payload = apply_conversation_preferences_payload(build_group_payload(group, members), preferences)
                 return {"group": group_payload, "items": [], "has_more": False}
             params["before_id"] = before_id
             params["before_created_at"] = anchor["created_at"]
@@ -1076,19 +1521,31 @@ def get_group_message_conversation(
                     null::text as recipient_avatar_object_key,
                     null::timestamptz as recipient_avatar_updated_at,
                     gm.body_md,
-                    (gm.attachment_object_key is not null) as has_attachment,
-                    case when gm.attachment_object_key is not null then gm.id end as attachment_id,
+                    gm.reply_to_message_id,
+                    (gm.attachment_object_key is not null and gm.deleted_at is null) as has_attachment,
+                    case when gm.attachment_object_key is not null and gm.deleted_at is null then gm.id end as attachment_id,
                     gm.attachment_content_type,
                     gm.attachment_filename,
                     gm.attachment_size_bytes,
                     null::boolean as is_read,
                     gm.created_at,
-                    null::timestamptz as read_at
+                    null::timestamptz as read_at,
+                    gm.edited_at,
+                    gm.deleted_at,
+                    gm.deleted_by_user_id,
+                    reply.body_md as reply_to_body_md,
+                    (reply.attachment_object_key is not null and reply.deleted_at is null) as reply_to_has_attachment,
+                    reply.attachment_content_type as reply_to_attachment_content_type,
+                    reply.attachment_filename as reply_to_attachment_filename,
+                    reply.deleted_at as reply_to_deleted_at,
+                    reply_sender.username as reply_to_sender_username
                   from group_messages gm
                   join users su on su.id = gm.sender_id
                   left join message_group_members mgm
                     on mgm.group_id = gm.group_id
                    and mgm.user_id = gm.sender_id
+                  left join group_messages reply on reply.id = gm.reply_to_message_id
+                  left join users reply_sender on reply_sender.id = reply.sender_id
                   where gm.group_id = :group_id
                     and gm.created_at >= :joined_at
                   {before_filter}
@@ -1101,7 +1558,7 @@ def get_group_message_conversation(
             params,
         ).mappings().all()
 
-    group_payload = build_group_payload(group, members)
+    group_payload = apply_conversation_preferences_payload(build_group_payload(group, members), preferences)
     return {
         "group": group_payload,
         "items": [serialize_message_row(row) for row in trim_message_page(rows, limit)],
@@ -1114,7 +1571,8 @@ def get_message_group_members(group_id: int, user=Depends(require_user)):
     with engine.connect() as conn:
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
         members = list_group_members(conn, group_id)
-    return {"group": build_group_payload(group, members), "items": members}
+        preferences = get_conversation_preferences(conn, user_id=user["id"], conversation_type="group", conversation_id=group_id)
+    return {"group": apply_conversation_preferences_payload(build_group_payload(group, members), preferences), "items": members}
 
 
 @router.patch("/api/messages/groups/{group_id}")
@@ -1350,20 +1808,27 @@ def delete_message_group(group_id: int, user=Depends(require_user)):
 def send_group_message(group_id: int, payload: dict, request: Request, user=Depends(require_user)):
     check_rate_limit(client_key(request, "message", str(user["id"])), max_calls=120, window_seconds=3600)
     body = normalize_message_body(payload.get("body_md") or payload.get("body"))
+    reply_to_message_id = payload.get("reply_to_message_id")
 
     with engine.begin() as conn:
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        reply_target_id = resolve_group_reply_target(
+            conn,
+            group_id=group_id,
+            joined_at=group["joined_at"],
+            reply_to_message_id=reply_to_message_id,
+        )
         row = conn.execute(
             text(
                 """
                 with inserted as (
-                  insert into group_messages(group_id, sender_id, body_md)
-                  values (:group_id, :sender_id, :body_md)
-                  returning id, group_id, sender_id, body_md,
+                  insert into group_messages(group_id, sender_id, body_md, reply_to_message_id)
+                  values (:group_id, :sender_id, :body_md, :reply_to_message_id)
+                  returning id, group_id, sender_id, body_md, reply_to_message_id,
                             false as has_attachment,
                             null::bigint as attachment_id,
                             attachment_content_type, attachment_filename, attachment_size_bytes,
-                            created_at
+                            created_at, edited_at, deleted_at, deleted_by_user_id
                 )
                 select
                   inserted.id,
@@ -1376,26 +1841,43 @@ def send_group_message(group_id: int, payload: dict, request: Request, user=Depe
                   su.avatar_updated_at as sender_avatar_updated_at,
                   coalesce(nullif(btrim(mgm.group_nickname), ''), su.username) as sender_group_nickname,
                   null::bigint as recipient_id,
-                  null::text as recipient_username,
-                  null::text as recipient_avatar_object_key,
-                  null::timestamptz as recipient_avatar_updated_at,
-                  inserted.body_md,
-                  inserted.has_attachment,
-                  inserted.attachment_id,
-                  inserted.attachment_content_type,
-                  inserted.attachment_filename,
-                  inserted.attachment_size_bytes,
-                  null::boolean as is_read,
-                  inserted.created_at,
-                  null::timestamptz as read_at
+                   null::text as recipient_username,
+                   null::text as recipient_avatar_object_key,
+                   null::timestamptz as recipient_avatar_updated_at,
+                   inserted.body_md,
+                   inserted.reply_to_message_id,
+                   inserted.has_attachment,
+                   inserted.attachment_id,
+                   inserted.attachment_content_type,
+                   inserted.attachment_filename,
+                   inserted.attachment_size_bytes,
+                   null::boolean as is_read,
+                   inserted.created_at,
+                   null::timestamptz as read_at,
+                   inserted.edited_at,
+                   inserted.deleted_at,
+                   inserted.deleted_by_user_id,
+                   reply.body_md as reply_to_body_md,
+                   (reply.attachment_object_key is not null and reply.deleted_at is null) as reply_to_has_attachment,
+                   reply.attachment_content_type as reply_to_attachment_content_type,
+                   reply.attachment_filename as reply_to_attachment_filename,
+                   reply.deleted_at as reply_to_deleted_at,
+                   reply_sender.username as reply_to_sender_username
                 from inserted
                 join users su on su.id = inserted.sender_id
                 left join message_group_members mgm
                   on mgm.group_id = inserted.group_id
                  and mgm.user_id = inserted.sender_id
+                left join group_messages reply on reply.id = inserted.reply_to_message_id
+                left join users reply_sender on reply_sender.id = reply.sender_id
                 """
             ),
-            {"group_id": group_id, "sender_id": user["id"], "body_md": body},
+            {
+                "group_id": group_id,
+                "sender_id": user["id"],
+                "body_md": body,
+                "reply_to_message_id": reply_target_id,
+            },
         ).mappings().first()
         conn.execute(
             text("update message_groups set updated_at = now() where id = :group_id"),
@@ -1426,6 +1908,7 @@ async def send_group_message_file(
     group_id: int,
     request: Request,
     body_md: str = Form(""),
+    reply_to_message_id: int | None = Form(None),
     file: UploadFile = File(...),
     user=Depends(require_user),
 ):
@@ -1438,6 +1921,12 @@ async def send_group_message_file(
 
     with engine.begin() as conn:
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
+        reply_target_id = resolve_group_reply_target(
+            conn,
+            group_id=group_id,
+            joined_at=group["joined_at"],
+            reply_to_message_id=reply_to_message_id,
+        )
         row = conn.execute(
             text(
                 """
@@ -1446,6 +1935,7 @@ async def send_group_message_file(
                     group_id,
                     sender_id,
                     body_md,
+                    reply_to_message_id,
                     attachment_object_key,
                     attachment_content_type,
                     attachment_filename,
@@ -1455,16 +1945,17 @@ async def send_group_message_file(
                     :group_id,
                     :sender_id,
                     :body_md,
+                    :reply_to_message_id,
                     :attachment_object_key,
                     :attachment_content_type,
                     :attachment_filename,
                     :attachment_size_bytes
                   )
-                  returning id, group_id, sender_id, body_md,
+                  returning id, group_id, sender_id, body_md, reply_to_message_id,
                             true as has_attachment,
                             id as attachment_id,
                             attachment_content_type, attachment_filename, attachment_size_bytes,
-                            created_at
+                            created_at, edited_at, deleted_at, deleted_by_user_id
                 )
                 select
                   inserted.id,
@@ -1477,29 +1968,42 @@ async def send_group_message_file(
                   su.avatar_updated_at as sender_avatar_updated_at,
                   coalesce(nullif(btrim(mgm.group_nickname), ''), su.username) as sender_group_nickname,
                   null::bigint as recipient_id,
-                  null::text as recipient_username,
-                  null::text as recipient_avatar_object_key,
-                  null::timestamptz as recipient_avatar_updated_at,
-                  inserted.body_md,
-                  inserted.has_attachment,
-                  inserted.attachment_id,
-                  inserted.attachment_content_type,
-                  inserted.attachment_filename,
-                  inserted.attachment_size_bytes,
-                  null::boolean as is_read,
-                  inserted.created_at,
-                  null::timestamptz as read_at
+                   null::text as recipient_username,
+                   null::text as recipient_avatar_object_key,
+                   null::timestamptz as recipient_avatar_updated_at,
+                   inserted.body_md,
+                   inserted.reply_to_message_id,
+                   inserted.has_attachment,
+                   inserted.attachment_id,
+                   inserted.attachment_content_type,
+                   inserted.attachment_filename,
+                   inserted.attachment_size_bytes,
+                   null::boolean as is_read,
+                   inserted.created_at,
+                   null::timestamptz as read_at,
+                   inserted.edited_at,
+                   inserted.deleted_at,
+                   inserted.deleted_by_user_id,
+                   reply.body_md as reply_to_body_md,
+                   (reply.attachment_object_key is not null and reply.deleted_at is null) as reply_to_has_attachment,
+                   reply.attachment_content_type as reply_to_attachment_content_type,
+                   reply.attachment_filename as reply_to_attachment_filename,
+                   reply.deleted_at as reply_to_deleted_at,
+                   reply_sender.username as reply_to_sender_username
                 from inserted
                 join users su on su.id = inserted.sender_id
                 left join message_group_members mgm
                   on mgm.group_id = inserted.group_id
                  and mgm.user_id = inserted.sender_id
+                left join group_messages reply on reply.id = inserted.reply_to_message_id
+                left join users reply_sender on reply_sender.id = reply.sender_id
                 """
             ),
             {
                 "group_id": group_id,
                 "sender_id": user["id"],
                 "body_md": body,
+                "reply_to_message_id": reply_target_id,
                 "attachment_object_key": object_key,
                 "attachment_content_type": content_type,
                 "attachment_filename": filename,
@@ -1546,6 +2050,7 @@ async def send_direct_message_file(
     recipient: str | None = Form(None),
     recipient_username: str | None = Form(None),
     body_md: str = Form(""),
+    reply_to_message_id: int | None = Form(None),
     file: UploadFile = File(...),
     user=Depends(require_user),
 ):
@@ -1563,6 +2068,13 @@ async def send_direct_message_file(
             recipient_id=recipient_id,
             recipient_key=recipient_username or recipient or "",
         )
+        require_direct_message_allowed(conn, current_user_id=user["id"], other_user_id=peer["id"])
+        reply_target_id = resolve_direct_reply_target(
+            conn,
+            current_user_id=user["id"],
+            peer_id=peer["id"],
+            reply_to_message_id=reply_to_message_id,
+        )
         row = conn.execute(
             text(
                 """
@@ -1571,6 +2083,7 @@ async def send_direct_message_file(
                     sender_id,
                     recipient_id,
                     body_md,
+                    reply_to_message_id,
                     attachment_object_key,
                     attachment_content_type,
                     attachment_filename,
@@ -1580,16 +2093,17 @@ async def send_direct_message_file(
                     :sender_id,
                     :recipient_id,
                     :body_md,
+                    :reply_to_message_id,
                     :attachment_object_key,
                     :attachment_content_type,
                     :attachment_filename,
                     :attachment_size_bytes
                   )
-                  returning id, sender_id, recipient_id, body_md,
+                  returning id, sender_id, recipient_id, body_md, reply_to_message_id,
                             true as has_attachment,
                             id as attachment_id,
                             attachment_content_type, attachment_filename, attachment_size_bytes,
-                            is_read, created_at, read_at
+                            is_read, created_at, read_at, edited_at, deleted_at, deleted_by_user_id
                 )
                 select
                   inserted.id,
@@ -1602,6 +2116,7 @@ async def send_direct_message_file(
                   ru.avatar_object_key as recipient_avatar_object_key,
                   ru.avatar_updated_at as recipient_avatar_updated_at,
                   inserted.body_md,
+                  inserted.reply_to_message_id,
                   inserted.has_attachment,
                   inserted.attachment_id,
                   inserted.attachment_content_type,
@@ -1609,16 +2124,28 @@ async def send_direct_message_file(
                   inserted.attachment_size_bytes,
                   inserted.is_read,
                   inserted.created_at,
-                  inserted.read_at
+                  inserted.read_at,
+                  inserted.edited_at,
+                  inserted.deleted_at,
+                  inserted.deleted_by_user_id,
+                  reply.body_md as reply_to_body_md,
+                  (reply.attachment_object_key is not null and reply.deleted_at is null) as reply_to_has_attachment,
+                  reply.attachment_content_type as reply_to_attachment_content_type,
+                  reply.attachment_filename as reply_to_attachment_filename,
+                  reply.deleted_at as reply_to_deleted_at,
+                  reply_sender.username as reply_to_sender_username
                 from inserted
                 join users su on su.id = inserted.sender_id
                 join users ru on ru.id = inserted.recipient_id
+                left join direct_messages reply on reply.id = inserted.reply_to_message_id
+                left join users reply_sender on reply_sender.id = reply.sender_id
                 """
             ),
             {
                 "sender_id": user["id"],
                 "recipient_id": peer["id"],
                 "body_md": body,
+                "reply_to_message_id": reply_target_id,
                 "attachment_object_key": object_key,
                 "attachment_content_type": content_type,
                 "attachment_filename": filename,
@@ -1643,6 +2170,7 @@ async def send_direct_message_image(
     recipient: str | None = Form(None),
     recipient_username: str | None = Form(None),
     body_md: str = Form(""),
+    reply_to_message_id: int | None = Form(None),
     image: UploadFile = File(...),
     user=Depends(require_user),
 ):
@@ -1652,6 +2180,7 @@ async def send_direct_message_image(
         recipient=recipient,
         recipient_username=recipient_username,
         body_md=body_md,
+        reply_to_message_id=reply_to_message_id,
         file=image,
         user=user,
     )
@@ -1668,6 +2197,7 @@ def get_direct_message_attachment(message_id: int, user=Depends(require_user)):
                 where id = :message_id
                   and (sender_id = :user_id or recipient_id = :user_id)
                   and attachment_object_key is not null
+                  and deleted_at is null
                 """
             ),
             {"message_id": message_id, "user_id": user["id"]},
@@ -1695,6 +2225,7 @@ def get_group_message_attachment(message_id: int, user=Depends(require_user)):
                 where gm.id = :message_id
                   and gm.created_at >= mgm.joined_at
                   and gm.attachment_object_key is not null
+                  and gm.deleted_at is null
                 """
             ),
             {"message_id": message_id, "user_id": user["id"]},
@@ -1706,6 +2237,238 @@ def get_group_message_attachment(message_id: int, user=Depends(require_user)):
 @router.get("/api/messages/group-messages/{message_id}/image")
 def get_group_message_image(message_id: int, user=Depends(require_user)):
     return get_group_message_attachment(message_id, user)
+
+
+@router.patch("/api/messages/conversation-preferences/{conversation_type}/{conversation_id}")
+def update_message_conversation_preferences(conversation_type: str, conversation_id: int, payload: dict, user=Depends(require_user)):
+    if int(conversation_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Invalid conversation id")
+    normalized_type = normalize_conversation_type(conversation_type)
+    if normalized_type == "direct" and conversation_id == int(user["id"]):
+        raise HTTPException(status_code=400, detail="Cannot update self conversation preferences")
+    is_pinned = normalize_optional_bool(payload.get("is_pinned")) if "is_pinned" in payload else None
+    is_archived = normalize_optional_bool(payload.get("is_archived")) if "is_archived" in payload else None
+    is_muted = normalize_optional_bool(payload.get("is_muted")) if "is_muted" in payload else None
+
+    with engine.begin() as conn:
+        if normalized_type == "direct":
+            peer = conn.execute(
+                text("select id from users where id = :peer_id"),
+                {"peer_id": conversation_id},
+            ).mappings().first()
+            if not peer:
+                raise HTTPException(status_code=404, detail="User not found")
+        else:
+            get_group_membership(conn, group_id=conversation_id, user_id=user["id"])
+        prefs = upsert_conversation_preferences(
+            conn,
+            user_id=user["id"],
+            conversation_type=normalized_type,
+            conversation_id=conversation_id,
+            is_pinned=is_pinned,
+            is_archived=is_archived,
+            is_muted=is_muted,
+        )
+    return {"ok": True, "conversation_type": normalized_type, "conversation_id": conversation_id, "preferences": prefs}
+
+
+@router.get("/api/messages/blocks")
+def list_message_blocks(user=Depends(require_user)):
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                select
+                  u.id,
+                  u.username,
+                  u.role,
+                  u.avatar_object_key,
+                  u.avatar_updated_at,
+                  umb.created_at as blocked_at
+                from user_message_blocks umb
+                join users u on u.id = umb.blocked_user_id
+                where umb.blocker_id = :user_id
+                order by umb.created_at desc, u.username asc
+                """
+            ),
+            {"user_id": user["id"]},
+        ).mappings().all()
+    return {
+        "items": [
+            {**serialize_user(row), "blocked_at": row["blocked_at"]}
+            for row in rows
+        ]
+    }
+
+
+@router.post("/api/messages/blocks")
+def create_message_block(payload: dict, user=Depends(require_user)):
+    blocked_user_id = payload.get("blocked_user_id") or payload.get("user_id")
+    blocked_user_key = str(payload.get("username") or payload.get("recipient") or "").strip()
+    with engine.begin() as conn:
+        blocked_user = resolve_recipient(
+            conn,
+            current_user_id=user["id"],
+            recipient_id=blocked_user_id,
+            recipient_key=blocked_user_key,
+        )
+        conn.execute(
+            text(
+                """
+                insert into user_message_blocks(blocker_id, blocked_user_id)
+                values (:blocker_id, :blocked_user_id)
+                on conflict (blocker_id, blocked_user_id) do nothing
+                """
+            ),
+            {"blocker_id": user["id"], "blocked_user_id": blocked_user["id"]},
+        )
+    return {"ok": True, "user": blocked_user}
+
+
+@router.delete("/api/messages/blocks/{blocked_user_id}")
+def delete_message_block(blocked_user_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                delete from user_message_blocks
+                where blocker_id = :blocker_id
+                  and blocked_user_id = :blocked_user_id
+                """
+            ),
+            {"blocker_id": user["id"], "blocked_user_id": blocked_user_id},
+        )
+    return {"ok": True, "deleted": int(result.rowcount or 0) > 0}
+
+
+@router.post("/api/messages/reports")
+def report_message(payload: dict, user=Depends(require_user)):
+    conversation_type = normalize_conversation_type(payload.get("conversation_type") or payload.get("scope"))
+    message_id = normalize_message_cursor(payload.get("message_id"))
+    reason = normalize_report_reason(payload.get("reason"))
+    details = normalize_report_details(payload.get("details"))
+    if message_id is None:
+        raise HTTPException(status_code=400, detail="message_id is required")
+
+    with engine.begin() as conn:
+        if conversation_type == "direct":
+            message = get_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
+            if int(message["sender_id"]) == int(user["id"]):
+                raise HTTPException(status_code=400, detail="Cannot report your own message")
+            row = conn.execute(
+                text(
+                    """
+                    insert into message_reports(reporter_id, direct_message_id, reason, details)
+                    values (:reporter_id, :message_id, :reason, :details)
+                    returning id, status, created_at
+                    """
+                ),
+                {"reporter_id": user["id"], "message_id": message_id, "reason": reason, "details": details},
+            ).mappings().first()
+        else:
+            message = get_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
+            if int(message["sender_id"]) == int(user["id"]):
+                raise HTTPException(status_code=400, detail="Cannot report your own message")
+            row = conn.execute(
+                text(
+                    """
+                    insert into message_reports(reporter_id, group_message_id, reason, details)
+                    values (:reporter_id, :message_id, :reason, :details)
+                    returning id, status, created_at
+                    """
+                ),
+                {"reporter_id": user["id"], "message_id": message_id, "reason": reason, "details": details},
+            ).mappings().first()
+    return {"ok": True, "report": dict(row)}
+
+
+@router.patch("/api/messages/direct-messages/{message_id}")
+def edit_direct_message(message_id: int, payload: dict, user=Depends(require_user)):
+    with engine.begin() as conn:
+        message = get_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
+        if int(message["sender_id"]) != int(user["id"]):
+            raise HTTPException(status_code=403, detail="Only the sender can edit this message")
+        if message["deleted_at"]:
+            raise HTTPException(status_code=400, detail="Deleted messages cannot be edited")
+        body = normalize_edited_message_body(message, payload)
+        conn.execute(
+            text(
+                """
+                update direct_messages
+                set body_md = :body_md,
+                    edited_at = now()
+                where id = :message_id
+                """
+            ),
+            {"message_id": message_id, "body_md": body},
+        )
+    return {"ok": True, "message_id": message_id}
+
+
+@router.delete("/api/messages/direct-messages/{message_id}")
+def delete_direct_message(message_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        message = get_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
+        if int(message["sender_id"]) != int(user["id"]):
+            raise HTTPException(status_code=403, detail="Only the sender can delete this message")
+        conn.execute(
+            text(
+                """
+                update direct_messages
+                set deleted_at = coalesce(deleted_at, now()),
+                    deleted_by_user_id = coalesce(deleted_by_user_id, :user_id),
+                    edited_at = now()
+                where id = :message_id
+                """
+            ),
+            {"message_id": message_id, "user_id": user["id"]},
+        )
+    return {"ok": True, "message_id": message_id, "deleted": True}
+
+
+@router.patch("/api/messages/group-messages/{message_id}")
+def edit_group_message(message_id: int, payload: dict, user=Depends(require_user)):
+    with engine.begin() as conn:
+        message = get_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
+        if int(message["sender_id"]) != int(user["id"]):
+            raise HTTPException(status_code=403, detail="Only the sender can edit this message")
+        if message["deleted_at"]:
+            raise HTTPException(status_code=400, detail="Deleted messages cannot be edited")
+        body = normalize_edited_message_body(message, payload)
+        conn.execute(
+            text(
+                """
+                update group_messages
+                set body_md = :body_md,
+                    edited_at = now()
+                where id = :message_id
+                """
+            ),
+            {"message_id": message_id, "body_md": body},
+        )
+    return {"ok": True, "message_id": message_id}
+
+
+@router.delete("/api/messages/group-messages/{message_id}")
+def delete_group_message(message_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        message = get_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
+        can_delete = int(message["sender_id"]) == int(user["id"]) or str(message["current_member_role"]) == "OWNER"
+        if not can_delete:
+            raise HTTPException(status_code=403, detail="You do not have permission to delete this message")
+        conn.execute(
+            text(
+                """
+                update group_messages
+                set deleted_at = coalesce(deleted_at, now()),
+                    deleted_by_user_id = coalesce(deleted_by_user_id, :user_id),
+                    edited_at = now()
+                where id = :message_id
+                """
+            ),
+            {"message_id": message_id, "user_id": user["id"]},
+        )
+    return {"ok": True, "message_id": message_id, "deleted": True}
 
 
 @router.post("/api/messages/conversations/{peer_id}/read")
