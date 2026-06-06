@@ -527,6 +527,36 @@ function saveGifFavorites(items = []) {
   writeStoredJson(MESSAGE_GIF_FAVORITES_STORAGE_KEY, items.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS));
 }
 
+function newGifFavoriteId() {
+  return `gif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function messageGifFavoriteSourceKey(message) {
+  if (!message?.has_attachment || !isGifMessageAttachment(message)) return '';
+  if (isTransientLocalMessage(message)) return `local:${message.local_id || message.attachment_id || ''}`;
+  const scope = message.attachment_scope || message.message_type || (message.group_id ? 'group' : 'direct');
+  const attachmentId = message.attachment_id || message.id;
+  return attachmentId ? `message:${scope === 'group' ? 'group' : 'direct'}:${Number(attachmentId)}` : '';
+}
+
+function isGifFavoriteStored({ sourceKey = '', dataUrl = '' } = {}) {
+  const normalizedSourceKey = String(sourceKey || '');
+  const normalizedDataUrl = String(dataUrl || '');
+  return storedGifFavorites().some((item) => (
+    (normalizedSourceKey && item.source_key === normalizedSourceKey)
+    || (normalizedDataUrl && item.data_url === normalizedDataUrl)
+  ));
+}
+
+function isGifMessageAttachment(message) {
+  return !!message?.has_attachment && isGifAttachment(message.attachment_content_type || '', message.attachment_filename || '');
+}
+
+function isMessageGifAlreadyFavorite(message) {
+  const sourceKey = messageGifFavoriteSourceKey(message);
+  return !!sourceKey && isGifFavoriteStored({ sourceKey });
+}
+
 function formatDate(v) {
   if (!v) return '';
   const d = new Date(v);
@@ -3283,6 +3313,17 @@ function isImageAttachment(contentType) {
   return String(contentType || '').toLowerCase().startsWith('image/');
 }
 
+function isGifAttachment(contentType = '', filename = '') {
+  const type = String(contentType || '').split(';', 1)[0].trim().toLowerCase();
+  return type === 'image/gif' || /\.gif$/i.test(String(filename || '').split(/[?#]/, 1)[0]);
+}
+
+function attachmentPreviewLabel(contentType = '', filename = '') {
+  if (!contentType && !filename) return '';
+  if (isGifAttachment(contentType, filename)) return '[GIF]';
+  return isImageAttachment(contentType) ? '[图片]' : '[文件]';
+}
+
 function formatFileSize(bytes) {
   const n = Number(bytes || 0);
   if (!Number.isFinite(n) || n <= 0) return '';
@@ -3428,9 +3469,7 @@ async function uploadDirectMessageFiles({ recipientId = null, recipient = '', bo
 
 function messagePreview(text, limit = 96, attachmentContentType = '') {
   const value = String(text || '').replace(/\s+/g, ' ').trim();
-  const attachmentLabel = attachmentContentType
-    ? (isImageAttachment(attachmentContentType) ? '[图片]' : '[文件]')
-    : '';
+  const attachmentLabel = attachmentPreviewLabel(attachmentContentType);
   if (!value && attachmentLabel) return attachmentLabel;
   if (value && attachmentLabel) return `${attachmentLabel} ${value.length <= limit ? value : `${value.slice(0, limit - 1)}…`}`;
   if (value.length <= limit) return value || '空消息';
@@ -3924,6 +3963,76 @@ function waitForImageReady(img) {
   });
 }
 
+function renderMessageConversationEmpty() {
+  return `
+    <div class="message-empty-panel">
+      <div class="empty-icon">✉</div>
+      <div class="text-muted" style="font-size: 13px;">${state.messageConversationSearch ? '没有匹配的会话' : '暂无会话'}</div>
+      <div class="row gap-sm mt-md" style="flex-wrap: wrap; justify-content: center;">
+        <button class="btn btn-secondary btn-sm" onclick="showCreateMessageGroupModal()">新建群聊</button>
+        <button class="btn btn-primary btn-sm" onclick="showNewMessageModal()">开始私信</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderMessageConversationButton(c, selectedKey = '') {
+  const conversationType = c.conversation_type === 'group' ? 'group' : 'direct';
+  const conversationId = conversationType === 'group' ? c.group_id : c.peer_id;
+  const conversationKey = c.conversation_key || messageConversationKey(conversationType, conversationId);
+  const active = conversationKey === selectedKey;
+  const incoming = Number(c.last_sender_id) !== Number(state.user?.id || 0);
+  const unread = Number(c.unread_count || 0);
+  const title = conversationType === 'group' ? c.group_name : c.peer_username;
+  const subtitle = conversationType === 'group'
+    ? `${Number(c.group_member_count || 0)} 位成员`
+    : (c.peer_role || 'USER');
+  const stateBits = [c.is_pinned ? 'PIN' : '', c.is_muted ? 'MUTE' : '', c.is_archived ? 'ARCH' : ''].filter(Boolean).join(' · ');
+  const previewPrefix = c.last_deleted_at
+    ? ''
+    : c.last_message_id
+    ? (conversationType === 'group'
+      ? (incoming ? `${c.last_sender_group_nickname || c.last_sender_username || '成员'}：` : '我：')
+      : (incoming ? '' : '我：'))
+    : '';
+  const previewText = c.last_deleted_at
+    ? conversationRecallPreviewText(c)
+    : c.last_message_id
+    ? messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : ''))
+    : (conversationType === 'group' ? '群聊已创建' : '空消息');
+
+  return `
+    <button class="message-conversation ${active ? 'active' : ''}" data-message-conversation-key="${esc(conversationKey)}" onclick="openMessageConversation(${jsArg(conversationKey)})">
+      ${renderConversationAvatar(conversationType, title, c.peer_avatar_url)}
+      <span class="message-conversation-body">
+        <span class="message-conversation-top">
+          <strong>${esc(title)}</strong>
+          <span>${formatDate(c.last_created_at || c.sort_at)}</span>
+        </span>
+        <span class="message-conversation-subtitle">${esc(subtitle)}${stateBits ? ` · ${esc(stateBits)}` : ''}</span>
+        <span class="message-preview">
+          ${esc(previewPrefix)}${esc(previewText)}
+        </span>
+      </span>
+      ${unread > 0 ? `<span class="message-unread-dot">${unread > 99 ? '99+' : unread}</span>` : ''}
+    </button>
+  `;
+}
+
+function renderMessageConversationItems(conversations = [], selectedKey = '') {
+  return conversations.length
+    ? conversations.map((c) => renderMessageConversationButton(c, selectedKey)).join('')
+    : renderMessageConversationEmpty();
+}
+
+function updateMessageConversationSidebar(conversations = [], selectedKey = currentMessageConversationKey()) {
+  const container = $('messageConversationItems');
+  if (!container) return;
+  const key = parseMessageConversationKey(selectedKey).key;
+  container.dataset.messageSelectedConversationKey = key;
+  container.innerHTML = renderMessageConversationItems(conversations, key);
+}
+
 async function pollMessageUnreadState() {
   const [countData, conversationData] = await Promise.all([
     api('/api/messages/unread-count', { headers: authHeaders() }),
@@ -3934,8 +4043,9 @@ async function pollMessageUnreadState() {
   updateNav();
 
   const conversationKey = currentMessageConversationKey();
-  if (!conversationKey) return;
   const conversations = conversationData.items || [];
+  updateMessageConversationSidebar(conversations, conversationKey);
+  if (!conversationKey) return;
   const active = conversations.find(c => (c.conversation_key || messageConversationKey(c.conversation_type, c.group_id || c.peer_id)) === conversationKey);
   const list = $('messageThreadList');
   const currentNewestId = newestRenderedMessageId(list);
@@ -4065,56 +4175,9 @@ async function renderMessages(target = null, options = {}) {
               ${state.messageShowArchived ? '隐藏归档' : '显示归档'}
             </button>
           </div>
-          ${conversations.length === 0 ? `
-            <div class="message-empty-panel">
-              <div class="empty-icon">✉</div>
-              <div class="text-muted" style="font-size: 13px;">${state.messageConversationSearch ? '没有匹配的会话' : '暂无会话'}</div>
-              <div class="row gap-sm mt-md" style="flex-wrap: wrap; justify-content: center;">
-                <button class="btn btn-secondary btn-sm" onclick="showCreateMessageGroupModal()">新建群聊</button>
-                <button class="btn btn-primary btn-sm" onclick="showNewMessageModal()">开始私信</button>
-              </div>
-            </div>
-          ` : conversations.map((c) => {
-            const conversationType = c.conversation_type === 'group' ? 'group' : 'direct';
-            const conversationId = conversationType === 'group' ? c.group_id : c.peer_id;
-            const conversationKey = c.conversation_key || messageConversationKey(conversationType, conversationId);
-            const active = conversationKey === selected.key;
-            const incoming = Number(c.last_sender_id) !== Number(state.user.id);
-            const unread = Number(c.unread_count || 0);
-            const title = conversationType === 'group' ? c.group_name : c.peer_username;
-            const subtitle = conversationType === 'group'
-              ? `${Number(c.group_member_count || 0)} 位成员`
-              : esc(c.peer_role || 'USER');
-            const stateBits = [c.is_pinned ? 'PIN' : '', c.is_muted ? 'MUTE' : '', c.is_archived ? 'ARCH' : ''].filter(Boolean).join(' · ');
-            const previewPrefix = c.last_deleted_at
-              ? ''
-              : c.last_message_id
-              ? (conversationType === 'group'
-                ? (incoming ? `${c.last_sender_group_nickname || c.last_sender_username || '成员'}：` : '我：')
-                : (incoming ? '' : '我：'))
-              : '';
-            const previewText = c.last_deleted_at
-              ? conversationRecallPreviewText(c)
-              : c.last_message_id
-              ? messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : ''))
-              : (conversationType === 'group' ? '群聊已创建' : '空消息');
-            return `
-              <button class="message-conversation ${active ? 'active' : ''}" onclick="openMessageConversation(${jsArg(conversationKey)})">
-                ${renderConversationAvatar(conversationType, title, c.peer_avatar_url)}
-                <span class="message-conversation-body">
-                  <span class="message-conversation-top">
-                    <strong>${esc(title)}</strong>
-                    <span>${formatDate(c.last_created_at || c.sort_at)}</span>
-                  </span>
-                  <span class="message-conversation-subtitle">${subtitle}${stateBits ? ` · ${esc(stateBits)}` : ''}</span>
-                  <span class="message-preview">
-                    ${esc(previewPrefix)}${esc(previewText)}
-                  </span>
-                </span>
-                ${unread > 0 ? `<span class="message-unread-dot">${unread > 99 ? '99+' : unread}</span>` : ''}
-              </button>
-            `;
-          }).join('')}
+          <div id="messageConversationItems" data-message-selected-conversation-key="${esc(selected.key)}">
+            ${renderMessageConversationItems(conversations, selected.key)}
+          </div>
         </aside>
 
         <div
@@ -4413,7 +4476,7 @@ function replyPreviewText(sender, body = '', attachmentLabel = '', deleted = fal
 
 function replyAttachmentLabel(contentType = '', filename = '') {
   if (!contentType) return '';
-  const base = isImageAttachment(contentType) ? '[图片]' : '[文件]';
+  const base = attachmentPreviewLabel(contentType, filename) || '[文件]';
   return filename ? `${base} ${filename}` : base;
 }
 
@@ -4556,7 +4619,9 @@ function openMessageActionMenu(event, messageId) {
 
 function renderMessageActionMenu(message) {
   if (isTransientLocalMessage(message)) {
+    const canFavoriteGif = isGifMessageAttachment(message) && !isMessageGifAlreadyFavorite(message);
     return `
+      ${canFavoriteGif ? `<button class="message-menu-item" type="button" onclick="addMessageGifFavoriteFromMessage(${jsArg(messageActionTargetId(message))})">添加到表情</button>` : ''}
       ${message.send_state === 'failed' ? `<button class="message-menu-item" type="button" onclick="retryTransientMessage(${jsArg(message.local_id)})">重发</button>` : ''}
       <button class="message-menu-item danger" type="button" onclick="dismissTransientMessage(${jsArg(message.local_id)})">移除</button>
     `;
@@ -4567,6 +4632,7 @@ function renderMessageActionMenu(message) {
   const recalled = isRecalledMessage(message);
   const mine = Number(message?.sender_id || 0) === Number(state.user?.id || 0);
   const copyText = messageMenuCopyText(message);
+  const canFavoriteGif = !recalled && isGifMessageAttachment(message) && !isMessageGifAlreadyFavorite(message);
   const nestedItems = [
     `<button class="message-menu-item danger" type="button" onclick="deleteMessageAction(${Number(message.id)}, ${jsArg(conversationType)})">删除</button>`,
     !mine && !recalled
@@ -4576,6 +4642,7 @@ function renderMessageActionMenu(message) {
 
   return `
     ${!recalled ? `<button class="message-menu-item" type="button" onclick="closeMessageActionMenu(); replyToMessage(${Number(message.id)}, ${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)}, false)">回复</button>` : ''}
+    ${canFavoriteGif ? `<button class="message-menu-item" type="button" onclick="addMessageGifFavoriteFromMessage(${jsArg(messageActionTargetId(message))})">添加到表情</button>` : ''}
     ${copyText ? `<button class="message-menu-item" type="button" onclick="copyMessageText(${Number(message.id)})">复制</button>` : ''}
     ${canEditMessage(message) ? `<button class="message-menu-item" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(message.body_md || '')}, ${message.has_attachment ? 'true' : 'false'})">编辑</button>` : ''}
     ${canRecallMessage(message) ? `<button class="message-menu-item" type="button" onclick="recallMessageAction(${Number(message.id)}, ${jsArg(conversationType)})">撤回</button>` : ''}
@@ -4728,8 +4795,6 @@ function renderMessageThread(peer, messages, options = {}) {
         <div class="row gap-sm" style="flex-wrap: wrap;">
           ${conversationType === 'group' ? `<button class="btn btn-secondary" type="button" onclick="showGroupMentionModal(${conversationId})">@</button>` : ''}
           <button class="btn btn-secondary" type="button" onclick="toggleMessageEmojiPanel(${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}>表情</button>
-          <label class="btn btn-secondary message-file-button${canMessage ? '' : ' disabled'}" for="messageGifFavoriteInput">添加 GIF</label>
-          <input type="file" id="messageGifFavoriteInput" accept="image/gif" style="display:none" onchange="addMessageGifFavorites(${jsArg(conversationKey)}, this)" ${canMessage ? '' : 'disabled'} />
           <label class="btn btn-secondary message-file-button${canMessage ? '' : ' disabled'}" for="messageFileInput">文件</label>
           <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${jsArg(conversationKey)}, this)" ${canMessage ? '' : 'disabled'} />
           <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}>发送</button>
@@ -4841,6 +4906,13 @@ function renderMessageAttachment(message) {
         </button>
       `;
     }
+    if (isGifAttachment(contentType, filename)) {
+      return `
+        <div class="message-image-frame message-gif-frame">
+          <img class="message-image message-gif-sticker" src="${esc(message.attachment_local_url)}" alt="${esc(filename)}" data-loaded="1" />
+        </div>
+      `;
+    }
     return `
       <div class="message-image-frame">
         <img class="message-image" src="${esc(message.attachment_local_url)}" alt="${esc(filename)}" data-loaded="1" onclick="openMessageImage(${jsArg(message.attachment_local_url)})" />
@@ -4866,10 +4938,11 @@ function renderMessageAttachment(message) {
   }
   const cachedUrl = getMessageAttachmentCacheEntry(attachmentScope, attachmentId)?.url || '';
   const attachmentKey = messageAttachmentCacheKey(attachmentScope, attachmentId);
+  const isGif = isGifAttachment(contentType, filename);
   return `
-    <div class="message-image-frame" data-message-attachment-frame="${esc(attachmentKey)}">
-      <div class="message-image-placeholder"${cachedUrl ? ' style="display:none"' : ''}>图片加载中...</div>
-      <img class="message-image" data-message-attachment-id="${attachmentId}" data-message-attachment-scope="${esc(attachmentScope)}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImageFromAttachment(${jsArg(attachmentScope)}, ${attachmentId}, this.src)" />
+    <div class="message-image-frame${isGif ? ' message-gif-frame' : ''}" data-message-attachment-frame="${esc(attachmentKey)}">
+      <div class="message-image-placeholder"${cachedUrl ? ' style="display:none"' : ''}>${isGif ? 'GIF 加载中...' : '图片加载中...'}</div>
+      <img class="message-image${isGif ? ' message-gif-sticker' : ''}" data-message-attachment-id="${attachmentId}" data-message-attachment-scope="${esc(attachmentScope)}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'}${isGif ? '' : ` onclick="openMessageImageFromAttachment(${jsArg(attachmentScope)}, ${attachmentId}, this.src)"`} />
     </div>
   `;
 }
@@ -6098,18 +6171,23 @@ function renderMessageComposerPanel(conversationKey) {
       </div>
       <div class="message-composer-panel-section">
         <div class="message-composer-panel-title">GIF 收藏</div>
-        ${gifFavorites.length ? `
-          <div class="message-gif-grid">
-            ${gifFavorites.map((item) => `
-              <div class="message-gif-tile">
-                <button class="message-gif-btn" type="button" onclick="sendFavoriteGif(${jsArg(key)}, ${jsArg(item.id)})">
-                  <img src="${esc(item.data_url)}" alt="${esc(item.name || 'GIF 表情')}" loading="lazy" />
-                </button>
-                <button class="message-gif-remove" type="button" aria-label="移除 GIF" onclick="removeMessageGifFavorite(${jsArg(item.id)})">×</button>
-              </div>
-            `).join('')}
+        <div class="message-gif-grid">
+          <div class="message-gif-tile">
+            <label class="message-gif-btn message-gif-add" for="messageGifFavoriteInput" title="添加 GIF" aria-label="添加 GIF">
+              <span aria-hidden="true">+</span>
+            </label>
+            <input type="file" id="messageGifFavoriteInput" accept="image/gif" multiple style="display:none" onchange="addMessageGifFavorites(${jsArg(key)}, this)" />
           </div>
-        ` : `<div class="text-muted" style="font-size: 12px;">还没有收藏 GIF，点“添加 GIF”就能放进来。</div>`}
+          ${gifFavorites.map((item) => `
+            <div class="message-gif-tile">
+              <button class="message-gif-btn" type="button" onclick="sendFavoriteGif(${jsArg(key)}, ${jsArg(item.id)})">
+                <img src="${esc(item.data_url)}" alt="${esc(item.name || 'GIF 表情')}" loading="lazy" />
+              </button>
+              <button class="message-gif-remove" type="button" aria-label="移除 GIF" onclick="removeMessageGifFavorite(${jsArg(item.id)})">×</button>
+            </div>
+          `).join('')}
+        </div>
+        ${gifFavorites.length ? '' : `<div class="text-muted" style="font-size: 12px;">还没有收藏 GIF，点加号就能放进来。</div>`}
       </div>
     </div>
   `;
@@ -6177,13 +6255,24 @@ async function addMessageGifFavorites(conversationKey, input) {
   }
   try {
     const existing = storedGifFavorites();
-    const additions = await Promise.all(files.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS).map(async (file) => ({
-      id: `gif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    const rawAdditions = await Promise.all(files.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS).map(async (file) => ({
+      id: newGifFavoriteId(),
       name: file.name || 'sticker.gif',
       data_url: await fileToDataUrl(file),
       size_bytes: Number(file.size || 0),
+      content_type: 'image/gif',
       added_at: new Date().toISOString(),
     })));
+    const seenDataUrls = new Set(existing.map((item) => item.data_url).filter(Boolean));
+    const additions = rawAdditions.filter((entry) => {
+      if (!entry.data_url || seenDataUrls.has(entry.data_url)) return false;
+      seenDataUrls.add(entry.data_url);
+      return true;
+    });
+    if (!additions.length) {
+      toast('所选 GIF 已在表情里', 'info');
+      return;
+    }
     saveGifFavorites([...additions, ...existing].slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS));
     state.messageEmojiPanelConversationKey = parseMessageConversationKey(conversationKey).key;
     updateMessageComposerPanel();
@@ -6206,6 +6295,66 @@ async function sendFavoriteGif(conversationKey, gifId) {
     await sendFilesToPeer(conversationKey, [file], { fromFavoriteGif: true });
   } catch (err) {
     toast(`发送 GIF 失败: ${err.message}`, 'error');
+  }
+}
+
+async function addMessageGifFavoriteFromMessage(messageId) {
+  const message = currentThreadMessage(messageId);
+  closeMessageActionMenu();
+  if (!message || !isGifMessageAttachment(message)) return;
+
+  const sourceKey = messageGifFavoriteSourceKey(message);
+  if (isGifFavoriteStored({ sourceKey })) {
+    toast('这个 GIF 已在表情里', 'info');
+    return;
+  }
+
+  const knownSize = Number(message.attachment_size_bytes || 0);
+  if (knownSize > MESSAGE_GIF_FAVORITE_MAX_BYTES) {
+    toast(`GIF 超过 ${formatFileSize(MESSAGE_GIF_FAVORITE_MAX_BYTES)}，无法加入表情。`, 'warning');
+    return;
+  }
+
+  try {
+    let url = message.attachment_local_url || '';
+    if (!url) {
+      const scope = message.attachment_scope || message.message_type || (message.group_id ? 'group' : 'direct');
+      const attachmentId = message.attachment_id || message.id;
+      url = await loadMessageAttachmentUrl(scope, attachmentId);
+    }
+    if (!url) throw new Error('找不到 GIF 附件');
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const blob = await response.blob();
+    if (blob.size > MESSAGE_GIF_FAVORITE_MAX_BYTES) {
+      toast(`GIF 超过 ${formatFileSize(MESSAGE_GIF_FAVORITE_MAX_BYTES)}，无法加入表情。`, 'warning');
+      return;
+    }
+
+    const dataUrl = await fileToDataUrl(blob);
+    if (isGifFavoriteStored({ sourceKey, dataUrl })) {
+      toast('这个 GIF 已在表情里', 'info');
+      return;
+    }
+
+    const existing = storedGifFavorites();
+    saveGifFavorites([
+      {
+        id: newGifFavoriteId(),
+        name: message.attachment_filename || 'sticker.gif',
+        data_url: dataUrl,
+        source_key: sourceKey,
+        size_bytes: Number(blob.size || knownSize || 0),
+        content_type: 'image/gif',
+        added_at: new Date().toISOString(),
+      },
+      ...existing,
+    ]);
+    updateMessageComposerPanel();
+    toast('已添加到表情', 'success');
+  } catch (err) {
+    toast(`添加 GIF 失败: ${err.message}`, 'error');
   }
 }
 
@@ -9774,7 +9923,7 @@ Object.assign(window, {
   toggleMessageConversationArchived, toggleDirectConversationBlock, showMessageBlocksModal, unblockMessageUser,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   scrollMessageThreadToBottom, toggleMessageEmojiPanel, insertMessageEmoji, addMessageGifFavorites,
-  removeMessageGifFavorite, sendFavoriteGif, dismissTransientMessage, retryTransientMessage,
+  addMessageGifFavoriteFromMessage, removeMessageGifFavorite, sendFavoriteGif, dismissTransientMessage, retryTransientMessage,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile, downloadLocalMessageFile,
   refreshMessageThreadNow, quoteMessage, replyToMessage, clearMessageReplyTarget,
