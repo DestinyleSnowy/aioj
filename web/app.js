@@ -45,7 +45,10 @@ const state = {
   messageImagePreview: null,
   messageReplyTarget: null,
   messageThreadItems: [],
+  messageThreadFirstUnreadId: 0,
+  messageTransientItems: new Map(),
   messageActionMenuCleanup: null,
+  messageEmojiPanelConversationKey: '',
   newMessagePendingFiles: [],
   newGroupMembers: [],
   messageActiveGroup: null,
@@ -65,8 +68,13 @@ const MESSAGE_MUTATION_WINDOW_MS = 2 * 60 * 1000;
 const MESSAGE_THREAD_PAGE_SIZE = 20;
 const MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX = 32;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
+const MESSAGE_GIF_FAVORITE_MAX_BYTES = 2 * 1024 * 1024;
+const MESSAGE_GIF_FAVORITE_MAX_ITEMS = 18;
+const MESSAGE_RECENT_EMOJI_MAX_ITEMS = 24;
 const MESSAGE_LAYOUT_STACK_BREAKPOINT_PX = 960;
 const MESSAGE_SIDEBAR_STORAGE_KEY = 'aioj_message_sidebar_width';
+const MESSAGE_RECENT_EMOJI_STORAGE_KEY = 'aioj_message_recent_emojis';
+const MESSAGE_GIF_FAVORITES_STORAGE_KEY = 'aioj_message_gif_favorites';
 const MESSAGE_SIDEBAR_MIN_WIDTH_PX = 260;
 const MESSAGE_SIDEBAR_MAX_WIDTH_PX = 520;
 const MESSAGE_THREAD_MIN_WIDTH_PX = 520;
@@ -80,6 +88,7 @@ const DEFAULT_SIGNATURE = '这只咪很懒，什么也没有留下';
 const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
 const SIDEBAR_MODE_COLLAPSED = 'collapsed';
 const SIDEBAR_MODE_EXPANDED = 'expanded';
+const MESSAGE_BUILTIN_EMOJIS = ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '😭', '😡', '😴', '🤔', '😅', '🥳', '🥺', '😇', '😋', '🤗', '👍', '👀', '🎉', '❤️', '💔', '💯', '🔥', '🌹', '🍉', '🍻', '🐱', '🐶', '🫡', '🙏'];
 
 function unreadDocumentTitlePrefix() {
   const totalUnread = Number(state.notificationUnreadCount || 0) + Number(state.messageUnreadCount || 0);
@@ -309,7 +318,134 @@ function conversationRecallPreviewText(conversation) {
 }
 
 function currentThreadMessage(messageId) {
-  return (state.messageThreadItems || []).find((item) => Number(item?.id || 0) === Number(messageId || 0)) || null;
+  const target = String(messageId || '').trim();
+  return (state.messageThreadItems || []).find((item) => messageActionTargetId(item) === target) || null;
+}
+
+function messageActionTargetId(message) {
+  return String(message?.local_id || message?.id || '').trim();
+}
+
+function transientMessagesForConversation(conversationKey) {
+  return state.messageTransientItems.get(parseMessageConversationKey(conversationKey).key) || [];
+}
+
+function releaseTransientMessageResources(item) {
+  if (item?.attachment_local_url) {
+    try {
+      URL.revokeObjectURL(item.attachment_local_url);
+    } catch {
+      // Ignore stale blob URLs during cleanup.
+    }
+  }
+}
+
+function setTransientMessages(conversationKey, items = []) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  if (!key) return;
+  const previous = state.messageTransientItems.get(key) || [];
+  const nextIds = new Set(items.map((item) => String(item?.local_id || '')));
+  previous.forEach((item) => {
+    if (!nextIds.has(String(item?.local_id || ''))) releaseTransientMessageResources(item);
+  });
+  if (items.length) {
+    state.messageTransientItems.set(key, items);
+  } else {
+    state.messageTransientItems.delete(key);
+  }
+}
+
+function updateTransientMessage(conversationKey, localId, updater) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  if (!key) return null;
+  const current = transientMessagesForConversation(key);
+  const next = current.map((item) => {
+    if (String(item?.local_id || '') !== String(localId || '')) return item;
+    return typeof updater === 'function' ? updater(item) : { ...item, ...(updater || {}) };
+  });
+  setTransientMessages(key, next);
+  return next.find((item) => String(item?.local_id || '') === String(localId || '')) || null;
+}
+
+function removeTransientMessage(conversationKey, localId) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  if (!key) return;
+  const current = transientMessagesForConversation(key);
+  setTransientMessages(key, current.filter((item) => String(item?.local_id || '') !== String(localId || '')));
+}
+
+function buildTransientMessage({ conversationKey, body = '', files = [], replyTarget = null } = {}) {
+  const selectedFiles = normalizeMessageFiles(files);
+  const localId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const firstFile = selectedFiles[0] || null;
+  const contentType = firstFile?.type || '';
+  const target = parseMessageConversationKey(conversationKey);
+  return {
+    local_id: localId,
+    local_only: true,
+    send_state: 'pending',
+    conversation_key: target.key,
+    message_type: target.type,
+    group_id: target.type === 'group' ? Number(target.id) : null,
+    sender_id: Number(state.user?.id || 0),
+    sender_username: state.user?.username || '我',
+    sender_avatar_url: state.user?.avatar_url || '',
+    body_md: String(body || ''),
+    has_attachment: !!firstFile,
+    attachment_id: firstFile ? localId : null,
+    attachment_content_type: contentType,
+    attachment_filename: firstFile?.name || '',
+    attachment_size_bytes: Number(firstFile?.size || 0),
+    attachment_local_url: firstFile ? URL.createObjectURL(firstFile) : '',
+    created_at: new Date().toISOString(),
+    read_at: null,
+    edited_at: null,
+    deleted_at: null,
+    reply_to_message_id: Number(replyTarget?.messageId || 0) || null,
+    reply_to_sender_username: replyTarget?.sender || '',
+    reply_to_body_md: replyTarget?.body || replyTarget?.attachmentLabel || '',
+    reply_to_has_attachment: false,
+    reply_to_attachment_filename: '',
+    reply_to_attachment_content_type: '',
+    retry_payload: {
+      body: String(body || ''),
+      files: selectedFiles,
+      replyTarget,
+    },
+  };
+}
+
+function fileNameFromDataUrl(item, fallback = 'sticker.gif') {
+  const name = String(item?.name || '').trim();
+  return name || fallback;
+}
+
+async function dataUrlToFile(dataUrl, filename = 'sticker.gif') {
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  return new File([blob], filename, { type: blob.type || 'image/gif' });
+}
+
+function insertComposerText(text) {
+  const composer = $('messageComposer');
+  if (!composer) return;
+  const value = composer.value || '';
+  const start = composer.selectionStart ?? value.length;
+  const end = composer.selectionEnd ?? value.length;
+  const nextValue = `${value.slice(0, start)}${text}${value.slice(end)}`;
+  if (nextValue.length > Number(composer.maxLength || 4000)) {
+    toast('消息内容已达到长度上限', 'warning');
+    return;
+  }
+  composer.value = nextValue;
+  const cursor = start + text.length;
+  composer.focus({ preventScroll: true });
+  composer.setSelectionRange(cursor, cursor);
+  saveMessageComposerDraft(currentMessageConversationKey(), composer.value);
+}
+
+function isTransientLocalMessage(message) {
+  return !!message?.local_only;
 }
 
 function isRelativeMdTarget(value) {
@@ -347,6 +483,48 @@ function jsArg(value) {
 
 function escapeRegExp(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function readStoredJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredJson(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore storage quota failures for optional chat niceties.
+  }
+}
+
+function storedRecentEmojis() {
+  const items = readStoredJson(MESSAGE_RECENT_EMOJI_STORAGE_KEY, []);
+  return Array.isArray(items) ? items.filter((item) => typeof item === 'string' && item.trim()) : [];
+}
+
+function rememberRecentEmoji(emoji) {
+  const value = String(emoji || '').trim();
+  if (!value) return;
+  const next = [value, ...storedRecentEmojis().filter((item) => item !== value)].slice(0, MESSAGE_RECENT_EMOJI_MAX_ITEMS);
+  writeStoredJson(MESSAGE_RECENT_EMOJI_STORAGE_KEY, next);
+}
+
+function storedGifFavorites() {
+  const items = readStoredJson(MESSAGE_GIF_FAVORITES_STORAGE_KEY, []);
+  return Array.isArray(items)
+    ? items.filter((item) => item && typeof item.id === 'string' && typeof item.data_url === 'string')
+    : [];
+}
+
+function saveGifFavorites(items = []) {
+  writeStoredJson(MESSAGE_GIF_FAVORITES_STORAGE_KEY, items.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS));
 }
 
 function formatDate(v) {
@@ -3432,6 +3610,17 @@ function updateMessageThreadUnreadBadge(count) {
 function scrollMessageThreadToBottom() {
   const list = $('messageThreadList');
   if (list) list.scrollTop = list.scrollHeight;
+  updateMessageScrollBottomButton(list);
+}
+
+function scrollMessageThreadToFirstUnread(messageId = state.messageThreadFirstUnreadId) {
+  const list = $('messageThreadList');
+  const marker = list?.querySelector(`[data-message-unread-marker-for="${String(messageId || '')}"]`);
+  if (!list || !marker) return false;
+  const offset = Math.max(0, marker.offsetTop - Math.max(32, Math.round(list.clientHeight * 0.18)));
+  list.scrollTop = offset;
+  updateMessageScrollBottomButton(list);
+  return true;
 }
 
 function messageThreadIsNearBottom(list = $('messageThreadList')) {
@@ -3439,16 +3628,24 @@ function messageThreadIsNearBottom(list = $('messageThreadList')) {
 }
 
 function oldestRenderedMessageId(list = $('messageThreadList')) {
-  const row = list?.querySelector('.message-row[data-message-id]');
-  const id = Number(row?.dataset.messageId || 0);
+  const row = list?.querySelector('[data-server-message-id]');
+  const id = Number(row?.dataset.serverMessageId || 0);
   return Number.isFinite(id) && id > 0 ? id : 0;
 }
 
 function newestRenderedMessageId(list = $('messageThreadList')) {
-  const rows = list?.querySelectorAll('.message-row[data-message-id]');
+  const rows = list?.querySelectorAll('[data-server-message-id]');
   const row = rows?.length ? rows[rows.length - 1] : null;
-  const id = Number(row?.dataset.messageId || 0);
+  const id = Number(row?.dataset.serverMessageId || 0);
   return Number.isFinite(id) && id > 0 ? id : 0;
+}
+
+function renderUnreadDivider(messageId) {
+  return `
+    <div class="message-unread-divider" data-message-unread-marker-for="${esc(messageId)}">
+      <span>以下是新消息</span>
+    </div>
+  `;
 }
 
 function renderMessageHistoryLoader() {
@@ -3472,6 +3669,10 @@ function clearMessageAttachmentCache() {
     if (entry?.url) URL.revokeObjectURL(entry.url);
   }
   state.messageAttachmentCache.clear();
+  for (const items of state.messageTransientItems.values()) {
+    items.forEach(releaseTransientMessageResources);
+  }
+  state.messageTransientItems.clear();
 }
 
 function destroyMessageLayoutInteractions() {
@@ -3833,7 +4034,9 @@ async function renderMessages(target = null, options = {}) {
       return itemKey === selected.key;
     });
     const threadItems = thread?.items || [];
-    state.messageThreadItems = threadItems;
+    const combinedThreadItems = [...threadItems, ...transientMessagesForConversation(selected.key)];
+    state.messageThreadItems = combinedThreadItems;
+    state.messageThreadFirstUnreadId = Number(thread?.first_unread_message_id || 0);
 
     app.innerHTML = `
       <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
@@ -3925,7 +4128,11 @@ async function renderMessages(target = null, options = {}) {
         ></div>
 
         <section class="message-thread-panel">
-          ${selected.id && activeConversation ? renderMessageThread(activeConversation, threadItems, { hasMore: !!thread?.has_more, conversationType: selected.type }) : `
+          ${selected.id && activeConversation ? renderMessageThread(activeConversation, combinedThreadItems, {
+            hasMore: !!thread?.has_more,
+            conversationType: selected.type,
+            firstUnreadMessageId: Number(thread?.first_unread_message_id || 0),
+          }) : `
             <div class="message-empty-panel">
               <div class="empty-icon">✉</div>
               <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信/群聊。</div>
@@ -3950,13 +4157,24 @@ async function renderMessages(target = null, options = {}) {
     state.messageActiveConversationKey = selected.key;
     state.messageActivePeerId = selected.type === 'direct' ? selected.id : 0;
     state.messageActiveGroup = selected.type === 'group' ? activeConversation : null;
-    if (!selected.id) state.messageThreadItems = [];
+    if (!selected.id) {
+      state.messageThreadItems = [];
+      state.messageThreadFirstUnreadId = 0;
+    }
     if (!selected.key) state.messageReplyTarget = null;
     updateMessageReplyBanner();
 
     updateMessageThreadUnreadBadge(0);
-    if (selected.id && activeConversation && options.scrollToBottom !== false) {
-      scrollMessageThreadToBottom();
+    if (selected.id && activeConversation) {
+      const scrolledToUnread = state.messageThreadFirstUnreadId
+        && options.preferUnread !== false
+        && !options.focusComposer
+        && options.scrollToBottom !== true
+        && scrollMessageThreadToFirstUnread(state.messageThreadFirstUnreadId);
+      if (!scrolledToUnread && options.scrollToBottom !== false) {
+        scrollMessageThreadToBottom();
+      }
+      updateMessageScrollBottomButton();
     }
     hydrateMessageAttachments();
     ensureMessageAutoRefresh();
@@ -4337,6 +4555,12 @@ function openMessageActionMenu(event, messageId) {
 }
 
 function renderMessageActionMenu(message) {
+  if (isTransientLocalMessage(message)) {
+    return `
+      ${message.send_state === 'failed' ? `<button class="message-menu-item" type="button" onclick="retryTransientMessage(${jsArg(message.local_id)})">重发</button>` : ''}
+      <button class="message-menu-item danger" type="button" onclick="dismissTransientMessage(${jsArg(message.local_id)})">移除</button>
+    `;
+  }
   const senderLabel = messageSenderDisplayLabel(message);
   const attachmentLabel = messageAttachmentQuoteLabel(message);
   const conversationType = isGroupConversationMessage(message) ? 'group' : 'direct';
@@ -4376,27 +4600,41 @@ function renderMessageRow(message) {
   const avatarName = groupMessage ? senderLabel : (message.sender_username || senderLabel || '用户');
   const avatarUrl = message.sender_avatar_url || (mine ? state.user?.avatar_url || '' : '');
   const deleted = isRecalledMessage(message);
+  const localOnly = isTransientLocalMessage(message);
+  const actionTargetId = messageActionTargetId(message);
   const metaBits = [messageMetaLabel(message)];
   if (!groupMessage && mine && message.read_at) metaBits.push('已读');
   if (message.edited_at && !deleted) metaBits.push('已编辑');
+  if (message.send_state === 'pending') metaBits.push('发送中...');
+  if (message.send_state === 'failed') metaBits.push('发送失败');
   const menuBtn = `
     <button
       class="message-menu-btn"
       type="button"
       aria-label="消息操作"
-      onclick="openMessageActionMenu(event, ${Number(message.id)})"
+      onclick="openMessageActionMenu(event, ${jsArg(actionTargetId)})"
     >···</button>
   `;
   if (deleted) {
     return `
-      <div class="message-system-row" data-message-id="${esc(message.id)}" oncontextmenu="openMessageActionMenu(event, ${Number(message.id)})">
+      <div
+        class="message-system-row"
+        data-message-id="${esc(actionTargetId)}"
+        ${localOnly ? '' : `data-server-message-id="${esc(message.id)}"`}
+        oncontextmenu="openMessageActionMenu(event, ${jsArg(actionTargetId)})"
+      >
         <span>${esc(recallNoticeText(message))}</span>
         ${menuBtn}
       </div>
     `;
   }
   return `
-    <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id)}" oncontextmenu="openMessageActionMenu(event, ${Number(message.id)})">
+    <div
+      class="message-row ${mine ? 'mine' : ''} ${message.send_state === 'failed' ? 'failed' : ''} ${message.send_state === 'pending' ? 'pending' : ''}"
+      data-message-id="${esc(actionTargetId)}"
+      ${localOnly ? '' : `data-server-message-id="${esc(message.id)}"`}
+      oncontextmenu="openMessageActionMenu(event, ${jsArg(actionTargetId)})"
+    >
       ${renderMessageAvatar(avatarName, avatarUrl)}
       <div class="message-content">
         ${groupMessage ? `<div class="message-sender-name">${esc(mine ? `${senderLabel}（我）` : senderLabel)}</div>` : ''}
@@ -4407,6 +4645,7 @@ function renderMessageRow(message) {
           <div class="message-meta">
             <span>${esc(metaBits.join(' · '))}</span>
             <span class="message-action-row">
+              ${message.send_state === 'failed' ? `<button class="message-inline-action" type="button" onclick="retryTransientMessage(${jsArg(message.local_id)})">重发</button>` : ''}
               ${menuBtn}
             </span>
           </div>
@@ -4416,8 +4655,22 @@ function renderMessageRow(message) {
   `;
 }
 
-function renderMessageRows(messages = []) {
-  return messages.map(renderMessageRow).join('');
+function renderMessageRows(messages = [], options = {}) {
+  const firstUnreadMessageId = String(options.firstUnreadMessageId || '').trim();
+  let insertedUnreadDivider = false;
+  return messages.map((message) => {
+    let html = '';
+    if (
+      firstUnreadMessageId
+      && !insertedUnreadDivider
+      && String(message?.id || '') === firstUnreadMessageId
+    ) {
+      insertedUnreadDivider = true;
+      html += renderUnreadDivider(firstUnreadMessageId);
+    }
+    html += renderMessageRow(message);
+    return html;
+  }).join('');
 }
 
 function renderMessageThread(peer, messages, options = {}) {
@@ -4426,6 +4679,7 @@ function renderMessageThread(peer, messages, options = {}) {
     ? (peer.id || peer.group_id)
     : (peer.id || peer.peer_id);
   const conversationKey = messageConversationKey(conversationType, conversationId);
+  const firstUnreadMessageId = Number(options.firstUnreadMessageId || 0);
   const hasMore = !!options.hasMore;
   const canMessage = conversationType === 'group' ? true : !!peer.can_message;
   const directBlockNotice = conversationType === 'direct' && !canMessage
@@ -4459,18 +4713,23 @@ function renderMessageThread(peer, messages, options = {}) {
           <div class="empty-icon">✉</div>
           <div class="text-muted" style="font-size: 13px;">还没有消息，发送第一条${conversationType === 'group' ? '群聊消息' : '私信'}。</div>
         </div>
-      ` : renderMessageRows(messages)}
+      ` : renderMessageRows(messages, { firstUnreadMessageId })}
     </div>
+    <button class="message-scroll-bottom-btn" id="messageScrollBottomBtn" type="button" hidden onclick="scrollMessageThreadToBottom()">回到底部</button>
 
     <div class="message-composer" id="messageComposerWrap">
       <div id="messageReplyBanner" class="message-reply-banner" hidden></div>
       ${directBlockNotice ? `<div class="notice warning" style="margin-bottom: 0;">${esc(directBlockNotice)}</div>` : ''}
+      ${renderMessageComposerPanel(conversationKey)}
       <textarea id="messageComposer" rows="3" maxlength="4000" data-message-composer-key="${esc(conversationKey)}" data-message-composer-peer-id="${conversationType === 'direct' ? esc(conversationId) : ''}" placeholder="输入消息内容，Enter 发送，Ctrl+Enter 换行" onkeydown="handleMessageComposerKeydown(event, ${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}></textarea>
       <div class="message-drop-banner">松开以上传文件</div>
       <div class="row flex-between gap-sm" style="align-items:center; flex-wrap: wrap;">
         <span class="text-muted message-composer-hint">最长 4000 字符 · 支持拖拽或粘贴文件，单个最大 20 MB</span>
         <div class="row gap-sm" style="flex-wrap: wrap;">
           ${conversationType === 'group' ? `<button class="btn btn-secondary" type="button" onclick="showGroupMentionModal(${conversationId})">@</button>` : ''}
+          <button class="btn btn-secondary" type="button" onclick="toggleMessageEmojiPanel(${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}>表情</button>
+          <label class="btn btn-secondary message-file-button${canMessage ? '' : ' disabled'}" for="messageGifFavoriteInput">添加 GIF</label>
+          <input type="file" id="messageGifFavoriteInput" accept="image/gif" style="display:none" onchange="addMessageGifFavorites(${jsArg(conversationKey)}, this)" ${canMessage ? '' : 'disabled'} />
           <label class="btn btn-secondary message-file-button${canMessage ? '' : ' disabled'}" for="messageFileInput">文件</label>
           <input type="file" id="messageFileInput" style="display:none" multiple onchange="sendFileToPeer(${jsArg(conversationKey)}, this)" ${canMessage ? '' : 'disabled'} />
           <button class="btn btn-primary" id="sendMessageBtn" onclick="sendMessageToPeer(${jsArg(conversationKey)})" ${canMessage ? '' : 'disabled'}>发送</button>
@@ -4490,6 +4749,7 @@ function initMessageThreadPagination(target, hasMore = false) {
   list.dataset.loadingOlder = '0';
 
   list.addEventListener('scroll', () => {
+    updateMessageScrollBottomButton(list);
     if (list.scrollTop <= MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX) {
       void loadOlderMessages(key);
     }
@@ -4501,6 +4761,7 @@ function initMessageThreadPagination(target, hasMore = false) {
       void loadOlderMessages(key);
     }
   }, 0);
+  updateMessageScrollBottomButton(list);
 }
 
 async function loadOlderMessages(target = null) {
@@ -4527,7 +4788,7 @@ async function loadOlderMessages(target = null) {
 
     const items = data.items || [];
     if (items.length) {
-      const firstMessageRow = list.querySelector('.message-row[data-message-id]');
+      const firstMessageRow = list.querySelector('[data-server-message-id]');
       const emptyPanel = list.querySelector('.message-empty-panel');
       if (emptyPanel) emptyPanel.remove();
       if (firstMessageRow) {
@@ -4535,6 +4796,10 @@ async function loadOlderMessages(target = null) {
       } else {
         list.insertAdjacentHTML('beforeend', renderMessageRows(items));
       }
+      state.messageThreadItems = [
+        ...items,
+        ...state.messageThreadItems.filter((message) => !items.some((incoming) => Number(incoming?.id || 0) === Number(message?.id || 0))),
+      ];
     }
 
     list.dataset.hasMore = data.has_more ? '1' : '0';
@@ -4554,7 +4819,34 @@ async function loadOlderMessages(target = null) {
   }
 }
 
+function updateMessageScrollBottomButton(list = $('messageThreadList')) {
+  const button = $('messageScrollBottomBtn');
+  if (!button) return;
+  button.hidden = messageThreadIsNearBottom(list);
+}
+
 function renderMessageAttachment(message) {
+  if (message?.attachment_local_url) {
+    const filename = message.attachment_filename || '附件';
+    const contentType = message.attachment_content_type || 'application/octet-stream';
+    if (!isImageAttachment(contentType)) {
+      return `
+        <button class="message-file-card" type="button" onclick="downloadLocalMessageFile(${jsArg(message.local_id)})">
+          <span class="message-file-icon">FILE</span>
+          <span class="message-file-info">
+            <strong>${esc(filename)}</strong>
+            <span>${esc(formatFileSize(message.attachment_size_bytes) || contentType)}</span>
+          </span>
+          <span class="message-file-download">下载</span>
+        </button>
+      `;
+    }
+    return `
+      <div class="message-image-frame">
+        <img class="message-image" src="${esc(message.attachment_local_url)}" alt="${esc(filename)}" data-loaded="1" onclick="openMessageImage(${jsArg(message.attachment_local_url)})" />
+      </div>
+    `;
+  }
   const attachmentId = message.attachment_id || message.id;
   if (!attachmentId) return '';
   const attachmentScope = message.attachment_scope || message.message_type || (message.group_id ? 'group' : 'direct');
@@ -4580,6 +4872,17 @@ function renderMessageAttachment(message) {
       <img class="message-image" data-message-attachment-id="${attachmentId}" data-message-attachment-scope="${esc(attachmentScope)}" alt="${esc(filename)}"${cachedUrl ? ` src="${esc(cachedUrl)}" data-loaded="1"` : ' hidden'} onclick="openMessageImageFromAttachment(${jsArg(attachmentScope)}, ${attachmentId}, this.src)" />
     </div>
   `;
+}
+
+function downloadLocalMessageFile(localId) {
+  const match = findTransientMessageByLocalId(localId);
+  if (!match?.item?.attachment_local_url) return;
+  const link = document.createElement('a');
+  link.href = match.item.attachment_local_url;
+  link.download = match.item.attachment_filename || 'attachment';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 async function hydrateMessageAttachments(options = {}) {
@@ -5692,7 +5995,6 @@ async function sendNewMessage() {
 async function sendMessageToPeer(peerId) {
   const target = parseMessageConversationKey(peerId);
   const textarea = $('messageComposer');
-  const btn = $('sendMessageBtn');
   const body = textarea?.value.trim();
   const replyTarget = currentMessageReplyTarget(target.key);
   if (!body) {
@@ -5700,31 +6002,16 @@ async function sendMessageToPeer(peerId) {
     return;
   }
 
-  try {
-    if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
-    if (target.type === 'group') {
-      await api(`/api/messages/groups/${target.id}/messages`, {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ body_md: body, reply_to_message_id: replyTarget?.messageId || null }),
-      });
-    } else {
-      await api('/api/messages', {
-        method: 'POST',
-        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipient_id: Number(target.id), body_md: body, reply_to_message_id: replyTarget?.messageId || null }),
-      });
-    }
-    if (textarea) textarea.value = '';
-    clearMessageComposerDraft(target.key);
-    clearMessageReplyTarget(target.key);
-    await refreshMessages(target.key, { preserveComposer: false, focusComposer: true });
-  } catch (err) {
-    toast(`发送失败: ${err.message}`, 'error');
-    textarea?.focus({ preventScroll: true });
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
-  }
+  if (textarea) textarea.value = '';
+  clearMessageComposerDraft(target.key);
+  clearMessageReplyTarget(target.key);
+  closeMessageEmojiPanel();
+  await queueTransientMessage(target.key, {
+    body,
+    files: [],
+    replyTarget,
+    focusComposer: true,
+  });
 }
 
 function isAllowedMessageFile(file) {
@@ -5788,6 +6075,241 @@ function initNewMessageComposerInteractions() {
   });
 }
 
+function renderMessageComposerPanel(conversationKey) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  if (!key || state.messageEmojiPanelConversationKey !== key) return '';
+  const recentEmojis = storedRecentEmojis();
+  const gifFavorites = storedGifFavorites();
+  return `
+    <div class="message-composer-panel" id="messageComposerPanel">
+      ${recentEmojis.length ? `
+        <div class="message-composer-panel-section">
+          <div class="message-composer-panel-title">最近使用</div>
+          <div class="message-emoji-grid">
+            ${recentEmojis.map((emoji) => `<button class="message-emoji-btn recent" type="button" onclick="insertMessageEmoji(${jsArg(emoji)})">${emoji}</button>`).join('')}
+          </div>
+        </div>
+      ` : ''}
+      <div class="message-composer-panel-section">
+        <div class="message-composer-panel-title">Emoji</div>
+        <div class="message-emoji-grid">
+          ${MESSAGE_BUILTIN_EMOJIS.map((emoji) => `<button class="message-emoji-btn" type="button" onclick="insertMessageEmoji(${jsArg(emoji)})">${emoji}</button>`).join('')}
+        </div>
+      </div>
+      <div class="message-composer-panel-section">
+        <div class="message-composer-panel-title">GIF 收藏</div>
+        ${gifFavorites.length ? `
+          <div class="message-gif-grid">
+            ${gifFavorites.map((item) => `
+              <div class="message-gif-tile">
+                <button class="message-gif-btn" type="button" onclick="sendFavoriteGif(${jsArg(key)}, ${jsArg(item.id)})">
+                  <img src="${esc(item.data_url)}" alt="${esc(item.name || 'GIF 表情')}" loading="lazy" />
+                </button>
+                <button class="message-gif-remove" type="button" aria-label="移除 GIF" onclick="removeMessageGifFavorite(${jsArg(item.id)})">×</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : `<div class="text-muted" style="font-size: 12px;">还没有收藏 GIF，点“添加 GIF”就能放进来。</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function updateMessageComposerPanel() {
+  const wrap = $('messageComposerWrap');
+  if (!wrap) return;
+  const currentKey = currentMessageConversationKey();
+  const nextHtml = renderMessageComposerPanel(currentKey);
+  const currentPanel = $('messageComposerPanel');
+  if (!nextHtml) {
+    if (currentPanel) currentPanel.remove();
+    return;
+  }
+  if (currentPanel) {
+    currentPanel.outerHTML = nextHtml;
+    return;
+  }
+  const replyBanner = $('messageReplyBanner');
+  if (replyBanner) {
+    replyBanner.insertAdjacentHTML('afterend', nextHtml);
+  } else {
+    wrap.insertAdjacentHTML('afterbegin', nextHtml);
+  }
+}
+
+function closeMessageEmojiPanel() {
+  state.messageEmojiPanelConversationKey = '';
+  updateMessageComposerPanel();
+}
+
+function toggleMessageEmojiPanel(conversationKey) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  state.messageEmojiPanelConversationKey = state.messageEmojiPanelConversationKey === key ? '' : key;
+  updateMessageComposerPanel();
+}
+
+function insertMessageEmoji(emoji) {
+  rememberRecentEmoji(emoji);
+  insertComposerText(String(emoji || ''));
+  updateMessageComposerPanel();
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('读取 GIF 失败'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addMessageGifFavorites(conversationKey, input) {
+  const files = normalizeMessageFiles(input?.files).filter((file) => (file.type || '').includes('gif'));
+  if (input) input.value = '';
+  if (!files.length) {
+    toast('请选择 GIF 文件', 'warning');
+    return;
+  }
+  const tooLarge = files.find((file) => Number(file.size || 0) > MESSAGE_GIF_FAVORITE_MAX_BYTES);
+  if (tooLarge) {
+    toast(`GIF ${tooLarge.name || '未命名文件'} 超过 2 MB，暂时不建议加入收藏。`, 'warning');
+    return;
+  }
+  try {
+    const existing = storedGifFavorites();
+    const additions = await Promise.all(files.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS).map(async (file) => ({
+      id: `gif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: file.name || 'sticker.gif',
+      data_url: await fileToDataUrl(file),
+      size_bytes: Number(file.size || 0),
+      added_at: new Date().toISOString(),
+    })));
+    saveGifFavorites([...additions, ...existing].slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS));
+    state.messageEmojiPanelConversationKey = parseMessageConversationKey(conversationKey).key;
+    updateMessageComposerPanel();
+    toast(`已加入 ${additions.length} 个 GIF 收藏`, 'success');
+  } catch (err) {
+    toast(`添加 GIF 失败: ${err.message}`, 'error');
+  }
+}
+
+function removeMessageGifFavorite(gifId) {
+  saveGifFavorites(storedGifFavorites().filter((item) => item.id !== gifId));
+  updateMessageComposerPanel();
+}
+
+async function sendFavoriteGif(conversationKey, gifId) {
+  const item = storedGifFavorites().find((entry) => entry.id === gifId);
+  if (!item) return;
+  try {
+    const file = await dataUrlToFile(item.data_url, fileNameFromDataUrl(item));
+    await sendFilesToPeer(conversationKey, [file], { fromFavoriteGif: true });
+  } catch (err) {
+    toast(`发送 GIF 失败: ${err.message}`, 'error');
+  }
+}
+
+function findTransientMessageByLocalId(localId) {
+  const targetId = String(localId || '');
+  for (const [conversationKey, items] of state.messageTransientItems.entries()) {
+    const index = items.findIndex((item) => String(item?.local_id || '') === targetId);
+    if (index >= 0) {
+      return { conversationKey, index, item: items[index] };
+    }
+  }
+  return null;
+}
+
+function dismissTransientMessage(localId) {
+  const match = findTransientMessageByLocalId(localId);
+  if (!match) return;
+  closeMessageActionMenu();
+  removeTransientMessage(match.conversationKey, localId);
+  if (currentMessageConversationKey() === match.conversationKey) {
+    void refreshMessages(match.conversationKey, { preserveComposer: true, scrollToBottom: false, preferUnread: false });
+  }
+}
+
+async function performTransientSend(item, { focusComposer = false } = {}) {
+  const target = parseMessageConversationKey(item?.conversation_key || '');
+  if (!target.key) return;
+  try {
+    if (item.has_attachment) {
+      await uploadMessageFiles({
+        conversationType: target.type,
+        recipientId: target.type === 'direct' ? Number(target.id) : null,
+        groupId: target.type === 'group' ? Number(target.id) : null,
+        body: item.retry_payload?.body || '',
+        replyToMessageId: item.retry_payload?.replyTarget?.messageId || null,
+        files: item.retry_payload?.files || [],
+      });
+    } else if (target.type === 'group') {
+      await api(`/api/messages/groups/${target.id}/messages`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          body_md: item.retry_payload?.body || '',
+          reply_to_message_id: item.retry_payload?.replyTarget?.messageId || null,
+        }),
+      });
+    } else {
+      await api('/api/messages', {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipient_id: Number(target.id),
+          body_md: item.retry_payload?.body || '',
+          reply_to_message_id: item.retry_payload?.replyTarget?.messageId || null,
+        }),
+      });
+    }
+    removeTransientMessage(target.key, item.local_id);
+    if (currentMessageConversationKey() === target.key) {
+      await refreshMessages(target.key, {
+        preserveComposer: true,
+        focusComposer,
+        scrollToBottom: true,
+        preferUnread: false,
+      });
+    }
+  } catch (err) {
+    updateTransientMessage(target.key, item.local_id, { send_state: 'failed', send_error: err.message });
+    if (currentMessageConversationKey() === target.key) {
+      await refreshMessages(target.key, {
+        preserveComposer: true,
+        focusComposer,
+        scrollToBottom: true,
+        preferUnread: false,
+      });
+    }
+    toast(`发送失败: ${err.message}`, 'error');
+  }
+}
+
+async function queueTransientMessage(conversationKey, { body = '', files = [], replyTarget = null, focusComposer = true } = {}) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  if (!key) return;
+  const transient = buildTransientMessage({ conversationKey: key, body, files, replyTarget });
+  setTransientMessages(key, [...transientMessagesForConversation(key), transient]);
+  void performTransientSend(transient, { focusComposer });
+  if (currentMessageConversationKey() === key) {
+    await refreshMessages(key, {
+      preserveComposer: true,
+      focusComposer,
+      scrollToBottom: true,
+      preferUnread: false,
+    });
+  }
+}
+
+async function retryTransientMessage(localId) {
+  const match = findTransientMessageByLocalId(localId);
+  if (!match) return;
+  closeMessageActionMenu();
+  updateTransientMessage(match.conversationKey, localId, { send_state: 'pending', send_error: '' });
+  await performTransientSend(match.item, { focusComposer: true });
+}
+
 async function sendFilesToPeer(peerId, files, options = {}) {
   const target = parseMessageConversationKey(peerId);
   const selectedFiles = normalizeMessageFiles(files);
@@ -5800,35 +6322,23 @@ async function sendFilesToPeer(peerId, files, options = {}) {
   }
 
   const textarea = $('messageComposer');
-  const btn = $('sendMessageBtn');
   const input = options.input || $('messageFileInput');
   const caption = textarea?.value.trim() || '';
   const replyTarget = currentMessageReplyTarget(target.key);
 
-  try {
-    if (btn) { btn.disabled = true; btn.textContent = '发送中...'; }
-    await uploadMessageFiles({
-      conversationType: target.type,
-      recipientId: target.type === 'direct' ? Number(target.id) : null,
-      groupId: target.type === 'group' ? Number(target.id) : null,
-      body: caption,
-      replyToMessageId: replyTarget?.messageId || null,
-      files: selectedFiles,
-    });
-    if (textarea) textarea.value = '';
-    if (input) input.value = '';
-    clearMessageComposerDraft(target.key);
-    clearMessageReplyTarget(target.key);
-    if (selectedFiles.length > 1) {
-      toast(`已发送 ${selectedFiles.length} 个文件`, 'success');
-    }
-    await refreshMessages(target.key, { preserveComposer: false, focusComposer: true });
-  } catch (err) {
-    toast(`文件发送失败: ${err.message}`, 'error');
-    textarea?.focus({ preventScroll: true });
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '发送'; }
+  if (textarea) textarea.value = '';
+  if (input) input.value = '';
+  clearMessageComposerDraft(target.key);
+  clearMessageReplyTarget(target.key);
+  if (options.fromFavoriteGif) {
+    closeMessageEmojiPanel();
   }
+  await queueTransientMessage(target.key, {
+    body: caption,
+    files: selectedFiles,
+    replyTarget,
+    focusComposer: true,
+  });
 }
 
 function showMessageEditModal(messageId, conversationType, currentBody = '', allowEmpty = false) {
@@ -9263,8 +9773,10 @@ Object.assign(window, {
   setMessageConversationSearch, toggleMessageArchivedFilter, toggleMessageConversationPinned, toggleMessageConversationMuted,
   toggleMessageConversationArchived, toggleDirectConversationBlock, showMessageBlocksModal, unblockMessageUser,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
+  scrollMessageThreadToBottom, toggleMessageEmojiPanel, insertMessageEmoji, addMessageGifFavorites,
+  removeMessageGifFavorite, sendFavoriteGif, dismissTransientMessage, retryTransientMessage,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
-  showPreviousMessageImage, showNextMessageImage, downloadMessageFile,
+  showPreviousMessageImage, showNextMessageImage, downloadMessageFile, downloadLocalMessageFile,
   refreshMessageThreadNow, quoteMessage, replyToMessage, clearMessageReplyTarget,
   openMessageActionMenu, closeMessageActionMenu, copyMessageText, recallMessageAction,
   showMessageEditModal, submitMessageEdit, deleteMessageAction, showMessageReportModal, submitMessageReport,

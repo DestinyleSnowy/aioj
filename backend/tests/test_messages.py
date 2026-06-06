@@ -9,6 +9,8 @@ from app.routers.messages import (
     delete_direct_message,
     edit_direct_message,
     extract_message_mentions,
+    get_group_message_conversation,
+    get_message_conversation,
     list_message_conversations,
     normalize_group_member_ids,
     normalize_group_name,
@@ -41,6 +43,12 @@ class _FakeResult:
     def all(self):
         return self.row or []
 
+    def scalar(self):
+        return self.row
+
+    def scalar_one(self):
+        return self.row
+
 
 class _FakeConn:
     def __init__(self, row=None):
@@ -72,6 +80,17 @@ class _FakeEngine:
 
     def connect(self):
         return _FakeBegin(self.conn)
+
+
+class _SequenceConn:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls: list[tuple[str, dict]] = []
+
+    def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+        response = self.responses.pop(0) if self.responses else None
+        return _FakeResult(response)
 
 
 def test_normalize_message_body_trims_and_limits_length():
@@ -349,3 +368,105 @@ def test_list_message_conversations_aligns_direct_and_group_union_columns(monkey
     assert "null::text as peer_avatar_object_key" in statement
     assert "null::timestamptz as peer_avatar_updated_at" in statement
     assert params == {"user_id": 3, "limit": 50}
+
+
+def test_get_message_conversation_reports_first_unread_message_id(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn = _SequenceConn(
+        [
+            {
+                "id": 8,
+                "username": "peer",
+                "role": "USER",
+                "avatar_object_key": None,
+                "avatar_updated_at": None,
+                "is_disabled": False,
+            },
+            [
+                {
+                    "id": 11,
+                    "sender_id": 8,
+                    "sender_username": "peer",
+                    "sender_avatar_object_key": None,
+                    "sender_avatar_updated_at": None,
+                    "recipient_id": 3,
+                    "recipient_username": "me",
+                    "recipient_avatar_object_key": None,
+                    "recipient_avatar_updated_at": None,
+                    "body_md": "hello",
+                    "reply_to_message_id": None,
+                    "has_attachment": False,
+                    "attachment_id": None,
+                    "attachment_content_type": None,
+                    "attachment_filename": None,
+                    "attachment_size_bytes": None,
+                    "is_read": False,
+                    "created_at": now,
+                    "read_at": None,
+                    "edited_at": None,
+                    "deleted_at": None,
+                    "deleted_by_user_id": None,
+                    "reply_to_body_md": None,
+                    "reply_to_has_attachment": False,
+                    "reply_to_attachment_content_type": None,
+                    "reply_to_attachment_filename": None,
+                    "reply_to_deleted_at": None,
+                    "reply_to_sender_username": None,
+                }
+            ],
+            None,
+        ]
+    )
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_user_block_state",
+        lambda *_args, **_kwargs: {"is_blocked_by_me": False, "has_blocked_me": False},
+    )
+    monkeypatch.setattr(
+        "app.routers.messages.get_conversation_preferences",
+        lambda *_args, **_kwargs: {},
+    )
+
+    result = get_message_conversation(8, user={"id": 3})
+
+    assert result["first_unread_message_id"] == 11
+    assert len(conn.calls) == 3
+    assert "update direct_messages" in conn.calls[2][0].lower()
+
+
+def test_get_group_message_conversation_before_cursor_expands_hidden_filter_sql(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn = _SequenceConn(
+        [
+            0,
+            {"created_at": now},
+            [],
+        ]
+    )
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_group_membership",
+        lambda *_args, **_kwargs: {
+            "id": 5,
+            "name": "team",
+            "owner_id": 3,
+            "created_at": now,
+            "updated_at": now,
+            "member_role": "OWNER",
+            "group_nickname": "Captain",
+            "joined_at": now - timedelta(days=1),
+            "member_count": 2,
+        },
+    )
+    monkeypatch.setattr("app.routers.messages.get_conversation_preferences", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("app.routers.messages.list_group_members", lambda *_args, **_kwargs: [])
+
+    result = get_group_message_conversation(5, before_id=21, user={"id": 3})
+
+    assert result["first_unread_message_id"] is None
+    assert len(conn.calls) == 3
+    anchor_statement = conn.calls[1][0]
+    assert "{message_hidden_filter_sql" not in anchor_statement
+    assert "message_hidden_entries" in anchor_statement
