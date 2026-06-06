@@ -313,6 +313,18 @@ create table if not exists message_conversation_preferences (
   )
 );
 
+create table if not exists message_contact_remarks (
+  user_id bigint not null references users(id) on delete cascade,
+  contact_user_id bigint not null references users(id) on delete cascade,
+  remark_name text not null,
+  updated_at timestamptz not null default now(),
+  primary key (user_id, contact_user_id),
+  constraint message_contact_remarks_no_self_check check (user_id <> contact_user_id),
+  constraint message_contact_remarks_name_length_check check (
+    length(btrim(remark_name)) between 1 and 50
+  )
+);
+
 create table if not exists user_message_blocks (
   blocker_id bigint not null references users(id) on delete cascade,
   blocked_user_id bigint not null references users(id) on delete cascade,
@@ -511,6 +523,7 @@ create index if not exists idx_group_messages_sender_created on group_messages(s
 create index if not exists idx_group_messages_reply_to on group_messages(reply_to_message_id);
 create index if not exists idx_group_message_reads_user on group_message_reads(user_id, group_id);
 create index if not exists idx_message_conversation_preferences_user_flags on message_conversation_preferences(user_id, is_archived, is_pinned, is_muted, updated_at desc);
+create index if not exists idx_message_contact_remarks_contact on message_contact_remarks(contact_user_id, user_id);
 create index if not exists idx_user_message_blocks_blocked on user_message_blocks(blocked_user_id, blocker_id);
 create index if not exists idx_message_reports_reporter_created on message_reports(reporter_id, created_at desc, id desc);
 create index if not exists idx_message_reports_status_created on message_reports(status, created_at desc, id desc);

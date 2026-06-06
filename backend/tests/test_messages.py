@@ -16,6 +16,7 @@ from app.routers.messages import (
     hydrate_message_rows,
     list_message_conversations,
     mark_group_messages_read,
+    normalize_contact_remark,
     normalize_dm_policy,
     normalize_group_member_ids,
     normalize_group_member_role,
@@ -34,6 +35,7 @@ from app.routers.messages import (
     safe_attachment_filename,
     scan_message_attachment,
     trim_message_page,
+    update_message_contact_remark,
     update_message_conversation_preferences,
     validate_file_upload,
 )
@@ -214,6 +216,15 @@ def test_normalize_group_nickname_supports_reset_and_length_validation():
     assert too_long.value.status_code == 400
 
 
+def test_normalize_contact_remark_supports_reset_and_length_validation():
+    assert normalize_contact_remark("  Coach  ") == "Coach"
+    assert normalize_contact_remark("   ") is None
+
+    with pytest.raises(HTTPException) as too_long:
+        normalize_contact_remark("x" * 51)
+    assert too_long.value.status_code == 400
+
+
 def test_normalize_group_member_ids_dedupes_and_skips_current_user():
     assert normalize_group_member_ids([1, "2", 2, 3], current_user_id=1) == [2, 3]
     assert normalize_group_member_ids("2,3,2", current_user_id=1) == [2, 3]
@@ -296,6 +307,61 @@ def test_update_message_conversation_preferences_rejects_self_direct_conversatio
 
     assert excinfo.value.status_code == 400
     assert excinfo.value.detail == "Cannot update self conversation preferences"
+
+
+def test_update_message_contact_remark_upserts_private_remark(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn = _SequenceConn(
+        [
+            {
+                "id": 8,
+                "username": "peer",
+                "role": "USER",
+                "avatar_object_key": None,
+                "avatar_updated_at": None,
+                "last_seen_at": None,
+                "is_disabled": False,
+            },
+            {"remark_name": "Coach", "updated_at": now},
+        ]
+    )
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+
+    result = update_message_contact_remark(8, {"remark_name": "  Coach  "}, user={"id": 3})
+
+    assert result["ok"] is True
+    assert result["remark"] == {"remark_name": "Coach", "updated_at": now}
+    assert result["contact"]["peer_display_name"] == "Coach"
+    assert len(conn.calls) == 2
+    assert "insert into message_contact_remarks" in conn.calls[1][0]
+    assert conn.calls[1][1] == {"user_id": 3, "contact_user_id": 8, "remark_name": "Coach"}
+
+
+def test_update_message_contact_remark_clears_blank_remark(monkeypatch):
+    conn = _SequenceConn(
+        [
+            {
+                "id": 8,
+                "username": "peer",
+                "role": "USER",
+                "avatar_object_key": None,
+                "avatar_updated_at": None,
+                "last_seen_at": None,
+                "is_disabled": False,
+            },
+            None,
+        ]
+    )
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+
+    result = update_message_contact_remark(8, {"remark_name": "   "}, user={"id": 3})
+
+    assert result["ok"] is True
+    assert result["remark"] == {"remark_name": None, "updated_at": None}
+    assert result["contact"]["peer_display_name"] == "peer"
+    assert len(conn.calls) == 2
+    assert "delete from message_contact_remarks" in conn.calls[1][0]
+    assert conn.calls[1][1] == {"user_id": 3, "contact_user_id": 8}
 
 
 def test_edit_direct_message_allows_empty_attachment_caption(monkeypatch):
@@ -467,6 +533,8 @@ def test_list_message_conversations_aligns_direct_and_group_union_columns(monkey
     assert len(conn.calls) == 1
     statement, params = conn.calls[0]
     assert "null::text as last_sender_group_nickname" in statement
+    assert "contact_remark.remark_name as peer_remark_name" in statement
+    assert "null::text as peer_remark_name" in statement
     assert "null::text as peer_avatar_object_key" in statement
     assert "null::timestamptz as peer_avatar_updated_at" in statement
     assert params == {"user_id": 3, "limit": 51, "offset": 0}

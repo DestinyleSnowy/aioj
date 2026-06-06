@@ -47,6 +47,14 @@
       });
     },
 
+    updateContactRemark(contactUserId, payload) {
+      return api(`/api/messages/contact-remarks/${Number(contactUserId)}`, {
+        method: 'PATCH',
+        headers: jsonHeaders(),
+        body: JSON.stringify(payload || {}),
+      });
+    },
+
     sendTyping(payload) {
       return api('/api/messages/typing', {
         method: 'POST',

@@ -26,6 +26,7 @@ MAX_MESSAGE_LENGTH = 4000
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_GROUP_NAME_LENGTH = 80
 MAX_GROUP_NICKNAME_LENGTH = 50
+MAX_CONTACT_REMARK_LENGTH = 50
 MAX_GROUP_MEMBERS = 50
 MAX_REPORT_REASON_LENGTH = 80
 MAX_REPORT_DETAILS_LENGTH = 2000
@@ -145,6 +146,18 @@ def normalize_group_nickname(value, *, allow_empty: bool = False) -> str | None:
             detail=f"Group nickname must be at most {MAX_GROUP_NICKNAME_LENGTH} characters",
         )
     return nickname
+
+
+def normalize_contact_remark(value) -> str | None:
+    remark = str(value or "").strip()
+    if not remark:
+        return None
+    if len(remark) > MAX_CONTACT_REMARK_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Contact remark must be at most {MAX_CONTACT_REMARK_LENGTH} characters",
+        )
+    return remark
 
 
 def normalize_group_member_ids(value, *, current_user_id: int | None = None) -> list[int]:
@@ -530,6 +543,10 @@ def serialize_conversation_row(row) -> dict:
         data.get("peer_avatar_updated_at"),
         data.get("peer_avatar_object_key"),
     )
+    peer_remark_name = str(data.get("peer_remark_name") or "").strip()
+    if "peer_remark_name" in data:
+        data["peer_remark_name"] = peer_remark_name or None
+        data["peer_display_name"] = peer_remark_name or data.get("peer_username")
     last_sender_group_nickname = str(data.get("last_sender_group_nickname") or "").strip()
     if "last_sender_group_nickname" in data:
         data["last_sender_group_nickname"] = last_sender_group_nickname or data.get("last_sender_username")
@@ -678,6 +695,43 @@ def get_user_block_state(conn, *, current_user_id: int, other_user_id: int) -> d
         "is_blocked_by_me": bool(data.get("is_blocked_by_me")),
         "has_blocked_me": bool(data.get("has_blocked_me")),
     }
+
+
+def apply_contact_remark_payload(payload: dict, *, remark_name=None, username_key: str = "username") -> dict:
+    remark = str(remark_name or "").strip()
+    payload["peer_remark_name"] = remark or None
+    payload["peer_display_name"] = remark or payload.get(username_key)
+    return payload
+
+
+def upsert_contact_remark(conn, *, user_id: int, contact_user_id: int, remark_name: str | None) -> dict:
+    if remark_name is None:
+        conn.execute(
+            text(
+                """
+                delete from message_contact_remarks
+                where user_id = :user_id
+                  and contact_user_id = :contact_user_id
+                """
+            ),
+            {"user_id": user_id, "contact_user_id": contact_user_id},
+        )
+        return {"remark_name": None, "updated_at": None}
+
+    row = conn.execute(
+        text(
+            """
+            insert into message_contact_remarks(user_id, contact_user_id, remark_name, updated_at)
+            values (:user_id, :contact_user_id, :remark_name, now())
+            on conflict (user_id, contact_user_id) do update
+            set remark_name = excluded.remark_name,
+                updated_at = now()
+            returning remark_name, updated_at
+            """
+        ),
+        {"user_id": user_id, "contact_user_id": contact_user_id, "remark_name": remark_name},
+    ).mappings().first()
+    return {"remark_name": row["remark_name"], "updated_at": row["updated_at"]}
 
 
 def get_user_message_preferences(conn, *, user_id: int) -> dict:
@@ -1618,7 +1672,7 @@ def list_message_conversations(limit: int = 50, offset: int = 0, q: str = "", in
         archived_filter = ""
     if query:
         params["query"] = f"%{query}%"
-        direct_search_filter = "and u.username ilike :query"
+        direct_search_filter = "and (u.username ilike :query or contact_remark.remark_name ilike :query)"
         group_search_filter = "and g.name ilike :query"
     with engine.connect() as conn:
         rows = conn.execute(
@@ -1662,6 +1716,7 @@ def list_message_conversations(limit: int = 50, offset: int = 0, q: str = "", in
                     ('direct:' || ranked.peer_id::text) as conversation_key,
                     ranked.peer_id,
                     u.username as peer_username,
+                    contact_remark.remark_name as peer_remark_name,
                     u.role as peer_role,
                     u.avatar_object_key as peer_avatar_object_key,
                     u.avatar_updated_at as peer_avatar_updated_at,
@@ -1696,6 +1751,9 @@ def list_message_conversations(limit: int = 50, offset: int = 0, q: str = "", in
                   from ranked
                   join users u on u.id = ranked.peer_id
                   join users sender_user on sender_user.id = ranked.sender_id
+                  left join message_contact_remarks contact_remark
+                    on contact_remark.user_id = :user_id
+                   and contact_remark.contact_user_id = ranked.peer_id
                   left join unread on unread.peer_id = ranked.peer_id
                   left join message_conversation_preferences prefs
                     on prefs.user_id = :user_id
@@ -1743,6 +1801,7 @@ def list_message_conversations(limit: int = 50, offset: int = 0, q: str = "", in
                     ('group:' || g.id::text) as conversation_key,
                     null::bigint as peer_id,
                     null::text as peer_username,
+                    null::text as peer_remark_name,
                     null::text as peer_role,
                     null::text as peer_avatar_object_key,
                     null::timestamptz as peer_avatar_updated_at,
@@ -1839,25 +1898,34 @@ def get_message_conversation(
             text(
                 """
                 select
-                  id,
-                  username,
-                  role,
-                  avatar_object_key,
-                  avatar_updated_at,
-                  last_seen_at,
-                  coalesce(is_disabled, false) as is_disabled
-                from users
-                where id = :peer_id
+                  u.id,
+                  u.username,
+                  u.role,
+                  u.avatar_object_key,
+                  u.avatar_updated_at,
+                  u.last_seen_at,
+                  coalesce(u.is_disabled, false) as is_disabled,
+                  contact_remark.remark_name as peer_remark_name,
+                  contact_remark.updated_at as peer_remark_updated_at
+                from users u
+                left join message_contact_remarks contact_remark
+                  on contact_remark.user_id = :user_id
+                 and contact_remark.contact_user_id = u.id
+                where u.id = :peer_id
                 """
             ),
-            {"peer_id": peer_id},
+            {"peer_id": peer_id, "user_id": user["id"]},
         ).mappings().first()
         if not peer:
             raise HTTPException(status_code=404, detail="User not found")
         block_state = get_user_block_state(conn, current_user_id=user["id"], other_user_id=peer_id)
         peer_message_preferences = get_user_message_preferences(conn, user_id=peer_id)
         preferences = get_conversation_preferences(conn, user_id=user["id"], conversation_type="direct", conversation_id=peer_id)
-        peer_payload = apply_conversation_preferences_payload(serialize_user(peer), preferences)
+        peer_payload = apply_contact_remark_payload(
+            apply_conversation_preferences_payload(serialize_user(peer), preferences),
+            remark_name=peer.get("peer_remark_name"),
+        )
+        peer_payload["peer_remark_updated_at"] = peer.get("peer_remark_updated_at")
         peer_payload.update(block_state)
         peer_payload.update(presence_payload(peer))
         peer_payload["can_message"] = not (
@@ -1906,10 +1974,12 @@ def get_message_conversation(
                     'direct' as attachment_scope,
                     dm.sender_id,
                     su.username as sender_username,
+                    sender_contact_remark.remark_name as sender_remark_name,
                     su.avatar_object_key as sender_avatar_object_key,
                     su.avatar_updated_at as sender_avatar_updated_at,
                     dm.recipient_id,
                     ru.username as recipient_username,
+                    recipient_contact_remark.remark_name as recipient_remark_name,
                     ru.avatar_object_key as recipient_avatar_object_key,
                     ru.avatar_updated_at as recipient_avatar_updated_at,
                     dm.body_md,
@@ -1937,6 +2007,12 @@ def get_message_conversation(
                   from direct_messages dm
                   join users su on su.id = dm.sender_id
                   join users ru on ru.id = dm.recipient_id
+                  left join message_contact_remarks sender_contact_remark
+                    on sender_contact_remark.user_id = :user_id
+                   and sender_contact_remark.contact_user_id = dm.sender_id
+                  left join message_contact_remarks recipient_contact_remark
+                    on recipient_contact_remark.user_id = :user_id
+                   and recipient_contact_remark.contact_user_id = dm.recipient_id
                   left join direct_messages reply on reply.id = dm.reply_to_message_id
                   left join users reply_sender on reply_sender.id = reply.sender_id
                   where (
@@ -3540,6 +3616,51 @@ def update_message_conversation_preferences(conversation_type: str, conversation
             is_muted=is_muted,
         )
     return {"ok": True, "conversation_type": normalized_type, "conversation_id": conversation_id, "preferences": prefs}
+
+
+@router.patch("/api/messages/contact-remarks/{contact_user_id}")
+def update_message_contact_remark(contact_user_id: int, payload: dict, user=Depends(require_user)):
+    if int(contact_user_id or 0) <= 0:
+        raise HTTPException(status_code=400, detail="Invalid contact user id")
+    if int(contact_user_id) == int(user["id"]):
+        raise HTTPException(status_code=400, detail="Cannot set a remark for yourself")
+    remark_name = normalize_contact_remark(
+        payload.get("remark_name") if "remark_name" in payload else payload.get("name")
+    )
+
+    with engine.begin() as conn:
+        contact = conn.execute(
+            text(
+                """
+                select
+                  id,
+                  username,
+                  role,
+                  avatar_object_key,
+                  avatar_updated_at,
+                  last_seen_at,
+                  coalesce(is_disabled, false) as is_disabled
+                from users
+                where id = :contact_user_id
+                """
+            ),
+            {"contact_user_id": contact_user_id},
+        ).mappings().first()
+        if not contact:
+            raise HTTPException(status_code=404, detail="User not found")
+        remark = upsert_contact_remark(
+            conn,
+            user_id=user["id"],
+            contact_user_id=contact_user_id,
+            remark_name=remark_name,
+        )
+
+    contact_payload = apply_contact_remark_payload(
+        serialize_user(contact),
+        remark_name=remark["remark_name"],
+    )
+    contact_payload["peer_remark_updated_at"] = remark["updated_at"]
+    return {"ok": True, "contact_user_id": contact_user_id, "remark": remark, "contact": contact_payload}
 
 
 @router.get("/api/messages/blocks")

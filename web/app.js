@@ -256,6 +256,30 @@ function groupNickname(value, fallback = '用户') {
   return username || '用户';
 }
 
+function contactRemarkName(value) {
+  return String(value?.peer_remark_name || value?.remark_name || '').trim();
+}
+
+function directContactUsername(value, fallback = '用户') {
+  const fallbackName = String(fallback || '').trim();
+  const username = String(value?.peer_username || value?.username || value?.sender_username || fallbackName || '').trim();
+  return username || fallbackName || '用户';
+}
+
+function directContactDisplayName(value, fallback = '用户') {
+  return contactRemarkName(value) || directContactUsername(value, fallback);
+}
+
+function directContactSubtitle(value) {
+  const remark = contactRemarkName(value);
+  const username = String(value?.peer_username || value?.username || value?.sender_username || '').trim();
+  return [
+    remark && username && remark !== username ? `@${username}` : '',
+    value?.peer_role || value?.role || 'USER',
+    messagePresenceLabel(value),
+  ].filter(Boolean).join(' · ');
+}
+
 function renderMessageAvatar(name, url = '', extraClass = '', options = {}) {
   const className = ['message-avatar', extraClass].filter(Boolean).join(' ');
   return renderAvatar(name, url, className, options);
@@ -307,7 +331,7 @@ function messageSenderDisplayLabel(message) {
   if (isGroupConversationMessage(message)) {
     return groupNickname(message, message?.sender_username || '用户');
   }
-  return mine ? '我' : (message?.sender_username || '用户');
+  return mine ? '我' : (String(message?.sender_remark_name || '').trim() || message?.sender_username || '用户');
 }
 
 function messageMetaLabel(message) {
@@ -355,7 +379,7 @@ function conversationRecallPreviewText(conversation) {
   const mine = Number(conversation.last_sender_id || 0) === Number(state.user?.id || 0);
   const sender = conversation.conversation_type === 'group'
     ? (conversation.last_sender_group_nickname || conversation.last_sender_username || '成员')
-    : (conversation.last_sender_username || '对方');
+    : directContactDisplayName(conversation, conversation.last_sender_username || '对方');
   return `${mine ? '你' : sender}撤回了一条消息`;
 }
 
@@ -4127,10 +4151,10 @@ function renderMessageConversationButton(c, selectedKey = '') {
   const active = conversationKey === selectedKey;
   const incoming = Number(c.last_sender_id) !== Number(state.user?.id || 0);
   const unread = Number(c.unread_count || 0);
-  const title = conversationType === 'group' ? c.group_name : c.peer_username;
+  const title = conversationType === 'group' ? c.group_name : directContactDisplayName(c, c.peer_username);
   const subtitle = conversationType === 'group'
     ? `${Number(c.group_member_count || 0)} 位成员`
-    : [c.peer_role || 'USER', messagePresenceLabel(c)].filter(Boolean).join(' · ');
+    : directContactSubtitle(c);
   const stateBits = [c.is_pinned ? 'PIN' : '', c.is_muted ? 'MUTE' : '', c.is_archived ? 'ARCH' : ''].filter(Boolean).join(' · ');
   const previewPrefix = c.last_deleted_at
     ? ''
@@ -4635,6 +4659,61 @@ async function toggleMessageConversationArchived(conversationKey, nextValue) {
     }
   } catch (err) {
     toast(`更新会话归档失败: ${err.message}`, 'error');
+  }
+}
+
+function showContactRemarkModal(peerId, currentRemark = '', username = '') {
+  const normalizedPeerId = Number(peerId || 0);
+  if (!normalizedPeerId) return;
+  const body = `
+    <div class="form-group">
+      <label for="contactRemarkInput">备注名</label>
+      <input
+        type="text"
+        id="contactRemarkInput"
+        maxlength="50"
+        value="${esc(currentRemark || '')}"
+        placeholder="留空恢复用户名"
+        onkeydown="if(event.key==='Enter'){submitContactRemark(${normalizedPeerId})}"
+      />
+      <div class="text-muted" style="font-size: 12px; margin-top: 6px;">原用户名：${esc(username || '用户')}</div>
+    </div>
+    <div id="contactRemarkError" class="notice error" style="display:none"></div>
+  `;
+  openModal({
+    title: '设置备注',
+    body,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="contactRemarkSubmitBtn" onclick="submitContactRemark(${normalizedPeerId})">保存</button>
+    `,
+  });
+  setTimeout(() => $('contactRemarkInput')?.focus(), 0);
+}
+
+async function submitContactRemark(peerId) {
+  const normalizedPeerId = Number(peerId || 0);
+  const input = $('contactRemarkInput');
+  const errEl = $('contactRemarkError');
+  const btn = $('contactRemarkSubmitBtn');
+  const remarkName = input?.value ?? '';
+  if (remarkName.trim().length > 50) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = '备注名不能超过 50 个字符。'; }
+    return;
+  }
+  try {
+    if (btn) { btn.disabled = true; btn.textContent = '保存中...'; }
+    await ChatApi.updateContactRemark(normalizedPeerId, { remark_name: remarkName });
+    closeModal();
+    toast(remarkName.trim() ? '备注已更新' : '已恢复默认用户名', 'success');
+    await refreshMessages(messageConversationKey('direct', normalizedPeerId), {
+      preserveComposer: true,
+      scrollToBottom: false,
+    });
+  } catch (err) {
+    if (errEl) { errEl.style.display = ''; errEl.textContent = err.message; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '保存'; }
   }
 }
 
@@ -5449,10 +5528,10 @@ function renderMessageThread(peer, messages, options = {}) {
     : '';
   const title = conversationType === 'group'
     ? (peer.name || peer.group_name)
-    : (peer.username || peer.peer_username);
+    : directContactDisplayName(peer, peer.username || peer.peer_username);
   const subtitle = conversationType === 'group'
     ? `${Number(peer.member_count || peer.group_member_count || peer.members?.length || 0)} 位成员`
-    : [peer.role || peer.peer_role || 'USER', messagePresenceLabel(peer)].filter(Boolean).join(' · ');
+    : directContactSubtitle(peer);
   return `
     <div class="message-thread-header">
       ${renderConversationAvatar(conversationType, title, peer.avatar_url || peer.peer_avatar_url, { username: conversationType === 'direct' ? (peer.username || peer.peer_username) : '' })}
@@ -5465,6 +5544,7 @@ function renderMessageThread(peer, messages, options = {}) {
       <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationPinned(${jsArg(conversationKey)}, ${peer.is_pinned ? 'false' : 'true'})">${peer.is_pinned ? '取消置顶' : '置顶'}</button>
       <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationMuted(${jsArg(conversationKey)}, ${peer.is_muted ? 'false' : 'true'})">${peer.is_muted ? '取消静音' : '静音'}</button>
       <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationArchived(${jsArg(conversationKey)}, ${peer.is_archived ? 'false' : 'true'})">${peer.is_archived ? '取消归档' : '归档'}</button>
+      ${conversationType === 'direct' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showContactRemarkModal(${conversationId}, ${jsArg(peer.peer_remark_name || '')}, ${jsArg(peer.username || peer.peer_username || '')})">备注</button>` : ''}
       ${conversationType === 'direct' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleDirectConversationBlock(${conversationId}, ${peer.is_blocked_by_me ? 'false' : 'true'})">${peer.is_blocked_by_me ? '解除拉黑' : '拉黑'}</button>` : ''}
       ${conversationType === 'group' ? `<button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showMessageGroupSettings(${conversationId})">群设置</button>` : ''}
     </div>
@@ -10758,7 +10838,8 @@ Object.assign(window, {
   removeGroupSettingsPendingMember, addGroupSettingsMembers, removeMessageGroupMemberFromSettings,
   transferMessageGroupOwnerFromSettings, leaveMessageGroup, deleteMessageGroup, insertGroupMention, showGroupMentionModal,
   setMessageConversationSearch, toggleMessageArchivedFilter, toggleMessageConversationPinned, toggleMessageConversationMuted,
-  toggleMessageConversationArchived, toggleDirectConversationBlock, showMessageBlocksModal, unblockMessageUser,
+  toggleMessageConversationArchived, showContactRemarkModal, submitContactRemark,
+  toggleDirectConversationBlock, showMessageBlocksModal, unblockMessageUser,
   loadMoreMessageConversations, showMessagePreferencesModal, saveMessagePreferences,
   showMessageFavoritesModal, openMessageFavorite, showJoinGroupInviteModal, joinGroupInvite,
   showAdminMessageReportsModal, resolveMessageReport,
