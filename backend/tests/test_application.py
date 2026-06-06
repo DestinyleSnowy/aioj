@@ -34,25 +34,41 @@ def test_create_app_registers_core_routes():
     assert "/api/admin/notifications/broadcast" in paths
     assert "/api/messages/conversations" in paths
     assert "/api/messages/unread-count" in paths
+    assert "/api/messages/events" in paths
+    assert "/api/messages/presence/heartbeat" in paths
+    assert "/api/messages/preferences" in paths
+    assert "/api/messages/typing" in paths
+    assert "/api/messages/search" in paths
     assert "/api/messages/files" in paths
     assert "/api/messages/images" in paths
     assert "/api/messages/groups" in paths
     assert "/api/messages/groups/{group_id}" in paths
     assert "/api/messages/groups/{group_id}/members" in paths
+    assert "/api/messages/groups/{group_id}/announcements" in paths
+    assert "/api/messages/groups/{group_id}/invites" in paths
+    assert "/api/messages/group-invites/join" in paths
     assert "/api/messages/groups/{group_id}/messages" in paths
     assert "/api/messages/groups/{group_id}/files" in paths
     assert "/api/messages/groups/{group_id}/read" in paths
     assert "/api/messages/groups/{group_id}/leave" in paths
     assert "/api/messages/groups/{group_id}/transfer-owner" in paths
     assert "/api/messages/groups/{group_id}/members/{member_id}" in paths
+    assert "/api/messages/groups/{group_id}/members/{member_id}/role" in paths
+    assert "/api/messages/groups/{group_id}/members/{member_id}/remove" in paths
     assert "/api/messages/conversation-preferences/{conversation_type}/{conversation_id}" in paths
     assert "/api/messages/blocks" in paths
     assert "/api/messages/blocks/{blocked_user_id}" in paths
     assert "/api/messages/reports" in paths
+    assert "/api/admin/messages/reports" in paths
+    assert "/api/admin/messages/reports/{report_id}" in paths
+    assert "/api/messages/reactions" in paths
+    assert "/api/messages/favorites" in paths
+    assert "/api/messages/favorites/{conversation_type}/{message_id}" in paths
     assert "/api/messages/direct-messages/{message_id}" in paths
     assert "/api/messages/direct-messages/{message_id}/recall" in paths
     assert "/api/messages/group-messages/{message_id}" in paths
     assert "/api/messages/group-messages/{message_id}/recall" in paths
+    assert "/api/messages/group-messages/{message_id}/reads" in paths
     assert "/api/messages/group-messages/{message_id}/attachment" in paths
     assert "/api/messages/{message_id}/attachment" in paths
     assert "/api/messages/{message_id}/image" in paths

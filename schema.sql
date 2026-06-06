@@ -12,6 +12,7 @@ create table if not exists users (
   avatar_object_key text,
   avatar_content_type text,
   avatar_updated_at timestamptz,
+  last_seen_at timestamptz,
   created_at timestamptz not null default now()
 );
 
@@ -219,11 +220,14 @@ create table if not exists direct_messages (
   attachment_filename text,
   attachment_size_bytes integer,
   is_read boolean not null default false,
+  delivered_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   read_at timestamptz,
   edited_at timestamptz,
   deleted_at timestamptz,
   deleted_by_user_id bigint references users(id) on delete set null,
+  attachment_scan_status text not null default 'PENDING',
+  attachment_thumbnail_object_key text,
   constraint direct_messages_no_self_check check (sender_id <> recipient_id),
   constraint direct_messages_content_check check (
     length(btrim(body_md)) between 1 and 4000
@@ -252,7 +256,7 @@ create table if not exists message_group_members (
   group_nickname text,
   joined_at timestamptz not null default now(),
   primary key (group_id, user_id),
-  constraint message_group_members_role_check check (role in ('OWNER', 'MEMBER')),
+  constraint message_group_members_role_check check (role in ('OWNER', 'ADMIN', 'MEMBER')),
   constraint message_group_members_group_nickname_length_check check (
     group_nickname is null or length(btrim(group_nickname)) between 1 and 50
   )
@@ -268,10 +272,13 @@ create table if not exists group_messages (
   attachment_content_type text,
   attachment_filename text,
   attachment_size_bytes integer,
+  delivered_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   edited_at timestamptz,
   deleted_at timestamptz,
   deleted_by_user_id bigint references users(id) on delete set null,
+  attachment_scan_status text not null default 'PENDING',
+  attachment_thumbnail_object_key text,
   constraint group_messages_content_check check (
     length(btrim(body_md)) between 1 and 4000
     or attachment_object_key is not null
@@ -324,6 +331,9 @@ create table if not exists message_reports (
   status text not null default 'OPEN',
   created_at timestamptz not null default now(),
   reviewed_at timestamptz,
+  reviewed_by_user_id bigint references users(id) on delete set null,
+  resolution_note text not null default '',
+  action_taken text not null default 'NONE',
   constraint message_reports_scope_check check (
     ((direct_message_id is not null)::integer + (group_message_id is not null)::integer) = 1
   ),
@@ -349,6 +359,113 @@ create table if not exists message_hidden_entries (
   ),
   constraint message_hidden_entries_unique_direct unique (user_id, direct_message_id),
   constraint message_hidden_entries_unique_group unique (user_id, group_message_id)
+);
+
+create table if not exists user_message_preferences (
+  user_id bigint primary key references users(id) on delete cascade,
+  dm_policy text not null default 'EVERYONE',
+  allow_group_invites boolean not null default true,
+  dnd_start_time time,
+  dnd_end_time time,
+  updated_at timestamptz not null default now(),
+  constraint user_message_preferences_dm_policy_check
+    check (dm_policy in ('EVERYONE', 'NOBODY'))
+);
+
+create table if not exists message_typing_states (
+  user_id bigint not null references users(id) on delete cascade,
+  conversation_type text not null,
+  conversation_id bigint not null,
+  updated_at timestamptz not null default now(),
+  expires_at timestamptz not null,
+  primary key (user_id, conversation_type, conversation_id),
+  constraint message_typing_states_type_check check (conversation_type in ('DIRECT', 'GROUP'))
+);
+
+create table if not exists group_message_read_receipts (
+  group_message_id bigint not null references group_messages(id) on delete cascade,
+  user_id bigint not null references users(id) on delete cascade,
+  read_at timestamptz not null default now(),
+  primary key (group_message_id, user_id)
+);
+
+create table if not exists message_reactions (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  direct_message_id bigint references direct_messages(id) on delete cascade,
+  group_message_id bigint references group_messages(id) on delete cascade,
+  emoji text not null,
+  created_at timestamptz not null default now(),
+  constraint message_reactions_scope_check check (
+    ((direct_message_id is not null)::integer + (group_message_id is not null)::integer) = 1
+  ),
+  constraint message_reactions_emoji_length_check check (
+    length(btrim(emoji)) between 1 and 16
+  )
+);
+
+create table if not exists message_favorites (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  direct_message_id bigint references direct_messages(id) on delete cascade,
+  group_message_id bigint references group_messages(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  constraint message_favorites_scope_check check (
+    ((direct_message_id is not null)::integer + (group_message_id is not null)::integer) = 1
+  )
+);
+
+create table if not exists message_group_announcements (
+  id bigserial primary key,
+  group_id bigint not null references message_groups(id) on delete cascade,
+  author_id bigint references users(id) on delete set null,
+  body_md text not null default '',
+  is_pinned boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint message_group_announcements_body_length_check check (length(body_md) <= 4000)
+);
+
+create table if not exists message_group_invites (
+  id bigserial primary key,
+  group_id bigint not null references message_groups(id) on delete cascade,
+  invite_code text unique not null,
+  created_by_user_id bigint references users(id) on delete set null,
+  expires_at timestamptz,
+  max_uses integer,
+  use_count integer not null default 0,
+  is_revoked boolean not null default false,
+  created_at timestamptz not null default now(),
+  constraint message_group_invites_max_uses_check check (max_uses is null or max_uses > 0)
+);
+
+create table if not exists message_group_moderation_logs (
+  id bigserial primary key,
+  group_id bigint not null references message_groups(id) on delete cascade,
+  actor_id bigint references users(id) on delete set null,
+  target_user_id bigint references users(id) on delete set null,
+  action text not null,
+  reason text not null default '',
+  created_at timestamptz not null default now()
+);
+
+create table if not exists message_attachment_jobs (
+  id bigserial primary key,
+  direct_message_id bigint references direct_messages(id) on delete cascade,
+  group_message_id bigint references group_messages(id) on delete cascade,
+  object_key text not null,
+  status text not null default 'PENDING',
+  scan_result text not null default 'PENDING',
+  thumbnail_object_key text,
+  error_message text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint message_attachment_jobs_scope_check check (
+    ((direct_message_id is not null)::integer + (group_message_id is not null)::integer) = 1
+  ),
+  constraint message_attachment_jobs_status_check check (
+    status in ('PENDING', 'STORED', 'FAILED')
+  )
 );
 
 create table if not exists audit_logs (
@@ -378,6 +495,7 @@ create index if not exists idx_submissions_contest_scoreboard on submissions(con
 create index if not exists idx_submissions_contest_full_v6 on submissions(contest_id, user_id, problem_id, status, created_at);
 create index if not exists idx_notifications_user_created_desc on notifications(user_id, created_at desc, id desc);
 create index if not exists idx_notifications_user_unread on notifications(user_id, is_read, id desc);
+create index if not exists idx_users_last_seen_at on users(last_seen_at desc);
 create index if not exists idx_direct_messages_recipient_unread on direct_messages(recipient_id, is_read, created_at desc, id desc);
 create index if not exists idx_direct_messages_sender_created on direct_messages(sender_id, created_at desc, id desc);
 create index if not exists idx_direct_messages_reply_to on direct_messages(reply_to_message_id);
@@ -397,6 +515,19 @@ create index if not exists idx_user_message_blocks_blocked on user_message_block
 create index if not exists idx_message_reports_reporter_created on message_reports(reporter_id, created_at desc, id desc);
 create index if not exists idx_message_reports_status_created on message_reports(status, created_at desc, id desc);
 create index if not exists idx_message_hidden_entries_hidden_at on message_hidden_entries(user_id, hidden_at desc, id desc);
+create index if not exists idx_message_typing_states_expires on message_typing_states(expires_at);
+create index if not exists idx_group_message_read_receipts_user on group_message_read_receipts(user_id, read_at desc);
+create unique index if not exists idx_message_reactions_unique_direct on message_reactions(user_id, direct_message_id, emoji) where direct_message_id is not null;
+create unique index if not exists idx_message_reactions_unique_group on message_reactions(user_id, group_message_id, emoji) where group_message_id is not null;
+create index if not exists idx_message_reactions_direct on message_reactions(direct_message_id, emoji);
+create index if not exists idx_message_reactions_group on message_reactions(group_message_id, emoji);
+create unique index if not exists idx_message_favorites_unique_direct on message_favorites(user_id, direct_message_id) where direct_message_id is not null;
+create unique index if not exists idx_message_favorites_unique_group on message_favorites(user_id, group_message_id) where group_message_id is not null;
+create index if not exists idx_message_favorites_user_created on message_favorites(user_id, created_at desc);
+create index if not exists idx_message_group_announcements_group on message_group_announcements(group_id, created_at desc);
+create index if not exists idx_message_group_invites_group on message_group_invites(group_id, created_at desc);
+create index if not exists idx_message_group_moderation_logs_group on message_group_moderation_logs(group_id, created_at desc);
+create index if not exists idx_message_attachment_jobs_status on message_attachment_jobs(status, updated_at desc);
 create index if not exists idx_audit_logs_created_desc on audit_logs(created_at desc, id desc);
 create index if not exists idx_audit_logs_user_created on audit_logs(user_id, created_at desc, id desc);
 create index if not exists idx_audit_logs_resource on audit_logs(resource_type, resource_id, created_at desc);

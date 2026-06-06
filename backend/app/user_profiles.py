@@ -78,7 +78,7 @@ def serialize_user(row) -> dict[str, Any]:
     data = dict(row)
     user = {
         key: data.get(key)
-        for key in ("id", "username", "email", "role", "signature", "created_at")
+        for key in ("id", "username", "email", "role", "signature", "created_at", "last_seen_at")
         if key in data
     }
     if "is_disabled" in data:

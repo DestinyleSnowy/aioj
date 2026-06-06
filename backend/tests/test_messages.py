@@ -4,6 +4,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers.messages import (
+    admin_update_message_report,
     build_group_payload,
     clamp_limit,
     delete_direct_message,
@@ -12,19 +13,26 @@ from app.routers.messages import (
     extract_message_mentions,
     get_group_message_conversation,
     get_message_conversation,
+    hydrate_message_rows,
     list_message_conversations,
+    mark_group_messages_read,
+    normalize_dm_policy,
     normalize_group_member_ids,
+    normalize_group_member_role,
     normalize_group_name,
     normalize_group_nickname,
     normalize_message_body,
     normalize_message_cursor,
     normalize_edited_message_body,
     normalize_optional_message_body,
+    normalize_optional_time,
     recall_direct_message,
     report_message,
+    require_direct_message_allowed,
     require_message_mutation_window,
     require_group_owner,
     safe_attachment_filename,
+    scan_message_attachment,
     trim_message_page,
     update_message_conversation_preferences,
     validate_file_upload,
@@ -154,13 +162,26 @@ def test_normalize_edited_message_body_allows_empty_attachment_caption():
 
 
 def test_validate_file_upload_accepts_images_and_regular_files():
-    assert validate_file_upload("demo.jpeg", "image/jpeg", b"data") == ("image/jpeg", ".jpg")
+    assert validate_file_upload("demo.jpeg", "image/jpeg", b"\xff\xd8\xffdemo") == ("image/jpeg", ".jpg")
     assert validate_file_upload("report.pdf", "application/pdf", b"data") == ("application/pdf", ".pdf")
     assert validate_file_upload("archive", "", b"data") == ("application/octet-stream", ".bin")
 
     with pytest.raises(HTTPException) as empty:
         validate_file_upload("demo.png", "image/png", b"")
     assert empty.value.status_code == 400
+
+
+def test_validate_file_upload_rejects_mismatched_images_and_dangerous_files():
+    with pytest.raises(HTTPException) as mismatched:
+        validate_file_upload("demo.png", "image/png", b"not a png")
+    assert mismatched.value.status_code == 400
+
+    with pytest.raises(HTTPException) as dangerous:
+        validate_file_upload("run.ps1", "text/plain", b"Write-Host bad")
+    assert dangerous.value.status_code == 400
+
+    assert scan_message_attachment(b"MZ executable", "application/octet-stream") == "SUSPICIOUS"
+    assert scan_message_attachment(b"plain text", "text/plain") == "CLEAN"
 
 
 def test_safe_attachment_filename_removes_header_unsafe_characters():
@@ -235,6 +256,38 @@ def test_require_group_owner_rejects_regular_member():
         require_group_owner({"member_role": "MEMBER"})
 
     assert forbidden.value.status_code == 403
+
+
+def test_new_message_normalizers_accept_expected_values():
+    assert normalize_dm_policy(" nobody ") == "NOBODY"
+    assert normalize_dm_policy(None) == "EVERYONE"
+    assert normalize_group_member_role(" admin ") == "ADMIN"
+    assert normalize_optional_time("09:30").hour == 9
+    assert normalize_optional_time("") is None
+
+    with pytest.raises(HTTPException):
+        normalize_dm_policy("friends")
+    with pytest.raises(HTTPException):
+        normalize_group_member_role("owner")
+    with pytest.raises(HTTPException):
+        normalize_optional_time("25:00")
+
+
+def test_require_direct_message_allowed_respects_recipient_privacy(monkeypatch):
+    monkeypatch.setattr(
+        "app.routers.messages.get_user_block_state",
+        lambda *_args, **_kwargs: {"is_blocked_by_me": False, "has_blocked_me": False},
+    )
+    monkeypatch.setattr(
+        "app.routers.messages.get_user_message_preferences",
+        lambda *_args, **_kwargs: {"dm_policy": "NOBODY"},
+    )
+
+    with pytest.raises(HTTPException) as forbidden:
+        require_direct_message_allowed(object(), current_user_id=1, other_user_id=2)
+
+    assert forbidden.value.status_code == 403
+    assert forbidden.value.detail == "This user is not accepting direct messages"
 
 
 def test_update_message_conversation_preferences_rejects_self_direct_conversation(monkeypatch):
@@ -410,13 +463,13 @@ def test_list_message_conversations_aligns_direct_and_group_union_columns(monkey
 
     result = list_message_conversations(user={"id": 3})
 
-    assert result == {"items": []}
+    assert result == {"items": [], "has_more": False, "next_offset": 0}
     assert len(conn.calls) == 1
     statement, params = conn.calls[0]
     assert "null::text as last_sender_group_nickname" in statement
     assert "null::text as peer_avatar_object_key" in statement
     assert "null::timestamptz as peer_avatar_updated_at" in statement
-    assert params == {"user_id": 3, "limit": 50}
+    assert params == {"user_id": 3, "limit": 51, "offset": 0}
 
 
 def test_get_message_conversation_reports_first_unread_message_id(monkeypatch):
@@ -473,6 +526,10 @@ def test_get_message_conversation_reports_first_unread_message_id(monkeypatch):
         lambda *_args, **_kwargs: {"is_blocked_by_me": False, "has_blocked_me": False},
     )
     monkeypatch.setattr(
+        "app.routers.messages.get_user_message_preferences",
+        lambda *_args, **_kwargs: {"dm_policy": "EVERYONE"},
+    )
+    monkeypatch.setattr(
         "app.routers.messages.get_conversation_preferences",
         lambda *_args, **_kwargs: {},
     )
@@ -480,7 +537,7 @@ def test_get_message_conversation_reports_first_unread_message_id(monkeypatch):
     result = get_message_conversation(8, user={"id": 3})
 
     assert result["first_unread_message_id"] == 11
-    assert len(conn.calls) == 3
+    assert len(conn.calls) >= 3
     assert "update direct_messages" in conn.calls[2][0].lower()
 
 
@@ -519,3 +576,72 @@ def test_get_group_message_conversation_before_cursor_expands_hidden_filter_sql(
     anchor_statement = conn.calls[1][0]
     assert "{message_hidden_filter_sql" not in anchor_statement
     assert "message_hidden_entries" in anchor_statement
+
+
+def test_hydrate_message_rows_adds_reactions_favorites_and_group_reads():
+    conn = _SequenceConn(
+        [
+            [{"message_id": 1, "emoji": "👍", "count": 2, "reacted_by_me": True}],
+            [{"message_id": 2, "emoji": "✅", "count": 1, "reacted_by_me": False}],
+            [{"message_id": 1}],
+            [],
+            [{"message_id": 2, "read_count": 3, "last_read_at": None, "read_by_me": True}],
+        ]
+    )
+
+    rows = hydrate_message_rows(
+        conn,
+        [
+            {"id": 1, "message_type": "direct"},
+            {"id": 2, "message_type": "group", "group_id": 9},
+        ],
+        user_id=7,
+    )
+
+    assert rows[0]["reactions"] == [{"emoji": "👍", "count": 2, "reacted_by_me": True}]
+    assert rows[0]["is_favorited"] is True
+    assert rows[1]["reactions"] == [{"emoji": "✅", "count": 1, "reacted_by_me": False}]
+    assert rows[1]["read_count"] == 3
+    assert rows[1]["read_by_me"] is True
+
+
+def test_mark_group_messages_read_writes_per_message_receipts():
+    now = datetime.now(timezone.utc)
+    conn = _SequenceConn([21])
+
+    mark_group_messages_read(conn, group_id=5, user_id=3, joined_at=now)
+
+    assert len(conn.calls) == 3
+    assert "group_message_read_receipts" in conn.calls[2][0]
+    assert conn.calls[2][1] == {
+        "group_id": 5,
+        "user_id": 3,
+        "joined_at": now,
+        "last_message_id": 21,
+    }
+
+
+def test_admin_update_message_report_records_resolution(monkeypatch):
+    conn = _SequenceConn(
+        [
+            {"id": 4, "message_sender_id": 8},
+            {
+                "id": 4,
+                "status": "REVIEWED",
+                "reviewed_by_user_id": 99,
+                "resolution_note": "handled",
+                "action_taken": "NONE",
+            },
+        ]
+    )
+    audit_calls = []
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr("app.routers.messages.audit_log", lambda *args, **kwargs: audit_calls.append((args, kwargs)))
+
+    result = admin_update_message_report(4, {"status": "reviewed", "resolution_note": " handled "}, user={"id": 99})
+
+    assert result["ok"] is True
+    assert result["report"]["status"] == "REVIEWED"
+    assert conn.calls[1][1]["resolution_note"] == "handled"
+    assert audit_calls

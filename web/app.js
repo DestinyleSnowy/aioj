@@ -34,11 +34,22 @@ const state = {
   notificationUnreadCount: 0,
   messageUnreadCount: 0,
   messageRefreshTimer: null,
+  messageEventAbortController: null,
+  messageEventSignature: '',
+  messageEventLastRefreshAt: 0,
   messageRefreshInFlight: false,
   messageActivePeerId: 0,
   messageActiveConversationKey: '',
   messageConversationSearch: '',
   messageShowArchived: false,
+  messageConversations: [],
+  messageConversationHasMore: false,
+  messageConversationNextOffset: 0,
+  messageTypingUsers: [],
+  messageTypingTimer: null,
+  messageTypingLastSentAt: 0,
+  messagePreferences: null,
+  messageSearchResults: [],
   messageAttachmentCache: new Map(),
   messageComposerDrafts: new Map(),
   messageLayoutCleanup: null,
@@ -64,8 +75,10 @@ let problemEditorState = null;
 let problemEditorTempId = 0;
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
+const MESSAGE_EVENT_REFRESH_DEBOUNCE_MS = 900;
 const MESSAGE_MUTATION_WINDOW_MS = 2 * 60 * 1000;
 const MESSAGE_THREAD_PAGE_SIZE = 20;
+const MESSAGE_CONVERSATION_PAGE_SIZE = 80;
 const MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX = 32;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
 const MESSAGE_GIF_FAVORITE_MAX_BYTES = 2 * 1024 * 1024;
@@ -413,6 +426,7 @@ function buildTransientMessage({ conversationKey, body = '', files = [], replyTa
     local_id: localId,
     local_only: true,
     send_state: 'pending',
+    upload_progress: firstFile ? 0 : null,
     conversation_key: target.key,
     message_type: target.type,
     group_id: target.type === 'group' ? Number(target.id) : null,
@@ -1081,15 +1095,21 @@ function clearPageState() {
 }
 
 function stopMessageAutoRefresh(options = {}) {
+  stopMessageEventStream();
   if (options.clearTimer && state.messageRefreshTimer) {
     clearInterval(state.messageRefreshTimer);
     state.messageRefreshTimer = null;
+  }
+  if (state.messageTypingTimer) {
+    clearTimeout(state.messageTypingTimer);
+    state.messageTypingTimer = null;
   }
   state.messageRefreshInFlight = false;
   state.messageActivePeerId = 0;
   state.messageActiveConversationKey = '';
   state.messageActiveGroup = null;
   state.messageReplyTarget = null;
+  state.messageTypingUsers = [];
 }
 
 function updateNav() {
@@ -3449,6 +3469,72 @@ function bindMessageDropZone(element, onFiles) {
   });
 }
 
+function updateMessageUploadProgressDom(localId, progress) {
+  const escapedId = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(String(localId || ''))
+    : String(localId || '').replace(/["\\]/g, '\\$&');
+  const bar = document.querySelector(`[data-message-upload-progress="${escapedId}"] span`);
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(progress || 0)))}%`;
+}
+
+function uploadFormDataWithProgress(url, formData, { onProgress } = {}) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    Object.entries(authHeaders()).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || typeof onProgress !== 'function') return;
+      onProgress(Math.round((event.loaded / event.total) * 100));
+    };
+    xhr.onload = () => {
+      const contentType = xhr.getResponseHeader('content-type') || '';
+      let payload = xhr.responseText || '';
+      if (contentType.includes('application/json')) {
+        try {
+          payload = JSON.parse(xhr.responseText || '{}');
+        } catch {
+          payload = {};
+        }
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+        return;
+      }
+      reject(new Error(typeof payload === 'object' ? (payload.detail || payload.message || `${xhr.status} ${xhr.statusText}`) : payload || `${xhr.status} ${xhr.statusText}`));
+    };
+    xhr.onerror = () => reject(new Error('网络连接失败'));
+    xhr.onabort = () => reject(new Error('上传已取消'));
+    xhr.send(formData);
+  });
+}
+
+async function compressMessageImageFile(file) {
+  const type = String(file?.type || '').toLowerCase();
+  if (typeof createImageBitmap !== 'function') return file;
+  if (!file || !type.startsWith('image/') || type === 'image/gif' || Number(file.size || 0) < 900 * 1024) return file;
+  try {
+    const bitmap = await createImageBitmap(file);
+    const maxSide = 1800;
+    const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+    if (scale >= 1 && file.size < 1.6 * 1024 * 1024) {
+      bitmap.close?.();
+      return file;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, type === 'image/png' ? 'image/png' : 'image/jpeg', 0.86));
+    if (!blob || blob.size >= file.size) return file;
+    const suffix = type === 'image/png' ? '.png' : '.jpg';
+    const baseName = String(file.name || 'image').replace(/\.[^.]+$/, '');
+    return new File([blob], `${baseName}${suffix}`, { type: blob.type || (type === 'image/png' ? 'image/png' : 'image/jpeg') });
+  } catch {
+    return file;
+  }
+}
+
 async function uploadMessageFiles({
   conversationType = 'direct',
   recipientId = null,
@@ -3457,22 +3543,27 @@ async function uploadMessageFiles({
   body = '',
   replyToMessageId = null,
   files = [],
+  conversationKey = '',
+  localId = '',
 }) {
-  const selectedFiles = normalizeMessageFiles(files);
+  const selectedFiles = await Promise.all(normalizeMessageFiles(files).map(compressMessageImageFile));
   if (!selectedFiles.length) throw new Error('请选择要发送的文件。');
 
   let lastResponse = null;
   for (const [index, file] of selectedFiles.entries()) {
     const fd = new FormData();
+    const reportProgress = (rawProgress) => {
+      if (!localId) return;
+      const segment = 100 / selectedFiles.length;
+      const progress = Math.round((index * segment) + (Number(rawProgress || 0) * segment / 100));
+      updateTransientMessage(conversationKey, localId, { upload_progress: progress });
+      updateMessageUploadProgressDom(localId, progress);
+    };
     if (conversationType === 'group') {
       fd.append('body_md', index === 0 ? body : '');
       if (index === 0 && replyToMessageId) fd.append('reply_to_message_id', String(replyToMessageId));
       fd.append('file', file);
-      lastResponse = await api(`/api/messages/groups/${Number(groupId)}/files`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
-      });
+      lastResponse = await uploadFormDataWithProgress(`/api/messages/groups/${Number(groupId)}/files`, fd, { onProgress: reportProgress });
     } else {
       if (recipientId) {
         fd.append('recipient_id', String(recipientId));
@@ -3482,12 +3573,9 @@ async function uploadMessageFiles({
       fd.append('body_md', index === 0 ? body : '');
       if (index === 0 && replyToMessageId) fd.append('reply_to_message_id', String(replyToMessageId));
       fd.append('file', file);
-      lastResponse = await api('/api/messages/files', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
-      });
+      lastResponse = await uploadFormDataWithProgress('/api/messages/files', fd, { onProgress: reportProgress });
     }
+    reportProgress(100);
   }
   return lastResponse;
 }
@@ -3503,6 +3591,14 @@ function messagePreview(text, limit = 96, attachmentContentType = '') {
   if (value && attachmentLabel) return `${attachmentLabel} ${value.length <= limit ? value : `${value.slice(0, limit - 1)}…`}`;
   if (value.length <= limit) return value || '空消息';
   return `${value.slice(0, limit - 1)}…`;
+}
+
+function messagePresenceLabel(value = {}) {
+  const presence = value.peer_presence || value;
+  if (presence?.is_online || value.is_online) return '在线';
+  const raw = presence?.last_seen_at || value.last_seen_at || '';
+  if (!raw) return '离线';
+  return `最后在线 ${formatDate(raw)}`;
 }
 
 function messagePeerInitial(name) {
@@ -3540,6 +3636,25 @@ function parseMessageConversationKey(value, fallbackType = 'direct') {
     return { type: fallbackType, id, key: messageConversationKey(fallbackType, id) };
   }
   return { type: fallbackType, id: 0, key: '' };
+}
+
+function messageConversationItemKey(item) {
+  if (!item) return '';
+  return item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
+}
+
+function mergeMessageConversations(primary = [], secondary = []) {
+  const merged = [];
+  const seen = new Set();
+  const push = (item) => {
+    const key = messageConversationItemKey(item);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    merged.push(item);
+  };
+  (primary || []).forEach(push);
+  (secondary || []).forEach(push);
+  return merged;
 }
 
 function messageConversationFromState() {
@@ -4015,7 +4130,7 @@ function renderMessageConversationButton(c, selectedKey = '') {
   const title = conversationType === 'group' ? c.group_name : c.peer_username;
   const subtitle = conversationType === 'group'
     ? `${Number(c.group_member_count || 0)} 位成员`
-    : (c.peer_role || 'USER');
+    : [c.peer_role || 'USER', messagePresenceLabel(c)].filter(Boolean).join(' · ');
   const stateBits = [c.is_pinned ? 'PIN' : '', c.is_muted ? 'MUTE' : '', c.is_archived ? 'ARCH' : ''].filter(Boolean).join(' · ');
   const previewPrefix = c.last_deleted_at
     ? ''
@@ -4060,19 +4175,168 @@ function updateMessageConversationSidebar(conversations = [], selectedKey = curr
   const key = parseMessageConversationKey(selectedKey).key;
   container.dataset.messageSelectedConversationKey = key;
   container.innerHTML = renderMessageConversationItems(conversations, key);
+  const loadMoreBtn = $('messageLoadMoreConversationsBtn');
+  if (loadMoreBtn) loadMoreBtn.hidden = !state.messageConversationHasMore;
+}
+
+async function loadMoreMessageConversations() {
+  const btn = $('messageLoadMoreConversationsBtn');
+  const container = $('messageConversationItems');
+  if (!container || !state.messageConversationHasMore) return;
+  const previousText = btn?.textContent || '';
+  try {
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '加载中...';
+    }
+    const data = await ChatApi.listConversations({
+      limit: MESSAGE_CONVERSATION_PAGE_SIZE,
+      offset: Number(state.messageConversationNextOffset || 0),
+      query: state.messageConversationSearch,
+      includeArchived: state.messageShowArchived,
+    });
+    const items = data.items || [];
+    const selectedKey = container.dataset.messageSelectedConversationKey || currentMessageConversationKey();
+    state.messageConversations = mergeMessageConversations(state.messageConversations, items);
+    updateMessageConversationSidebar(state.messageConversations, selectedKey);
+    state.messageConversationHasMore = !!data.has_more;
+    state.messageConversationNextOffset = Number(data.next_offset || (Number(state.messageConversationNextOffset || 0) + items.length));
+    if (btn) btn.hidden = !state.messageConversationHasMore;
+  } catch (err) {
+    toast(`加载会话失败: ${err.message}`, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = previousText || '加载更多会话';
+    }
+  }
+}
+
+function stopMessageEventStream() {
+  if (state.messageEventAbortController) {
+    state.messageEventAbortController.abort();
+    state.messageEventAbortController = null;
+  }
+}
+
+function parseSseEventBlock(block = '') {
+  const event = { type: 'message', data: '' };
+  String(block || '').split(/\r?\n/).forEach((line) => {
+    if (line.startsWith('event:')) {
+      event.type = line.slice(6).trim() || 'message';
+      return;
+    }
+    if (line.startsWith('data:')) {
+      event.data += `${line.slice(5).trim()}\n`;
+    }
+  });
+  event.data = event.data.trim();
+  return event;
+}
+
+function updateMessageTypingIndicator(users = []) {
+  const indicator = $('messageTypingIndicator');
+  if (!indicator) return;
+  const names = (users || []).map((item) => item.username || item.group_nickname || '').filter(Boolean);
+  if (!names.length) {
+    indicator.hidden = true;
+    indicator.textContent = '';
+    return;
+  }
+  indicator.hidden = false;
+  indicator.textContent = `${names.slice(0, 3).join('、')} 正在输入...`;
+}
+
+function handleMessageRealtimeState(payload = {}) {
+  const unread = payload.unread || {};
+  if (Number.isFinite(Number(unread.unread_count))) {
+    state.messageUnreadCount = Number(unread.unread_count || 0);
+    updateNav();
+  }
+  state.messageTypingUsers = payload.activity?.typing || [];
+  updateMessageTypingIndicator(state.messageTypingUsers);
+
+  const signature = JSON.stringify(payload.activity || {});
+  const now = Date.now();
+  const changed = signature && signature !== state.messageEventSignature;
+  state.messageEventSignature = signature || state.messageEventSignature;
+  if (!changed || now - Number(state.messageEventLastRefreshAt || 0) < MESSAGE_EVENT_REFRESH_DEBOUNCE_MS) return;
+  state.messageEventLastRefreshAt = now;
+
+  if (location.pathname.startsWith('/messages')) {
+    void pollMessageUnreadState();
+  }
+}
+
+async function startMessageEventStream() {
+  if (!state.user || state.messageEventAbortController || !location.pathname.startsWith('/messages')) return;
+  const parsed = messageConversationFromPath(location.pathname, { fallbackToState: true });
+  const controller = new AbortController();
+  state.messageEventAbortController = controller;
+
+  try {
+    const response = await fetch(ChatApi.messageEvents({
+      conversationType: parsed.id ? parsed.type : '',
+      conversationId: parsed.id || 0,
+    }), {
+      headers: authHeaders(),
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.body) throw new Error(`${response.status} ${response.statusText}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (!controller.signal.aborted) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() || '';
+      parts.forEach((part) => {
+        const event = parseSseEventBlock(part);
+        if (event.type !== 'message-state' || !event.data) return;
+        try {
+          handleMessageRealtimeState(JSON.parse(event.data));
+        } catch {
+          // Ignore malformed transient events; the polling fallback will catch up.
+        }
+      });
+    }
+  } catch {
+    // The interval fallback below remains active for browsers or proxies that block streaming.
+  } finally {
+    if (state.messageEventAbortController === controller) {
+      state.messageEventAbortController = null;
+    }
+  }
 }
 
 async function pollMessageUnreadState() {
   const [countData, conversationData] = await Promise.all([
     api('/api/messages/unread-count', { headers: authHeaders() }),
-    api(messageConversationListApiPath(100), { headers: authHeaders() }),
+    ChatApi.listConversations({
+      limit: MESSAGE_CONVERSATION_PAGE_SIZE,
+      query: state.messageConversationSearch,
+      includeArchived: state.messageShowArchived,
+    }),
   ]);
 
   state.messageUnreadCount = Number(countData.unread_count || 0);
   updateNav();
 
   const conversationKey = currentMessageConversationKey();
-  const conversations = conversationData.items || [];
+  const incomingConversations = conversationData.items || [];
+  const hadLoadedAdditionalConversations = state.messageConversations.length > incomingConversations.length;
+  const hadReachedConversationEnd = !state.messageConversationHasMore;
+  const conversations = mergeMessageConversations(incomingConversations, state.messageConversations);
+  state.messageConversations = conversations;
+  state.messageConversationHasMore = hadLoadedAdditionalConversations && hadReachedConversationEnd
+    ? false
+    : !!conversationData.has_more;
+  state.messageConversationNextOffset = hadLoadedAdditionalConversations
+    ? Math.max(Number(state.messageConversationNextOffset || 0), conversations.length, Number(conversationData.next_offset || 0))
+    : Number(conversationData.next_offset || conversations.length || 0);
   updateMessageConversationSidebar(conversations, conversationKey);
   if (!conversationKey) return;
   const active = conversations.find(c => (c.conversation_key || messageConversationKey(c.conversation_type, c.group_id || c.peer_id)) === conversationKey);
@@ -4099,6 +4363,11 @@ async function pollMessageUnreadState() {
 }
 
 function ensureMessageAutoRefresh() {
+  if (location.pathname.startsWith('/messages')) {
+    void startMessageEventStream();
+  } else {
+    stopMessageEventStream();
+  }
   if (state.messageRefreshTimer) return;
   state.messageRefreshTimer = setInterval(async () => {
     if (!state.user) {
@@ -4148,8 +4417,15 @@ async function renderMessages(target = null, options = {}) {
   }
 
   try {
-    const conversationData = await api(messageConversationListApiPath(100), { headers: authHeaders() });
+    const conversationData = await ChatApi.listConversations({
+      limit: MESSAGE_CONVERSATION_PAGE_SIZE,
+      query: state.messageConversationSearch,
+      includeArchived: state.messageShowArchived,
+    });
     const conversations = conversationData.items || [];
+    state.messageConversations = conversations;
+    state.messageConversationHasMore = !!conversationData.has_more;
+    state.messageConversationNextOffset = Number(conversationData.next_offset || conversations.length || 0);
     const requested = target ? parseMessageConversationKey(target) : messageConversationFromPath();
     const hasExplicitSelection = !!target || /^\/messages\/(?:groups\/\d+|\d+)$/.test(location.pathname || '');
     const selectedKey = requested.key || (hasExplicitSelection ? (
@@ -4157,6 +4433,10 @@ async function renderMessages(target = null, options = {}) {
       messageConversationKey(conversations[0]?.conversation_type, conversations[0]?.group_id || conversations[0]?.peer_id)
     ) : '') || '';
     const selected = parseMessageConversationKey(selectedKey);
+    if (selected.key !== state.messageActiveConversationKey) {
+      stopMessageEventStream();
+      state.messageEventSignature = '';
+    }
     let thread = null;
 
     if (selected.id) {
@@ -4184,6 +4464,10 @@ async function renderMessages(target = null, options = {}) {
           <div class="text-muted" style="font-size: 13px;">支持站内私聊和群聊，打开会话后会标记已读；置顶、归档、静音与拉黑会即时生效。</div>
         </div>
         <div class="row gap-sm" style="flex-wrap: wrap;">
+          <button class="btn btn-secondary" onclick="showMessagePreferencesModal()">聊天设置</button>
+          <button class="btn btn-secondary" onclick="showMessageFavoritesModal()">收藏</button>
+          <button class="btn btn-secondary" onclick="showJoinGroupInviteModal()">邀请码</button>
+          ${state.user?.role === 'ADMIN' ? '<button class="btn btn-secondary" onclick="showAdminMessageReportsModal()">举报队列</button>' : ''}
           <button class="btn btn-secondary" onclick="showMessageBlocksModal()">拉黑名单</button>
           <button class="btn btn-secondary" onclick="showCreateMessageGroupModal()">新建群聊</button>
           <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
@@ -4207,6 +4491,13 @@ async function renderMessages(target = null, options = {}) {
           <div id="messageConversationItems" data-message-selected-conversation-key="${esc(selected.key)}">
             ${renderMessageConversationItems(conversations, selected.key)}
           </div>
+          <button
+            class="btn btn-secondary btn-sm message-load-more-conversations"
+            id="messageLoadMoreConversationsBtn"
+            type="button"
+            onclick="loadMoreMessageConversations()"
+            ${state.messageConversationHasMore ? '' : 'hidden'}
+          >加载更多会话</button>
         </aside>
 
         <div
@@ -4238,6 +4529,7 @@ async function renderMessages(target = null, options = {}) {
     if (selected.id && activeConversation) {
       initMessageThreadPagination(selected.key, !!thread?.has_more);
       initMessageComposerInteractions(selected.key);
+      updateMessageTypingIndicator(state.messageTypingUsers);
       restoreMessageComposerState(selected.key, composerSnapshot, {
         preserve: options.preserveComposer !== false,
         focus: !!options.focusComposer || (
@@ -4427,6 +4719,210 @@ async function unblockMessageUser(userId) {
   }
 }
 
+async function showMessagePreferencesModal() {
+  openModal({
+    title: '聊天设置',
+    body: '<div class="text-muted">正在加载...</div>',
+    footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+  });
+  try {
+    const data = await ChatApi.getPreferences();
+    const prefs = data.preferences || {};
+    state.messagePreferences = prefs;
+    $('modalBody').innerHTML = `
+      <div class="form-grid">
+        <div class="form-group">
+          <label for="messageDmPolicy">私信接收</label>
+          <select id="messageDmPolicy">
+            <option value="EVERYONE" ${prefs.dm_policy === 'NOBODY' ? '' : 'selected'}>允许所有人</option>
+            <option value="NOBODY" ${prefs.dm_policy === 'NOBODY' ? 'selected' : ''}>不接收新私信</option>
+          </select>
+        </div>
+        <label class="form-check">
+          <input id="messageAllowGroupInvites" type="checkbox" ${prefs.allow_group_invites === false ? '' : 'checked'} />
+          <span>允许加入群邀请</span>
+        </label>
+        <div class="form-group">
+          <label for="messageDndStart">免打扰开始</label>
+          <input id="messageDndStart" type="time" value="${esc(String(prefs.dnd_start_time || '').slice(0, 5))}" />
+        </div>
+        <div class="form-group">
+          <label for="messageDndEnd">免打扰结束</label>
+          <input id="messageDndEnd" type="time" value="${esc(String(prefs.dnd_end_time || '').slice(0, 5))}" />
+        </div>
+      </div>
+      <div id="messagePreferencesError" class="notice error" style="display:none"></div>
+    `;
+    $('modalFooter').innerHTML = `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="saveMessagePreferences()">保存</button>
+    `;
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+async function saveMessagePreferences() {
+  const errEl = $('messagePreferencesError');
+  try {
+    const data = await ChatApi.updatePreferences({
+      dm_policy: $('messageDmPolicy')?.value || 'EVERYONE',
+      allow_group_invites: !!$('messageAllowGroupInvites')?.checked,
+      dnd_start_time: $('messageDndStart')?.value || null,
+      dnd_end_time: $('messageDndEnd')?.value || null,
+    });
+    state.messagePreferences = data.preferences || null;
+    closeModal();
+    toast('聊天设置已保存', 'success');
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+  }
+}
+
+function renderMessageFavorites(items = []) {
+  if (!items.length) return `<div class="message-empty-panel"><div class="text-muted">还没有收藏消息</div></div>`;
+  return `
+    <div class="message-search-results">
+      ${items.map((item) => `
+        <button class="message-search-result" type="button" onclick="openMessageFavorite(${jsArg(item.conversation_type)}, ${Number(item.message_id)}, ${Number(item.conversation_id || 0)})">
+          <span class="message-search-result-main">
+            <strong>${esc(item.conversation_type === 'group' ? '群消息' : '私信')}</strong>
+            <span>${esc(messagePreview(item.body_md, 160, item.attachment_filename ? 'application/octet-stream' : ''))}</span>
+          </span>
+          <span class="text-muted">${esc(formatDate(item.favorited_at))}</span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+async function showMessageFavoritesModal() {
+  openModal({
+    title: '收藏消息',
+    body: '<div class="text-muted">正在加载...</div>',
+    footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+    wide: true,
+  });
+  try {
+    const data = await ChatApi.listFavorites();
+    $('modalBody').innerHTML = renderMessageFavorites(data.items || []);
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+function openMessageFavorite(conversationType, messageId, conversationId = 0) {
+  closeModal();
+  if (scrollToMessageId(messageId)) return;
+  const targetKey = messageConversationKey(conversationType, conversationId);
+  if (targetKey) {
+    openMessageConversation(targetKey);
+    toast('已打开收藏所在会话，可加载历史后定位。', 'info');
+    return;
+  }
+  toast('收藏消息不在当前已加载范围内。', 'info');
+}
+
+function showJoinGroupInviteModal() {
+  openModal({
+    title: '加入群聊',
+    body: `
+      <div class="form-group">
+        <label for="groupInviteCodeInput">邀请码</label>
+        <input id="groupInviteCodeInput" type="text" autocomplete="off" placeholder="输入群聊邀请码" />
+      </div>
+      <div id="groupInviteJoinError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" onclick="joinGroupInvite()">加入</button>
+    `,
+  });
+  setTimeout(() => $('groupInviteCodeInput')?.focus(), 0);
+}
+
+async function joinGroupInvite() {
+  const code = $('groupInviteCodeInput')?.value.trim() || '';
+  const errEl = $('groupInviteJoinError');
+  if (!code) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = '请输入邀请码。';
+    }
+    return;
+  }
+  try {
+    const data = await ChatApi.joinGroupInvite(code);
+    closeModal();
+    toast('已加入群聊', 'success');
+    openMessageConversation(messageConversationKey('group', data.group?.id || data.group?.group_id));
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+  }
+}
+
+async function showAdminMessageReportsModal(status = 'OPEN') {
+  openModal({
+    title: '消息举报队列',
+    body: '<div class="text-muted">正在加载...</div>',
+    footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+    wide: true,
+  });
+  try {
+    const data = await ChatApi.listReports(status);
+    const items = data.items || [];
+    $('modalBody').innerHTML = `
+      <div class="row gap-sm mb-md" style="flex-wrap: wrap;">
+        ${['OPEN', 'REVIEWED', 'DISMISSED', 'ALL'].map((item) => `
+          <button class="btn btn-secondary btn-sm" type="button" onclick="showAdminMessageReportsModal(${jsArg(item)})">${item}</button>
+        `).join('')}
+      </div>
+      ${items.length ? `
+        <div class="message-report-list">
+          ${items.map((item) => `
+            <div class="message-report-item">
+              <div>
+                <strong>${esc(item.reason || '未填写原因')}</strong>
+                <div class="text-muted">${esc(item.conversation_type)} · 举报人 ${esc(item.reporter_username || '')} · 发送者 ${esc(item.message_sender_username || '')}</div>
+                <div>${esc(messagePreview(item.message_body_md, 220))}</div>
+                ${item.details ? `<div class="text-muted">${esc(item.details)}</div>` : ''}
+              </div>
+              <div class="message-report-actions">
+                <button class="btn btn-secondary btn-sm" onclick="resolveMessageReport(${Number(item.id)}, 'REVIEWED', 'NONE')">标记已审</button>
+                <button class="btn btn-secondary btn-sm" onclick="resolveMessageReport(${Number(item.id)}, 'REVIEWED', 'WARN_SENDER')">提醒发送者</button>
+                <button class="btn btn-secondary btn-sm text-danger" onclick="resolveMessageReport(${Number(item.id)}, 'DISMISSED', 'NONE')">驳回</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : '<div class="message-empty-panel"><div class="text-muted">当前没有举报</div></div>'}
+    `;
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+async function resolveMessageReport(reportId, status, actionTaken) {
+  const note = actionTaken === 'WARN_SENDER' ? '请遵守平台聊天规则。' : '';
+  try {
+    await ChatApi.updateReport(reportId, {
+      status,
+      action_taken: actionTaken,
+      resolution_note: note,
+    });
+    toast('举报已处理', 'success');
+    await showAdminMessageReportsModal();
+  } catch (err) {
+    toast(`处理举报失败: ${err.message}`, 'error');
+  }
+}
+
 function openMessageConversation(target) {
   const parsed = parseMessageConversationKey(target);
   if (!parsed.id) return;
@@ -4448,6 +4944,103 @@ async function refreshMessageThreadNow(target = null) {
   if (!key) return;
   await refreshMessages(key);
   updateMessageThreadUnreadBadge(0);
+}
+
+function scrollToMessageId(messageId) {
+  const row = document.querySelector(`[data-server-message-id="${String(messageId || '')}"]`);
+  if (!row) return false;
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  row.classList.add('message-row-highlight');
+  setTimeout(() => row.classList.remove('message-row-highlight'), 1800);
+  return true;
+}
+
+function renderMessageSearchResults(items = []) {
+  if (!items.length) return `<div class="message-empty-panel"><div class="text-muted">没有匹配消息</div></div>`;
+  return `
+    <div class="message-search-results">
+      ${items.map((item) => {
+        const type = isGroupConversationMessage(item) ? 'group' : 'direct';
+        const sender = messageSenderDisplayLabel(item);
+        const preview = messagePreview(item.body_md, 160, item.attachment_content_type || (item.has_attachment ? 'application/octet-stream' : ''));
+        return `
+          <button class="message-search-result" type="button" onclick="openMessageSearchResult(${Number(item.id)}, ${jsArg(type)})">
+            <span class="message-search-result-main">
+              <strong>${esc(sender)}</strong>
+              <span>${esc(preview)}</span>
+            </span>
+            <span class="text-muted">${esc(formatDate(item.created_at))}</span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function showMessageSearchModal(conversationKey = currentMessageConversationKey()) {
+  const target = parseMessageConversationKey(conversationKey);
+  if (!target.key) return;
+  openModal({
+    title: '搜索消息',
+    body: `
+      <div class="form-group">
+        <label for="messageSearchInput">关键词</label>
+        <input id="messageSearchInput" type="search" autocomplete="off" placeholder="搜索正文或附件名" onkeydown="handleMessageSearchKeydown(event, ${jsArg(target.key)})" />
+      </div>
+      <div id="messageSearchError" class="notice error" style="display:none"></div>
+      <div id="messageSearchResults" class="message-search-results-wrap"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+      <button class="btn btn-primary" onclick="submitMessageSearch(${jsArg(target.key)})">搜索</button>
+    `,
+    wide: true,
+  });
+  setTimeout(() => $('messageSearchInput')?.focus(), 0);
+}
+
+function handleMessageSearchKeydown(event, conversationKey) {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  submitMessageSearch(conversationKey);
+}
+
+async function submitMessageSearch(conversationKey) {
+  const target = parseMessageConversationKey(conversationKey);
+  const input = $('messageSearchInput');
+  const errEl = $('messageSearchError');
+  const resultsEl = $('messageSearchResults');
+  const query = input?.value.trim() || '';
+  if (!query) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = '请输入关键词。';
+    }
+    return;
+  }
+  try {
+    if (errEl) errEl.style.display = 'none';
+    if (resultsEl) resultsEl.innerHTML = '<div class="text-muted">正在搜索...</div>';
+    const data = await ChatApi.searchMessages({
+      query,
+      conversationType: target.type,
+      conversationId: target.id,
+    });
+    state.messageSearchResults = data.items || [];
+    if (resultsEl) resultsEl.innerHTML = renderMessageSearchResults(state.messageSearchResults);
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+  }
+}
+
+function openMessageSearchResult(messageId) {
+  closeModal();
+  if (!scrollToMessageId(messageId)) {
+    toast('该消息不在当前已加载范围内，可向上加载历史后再次定位。', 'info');
+  }
 }
 
 function messageAttachmentQuoteLabel(message) {
@@ -4671,6 +5264,7 @@ function renderMessageActionMenu(message) {
 
   return `
     ${!recalled ? `<button class="message-menu-item" type="button" onclick="closeMessageActionMenu(); replyToMessage(${Number(message.id)}, ${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)}, false)">回复</button>` : ''}
+    ${!recalled ? `<button class="message-menu-item" type="button" onclick="toggleMessageFavorite(${Number(message.id)}, ${jsArg(conversationType)}, ${message.is_favorited ? 'false' : 'true'})">${message.is_favorited ? '取消收藏' : '收藏消息'}</button>` : ''}
     ${canFavoriteGif ? `<button class="message-menu-item" type="button" onclick="addMessageGifFavoriteFromMessage(${jsArg(messageActionTargetId(message))})">添加到表情</button>` : ''}
     ${copyText ? `<button class="message-menu-item" type="button" onclick="copyMessageText(${Number(message.id)})">复制</button>` : ''}
     ${canEditMessage(message) ? `<button class="message-menu-item" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(message.body_md || '')}, ${message.has_attachment ? 'true' : 'false'}, ${recalled ? 'true' : 'false'})">编辑</button>` : ''}
@@ -4689,6 +5283,42 @@ function renderMessageActionMenu(message) {
   `;
 }
 
+function renderMessageReactions(message) {
+  if (isTransientLocalMessage(message) || isRecalledMessage(message)) return '';
+  const conversationType = isGroupConversationMessage(message) ? 'group' : 'direct';
+  const existing = Array.isArray(message.reactions) ? message.reactions : [];
+  const quick = ['👍', '❤️', '😂'];
+  const buttons = [
+    ...existing.map((item) => `
+      <button
+        class="message-reaction-chip ${item.reacted_by_me ? 'active' : ''}"
+        type="button"
+        onclick="toggleMessageReaction(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(item.emoji)}, ${item.reacted_by_me ? 'false' : 'true'})"
+      >${esc(item.emoji)} <span>${Number(item.count || 0)}</span></button>
+    `),
+    ...quick
+      .filter((emoji) => !existing.some((item) => item.emoji === emoji))
+      .map((emoji) => `
+        <button
+          class="message-reaction-chip ghost"
+          type="button"
+          onclick="toggleMessageReaction(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(emoji)}, true)"
+        >${esc(emoji)}</button>
+      `),
+  ].join('');
+  return buttons ? `<div class="message-reactions">${buttons}</div>` : '';
+}
+
+function renderMessageUploadProgress(message) {
+  if (!isTransientLocalMessage(message) || !message.has_attachment || message.send_state !== 'pending') return '';
+  const progress = Math.max(0, Math.min(100, Number(message.upload_progress || 0)));
+  return `
+    <div class="message-upload-progress" data-message-upload-progress="${esc(message.local_id || '')}">
+      <span style="width:${progress}%"></span>
+    </div>
+  `;
+}
+
 function renderMessageRow(message) {
   const mine = Number(message.sender_id) === Number(state.user.id);
   const senderLabel = messageSenderDisplayLabel(message);
@@ -4701,6 +5331,9 @@ function renderMessageRow(message) {
   const actionTargetId = messageActionTargetId(message);
   const metaBits = [messageMetaLabel(message)];
   if (!groupMessage && mine && message.read_at) metaBits.push('已读');
+  if (groupMessage && mine && Number(message.read_count || 0) > 0) metaBits.push(`${Number(message.read_count || 0)} 已读`);
+  if (message.is_favorited) metaBits.push('已收藏');
+  if (message.attachment_scan_status && message.has_attachment) metaBits.push(`附件 ${message.attachment_scan_status}`);
   if (message.edited_at && !deleted) metaBits.push('已编辑');
   if (message.send_state === 'pending') metaBits.push('发送中...');
   if (message.send_state === 'failed') metaBits.push('发送失败');
@@ -4739,6 +5372,8 @@ function renderMessageRow(message) {
           ${renderMessageReplyPreview(message)}
           ${message.has_attachment ? renderMessageAttachment(message) : ''}
           ${message.body_md ? renderMd(message.body_md) : ''}
+          ${renderMessageUploadProgress(message)}
+          ${renderMessageReactions(message)}
           <div class="message-meta">
             <span>${esc(metaBits.join(' · '))}</span>
             <span class="message-action-row">
@@ -4770,6 +5405,48 @@ function renderMessageRows(messages = [], options = {}) {
   }).join('');
 }
 
+async function toggleMessageReaction(messageId, conversationType, emoji, active = true) {
+  const normalizedId = Number(messageId || 0);
+  if (!normalizedId || !emoji) return;
+  try {
+    await ChatApi.setReaction({
+      conversation_type: conversationType,
+      message_id: normalizedId,
+      emoji,
+      active: !!active,
+    });
+    await refreshMessages(currentMessageConversationKey(), {
+      preserveComposer: true,
+      scrollToBottom: false,
+      preferUnread: false,
+    });
+  } catch (err) {
+    toast(`更新表情失败: ${err.message}`, 'error');
+  }
+}
+
+async function toggleMessageFavorite(messageId, conversationType, active = true) {
+  const normalizedId = Number(messageId || 0);
+  if (!normalizedId) return;
+  closeMessageActionMenu();
+  try {
+    if (active) {
+      await ChatApi.addFavorite({ conversation_type: conversationType, message_id: normalizedId });
+      toast('已收藏消息', 'success');
+    } else {
+      await ChatApi.deleteFavorite(conversationType, normalizedId);
+      toast('已取消收藏', 'success');
+    }
+    await refreshMessages(currentMessageConversationKey(), {
+      preserveComposer: true,
+      scrollToBottom: false,
+      preferUnread: false,
+    });
+  } catch (err) {
+    toast(`更新收藏失败: ${err.message}`, 'error');
+  }
+}
+
 function renderMessageThread(peer, messages, options = {}) {
   const conversationType = options.conversationType === 'group' || peer.group_id ? 'group' : 'direct';
   const conversationId = conversationType === 'group'
@@ -4787,15 +5464,16 @@ function renderMessageThread(peer, messages, options = {}) {
     : (peer.username || peer.peer_username);
   const subtitle = conversationType === 'group'
     ? `${Number(peer.member_count || peer.group_member_count || peer.members?.length || 0)} 位成员`
-    : (peer.role || peer.peer_role || 'USER');
+    : [peer.role || peer.peer_role || 'USER', messagePresenceLabel(peer)].filter(Boolean).join(' · ');
   return `
     <div class="message-thread-header">
       ${renderConversationAvatar(conversationType, title, peer.avatar_url || peer.peer_avatar_url, { username: conversationType === 'direct' ? (peer.username || peer.peer_username) : '' })}
-      <div style="min-width: 0; flex: 1;">
-        <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
+      <div class="message-thread-title">
+        <div class="message-thread-title-text">${esc(title)}</div>
         <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}${peer.is_pinned ? ' · PIN' : ''}${peer.is_muted ? ' · MUTE' : ''}${peer.is_archived ? ' · ARCH' : ''}</div>
       </div>
       <button class="message-thread-unread-badge" id="messageThreadUnreadBadge" type="button" hidden onclick="refreshMessageThreadNow(${jsArg(conversationKey)})" aria-label="查看新消息">0</button>
+      <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="showMessageSearchModal(${jsArg(conversationKey)})">搜索</button>
       <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationPinned(${jsArg(conversationKey)}, ${peer.is_pinned ? 'false' : 'true'})">${peer.is_pinned ? '取消置顶' : '置顶'}</button>
       <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationMuted(${jsArg(conversationKey)}, ${peer.is_muted ? 'false' : 'true'})">${peer.is_muted ? '取消静音' : '静音'}</button>
       <button class="btn btn-secondary btn-sm message-thread-action" type="button" onclick="toggleMessageConversationArchived(${jsArg(conversationKey)}, ${peer.is_archived ? 'false' : 'true'})">${peer.is_archived ? '取消归档' : '归档'}</button>
@@ -4812,6 +5490,7 @@ function renderMessageThread(peer, messages, options = {}) {
         </div>
       ` : renderMessageRows(messages, { firstUnreadMessageId })}
     </div>
+    <div class="message-typing-indicator" id="messageTypingIndicator" hidden></div>
     <button class="message-scroll-bottom-btn" id="messageScrollBottomBtn" type="button" hidden onclick="scrollMessageThreadToBottom()">回到底部</button>
 
     <div class="message-composer" id="messageComposerWrap">
@@ -5623,7 +6302,9 @@ async function loadMessageGroupSettings(groupId) {
 }
 
 function groupRoleLabel(role) {
-  return role === 'OWNER' ? '群主' : '成员';
+  if (role === 'OWNER') return '群主';
+  if (role === 'ADMIN') return '管理员';
+  return '成员';
 }
 
 function renderGroupSettingsPendingMembers() {
@@ -5673,6 +6354,11 @@ function renderMessageGroupSettingsModal(group) {
         </div>
       ` : ''}
 
+      <div class="message-group-tools">
+        <button class="btn btn-secondary btn-sm" type="button" onclick="showGroupAnnouncementsModal(${groupId})">群公告</button>
+        ${canManage ? `<button class="btn btn-secondary btn-sm" type="button" onclick="createGroupInviteFromSettings(${groupId})">生成邀请</button>` : ''}
+      </div>
+
       <div class="message-group-member-list">
         ${members.map(member => {
           const isSelf = Number(member.id) === Number(state.user?.id || 0);
@@ -5681,6 +6367,7 @@ function renderMessageGroupSettingsModal(group) {
           const detailText = [
             displayName !== member.username ? `@${member.username}` : '',
             groupRoleLabel(member.member_role),
+            messagePresenceLabel(member),
             member.role || 'USER',
           ].filter(Boolean).join(' · ');
           return `
@@ -5692,7 +6379,13 @@ function renderMessageGroupSettingsModal(group) {
               </span>
               <span class="message-group-member-actions">
                 <button class="btn btn-secondary btn-sm" type="button" onclick="insertGroupMention(${jsArg(member.username)})">@</button>
-                ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm" type="button" onclick="transferMessageGroupOwnerFromSettings(${groupId}, ${member.id}, ${jsArg(displayName)})">转让</button>` : ''}
+                ${group.can_transfer_owner && !isSelf && !isOwner ? `
+                  <select class="message-member-role-select" onchange="updateMessageGroupMemberRoleFromSettings(${groupId}, ${member.id}, this.value)">
+                    <option value="MEMBER" ${member.member_role === 'MEMBER' ? 'selected' : ''}>成员</option>
+                    <option value="ADMIN" ${member.member_role === 'ADMIN' ? 'selected' : ''}>管理员</option>
+                  </select>
+                  <button class="btn btn-secondary btn-sm" type="button" onclick="transferMessageGroupOwnerFromSettings(${groupId}, ${member.id}, ${jsArg(displayName)})">转让</button>
+                ` : ''}
                 ${canManage && !isSelf && !isOwner ? `<button class="btn btn-secondary btn-sm text-danger" type="button" onclick="removeMessageGroupMemberFromSettings(${groupId}, ${member.id}, ${jsArg(displayName)})">移除</button>` : ''}
               </span>
             </div>
@@ -5849,16 +6542,25 @@ async function addGroupSettingsMembers(groupId) {
 }
 
 async function removeMessageGroupMemberFromSettings(groupId, memberId, username) {
-  if (!confirm(`确认将 ${username} 移出群聊吗？`)) return;
+  const reason = prompt(`确认将 ${username} 移出群聊吗？可填写原因：`, '') ?? null;
+  if (reason === null) return;
   try {
-    await api(`/api/messages/groups/${Number(groupId)}/members/${Number(memberId)}`, {
-      method: 'DELETE',
-      headers: authHeaders(),
-    });
+    await ChatApi.removeGroupMember(groupId, memberId, reason);
     toast('成员已移除', 'success');
     await refreshMessageGroupSettings(groupId);
   } catch (err) {
     setMessageGroupSettingsError(err.message);
+  }
+}
+
+async function updateMessageGroupMemberRoleFromSettings(groupId, memberId, role) {
+  try {
+    await ChatApi.updateGroupMemberRole(groupId, memberId, role);
+    toast('成员角色已更新', 'success');
+    await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+    await refreshMessageGroupSettings(groupId);
   }
 }
 
@@ -5872,6 +6574,92 @@ async function transferMessageGroupOwnerFromSettings(groupId, memberId, username
     });
     toast('群主已转让', 'success');
     await refreshMessageGroupSettings(groupId);
+  } catch (err) {
+    setMessageGroupSettingsError(err.message);
+  }
+}
+
+function renderGroupAnnouncements(items = [], groupId = 0, canManage = false) {
+  return `
+    ${canManage ? `
+      <div class="form-group">
+        <label for="groupAnnouncementBody">发布公告</label>
+        <textarea id="groupAnnouncementBody" rows="4" maxlength="4000" placeholder="输入群公告内容"></textarea>
+        <button class="btn btn-primary btn-sm mt-sm" onclick="createGroupAnnouncement(${Number(groupId)})">发布</button>
+      </div>
+    ` : ''}
+    <div class="message-announcement-list">
+      ${items.length ? items.map((item) => `
+        <div class="message-announcement-item">
+          <div>
+            <strong>${esc(item.author_username || '成员')}</strong>
+            <div class="text-muted">${esc(formatDate(item.created_at))}</div>
+            <div>${renderMd(item.body_md || '')}</div>
+          </div>
+          ${canManage ? `<button class="btn btn-secondary btn-sm text-danger" onclick="deleteGroupAnnouncement(${Number(groupId)}, ${Number(item.id)})">删除</button>` : ''}
+        </div>
+      `).join('') : '<div class="message-empty-panel"><div class="text-muted">暂无群公告</div></div>'}
+    </div>
+    <div id="groupAnnouncementError" class="notice error" style="display:none"></div>
+  `;
+}
+
+async function showGroupAnnouncementsModal(groupId) {
+  const group = state.groupSettingsGroup || state.messageActiveGroup || {};
+  const canManage = !!group.can_manage;
+  openModal({
+    title: '群公告',
+    body: '<div class="text-muted">正在加载...</div>',
+    footer: '<button class="btn btn-secondary" onclick="closeModal()">关闭</button>',
+    wide: true,
+  });
+  try {
+    const data = await ChatApi.listAnnouncements(groupId);
+    $('modalBody').innerHTML = renderGroupAnnouncements(data.items || [], groupId, canManage);
+  } catch (err) {
+    $('modalBody').innerHTML = `<div class="notice error">${esc(err.message)}</div>`;
+  }
+}
+
+async function createGroupAnnouncement(groupId) {
+  const body = $('groupAnnouncementBody')?.value.trim() || '';
+  const errEl = $('groupAnnouncementError');
+  if (!body) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = '请输入公告内容。';
+    }
+    return;
+  }
+  try {
+    await ChatApi.createAnnouncement(groupId, { body_md: body, is_pinned: true });
+    toast('群公告已发布', 'success');
+    await showGroupAnnouncementsModal(groupId);
+  } catch (err) {
+    if (errEl) {
+      errEl.style.display = '';
+      errEl.textContent = err.message;
+    }
+  }
+}
+
+async function deleteGroupAnnouncement(groupId, announcementId) {
+  if (!confirm('确认删除这条群公告吗？')) return;
+  try {
+    await ChatApi.deleteAnnouncement(groupId, announcementId);
+    toast('群公告已删除', 'success');
+    await showGroupAnnouncementsModal(groupId);
+  } catch (err) {
+    toast(`删除群公告失败: ${err.message}`, 'error');
+  }
+}
+
+async function createGroupInviteFromSettings(groupId) {
+  try {
+    const data = await ChatApi.createGroupInvite(groupId, { expires_minutes: 1440, max_uses: 20 });
+    const inviteCode = data.invite?.invite_code || data.invite_code || '';
+    await navigator.clipboard?.writeText?.(inviteCode);
+    toast(inviteCode ? `邀请已生成：${inviteCode}` : '邀请已生成', 'success');
   } catch (err) {
     setMessageGroupSettingsError(err.message);
   }
@@ -6136,6 +6924,35 @@ async function sendFileToPeer(peerId, input) {
   await sendFilesToPeer(target.key, files, { input });
 }
 
+function scheduleMessageTyping(conversationKey) {
+  const target = parseMessageConversationKey(conversationKey);
+  if (!target.key || !state.user) return;
+  const send = async () => {
+    state.messageTypingTimer = null;
+    state.messageTypingLastSentAt = Date.now();
+    try {
+      await ChatApi.sendTyping({
+        conversation_type: target.type,
+        conversation_id: target.id,
+      });
+    } catch {
+      // Typing state is opportunistic; message sending remains the source of truth.
+    }
+  };
+  const elapsed = Date.now() - Number(state.messageTypingLastSentAt || 0);
+  if (elapsed > 2500) {
+    if (state.messageTypingTimer) {
+      clearTimeout(state.messageTypingTimer);
+      state.messageTypingTimer = null;
+    }
+    void send();
+    return;
+  }
+  if (!state.messageTypingTimer) {
+    state.messageTypingTimer = setTimeout(send, Math.max(400, 2500 - elapsed));
+  }
+}
+
 function initMessageComposerInteractions(peerId) {
   const target = parseMessageConversationKey(peerId);
   const composer = $('messageComposer');
@@ -6144,6 +6961,7 @@ function initMessageComposerInteractions(peerId) {
 
   composer.addEventListener('input', () => {
     saveMessageComposerDraft(target.key, composer.value);
+    if (composer.value.trim()) scheduleMessageTyping(target.key);
   });
 
   composer.addEventListener('paste', (event) => {
@@ -6421,6 +7239,8 @@ async function performTransientSend(item, { focusComposer = false } = {}) {
         body: item.retry_payload?.body || '',
         replyToMessageId: item.retry_payload?.replyTarget?.messageId || null,
         files: item.retry_payload?.files || [],
+        conversationKey: target.key,
+        localId: item.local_id,
       });
     } else if (target.type === 'group') {
       await api(`/api/messages/groups/${target.id}/messages`, {
@@ -9951,12 +10771,19 @@ Object.assign(window, {
   transferMessageGroupOwnerFromSettings, leaveMessageGroup, deleteMessageGroup, insertGroupMention, showGroupMentionModal,
   setMessageConversationSearch, toggleMessageArchivedFilter, toggleMessageConversationPinned, toggleMessageConversationMuted,
   toggleMessageConversationArchived, toggleDirectConversationBlock, showMessageBlocksModal, unblockMessageUser,
+  loadMoreMessageConversations, showMessagePreferencesModal, saveMessagePreferences,
+  showMessageFavoritesModal, openMessageFavorite, showJoinGroupInviteModal, joinGroupInvite,
+  showAdminMessageReportsModal, resolveMessageReport,
   sendNewMessage, sendMessageToPeer, sendFileToPeer, handleMessageComposerKeydown,
   scrollMessageThreadToBottom, toggleMessageEmojiPanel, insertMessageEmoji, addMessageGifFavorites,
   addMessageGifFavoriteFromMessage, removeMessageGifFavorite, sendFavoriteGif, dismissTransientMessage, retryTransientMessage,
+  toggleMessageReaction, toggleMessageFavorite, showMessageSearchModal, handleMessageSearchKeydown,
+  submitMessageSearch, openMessageSearchResult,
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile, downloadLocalMessageFile,
   refreshMessageThreadNow, quoteMessage, replyToMessage, clearMessageReplyTarget,
+  showGroupAnnouncementsModal, createGroupAnnouncement, deleteGroupAnnouncement,
+  createGroupInviteFromSettings, updateMessageGroupMemberRoleFromSettings,
   openChatUserProfile, handleChatAvatarProfileKeydown, openMessageActionMenu, closeMessageActionMenu, copyMessageText, recallMessageAction,
   showMessageEditModal, submitMessageEdit, deleteMessageAction, showMessageReportModal, submitMessageReport,
   closeModal, copyTerminalText, toggleTheme,
