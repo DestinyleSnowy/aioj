@@ -5287,25 +5287,13 @@ function renderMessageReactions(message) {
   if (isTransientLocalMessage(message) || isRecalledMessage(message)) return '';
   const conversationType = isGroupConversationMessage(message) ? 'group' : 'direct';
   const existing = Array.isArray(message.reactions) ? message.reactions : [];
-  const quick = ['👍', '❤️', '😂'];
-  const buttons = [
-    ...existing.map((item) => `
+  const buttons = existing.map((item) => `
       <button
         class="message-reaction-chip ${item.reacted_by_me ? 'active' : ''}"
         type="button"
         onclick="toggleMessageReaction(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(item.emoji)}, ${item.reacted_by_me ? 'false' : 'true'})"
       >${esc(item.emoji)} <span>${Number(item.count || 0)}</span></button>
-    `),
-    ...quick
-      .filter((emoji) => !existing.some((item) => item.emoji === emoji))
-      .map((emoji) => `
-        <button
-          class="message-reaction-chip ghost"
-          type="button"
-          onclick="toggleMessageReaction(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(emoji)}, true)"
-        >${esc(emoji)}</button>
-      `),
-  ].join('');
+    `).join('');
   return buttons ? `<div class="message-reactions">${buttons}</div>` : '';
 }
 
