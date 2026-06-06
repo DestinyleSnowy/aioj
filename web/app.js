@@ -248,11 +248,41 @@ function renderMessageAvatar(name, url = '', extraClass = '', options = {}) {
   return renderAvatar(name, url, className, options);
 }
 
-function renderConversationAvatar(type, name, url = '') {
+function openChatUserProfile(event, username) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  const normalized = String(username || '').trim();
+  if (!normalized) return;
+  navigate(userProfilePath(normalized));
+}
+
+function handleChatAvatarProfileKeydown(event, username) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+  openChatUserProfile(event, username);
+}
+
+function renderMessageProfileAvatar(name, url = '', username = '', extraClass = '', options = {}) {
+  const normalizedUsername = String(username || '').trim();
+  const avatar = renderMessageAvatar(name, url, extraClass, options);
+  if (!normalizedUsername) return avatar;
+  const titleName = String(name || normalizedUsername).trim() || normalizedUsername;
+  return `
+    <span
+      class="message-avatar-link"
+      role="link"
+      tabindex="0"
+      title="查看 ${esc(titleName)} 的主页"
+      onclick="openChatUserProfile(event, ${jsArg(normalizedUsername)})"
+      onkeydown="handleChatAvatarProfileKeydown(event, ${jsArg(normalizedUsername)})"
+    >${avatar}</span>
+  `;
+}
+
+function renderConversationAvatar(type, name, url = '', options = {}) {
   if (type === 'group') {
     return `<span class="message-avatar group">${messagePeerInitial(name)}</span>`;
   }
-  return renderMessageAvatar(name, url);
+  return renderMessageProfileAvatar(name, url, options.username || name);
 }
 
 function isGroupConversationMessage(message) {
@@ -292,7 +322,6 @@ function messageActionWindowOpen(message) {
 
 function canEditMessage(message) {
   return Number(message?.sender_id || 0) === Number(state.user?.id || 0)
-    && !isRecalledMessage(message)
     && messageActionWindowOpen(message);
 }
 
@@ -4003,7 +4032,7 @@ function renderMessageConversationButton(c, selectedKey = '') {
 
   return `
     <button class="message-conversation ${active ? 'active' : ''}" data-message-conversation-key="${esc(conversationKey)}" onclick="openMessageConversation(${jsArg(conversationKey)})">
-      ${renderConversationAvatar(conversationType, title, c.peer_avatar_url)}
+      ${renderConversationAvatar(conversationType, title, c.peer_avatar_url, { username: conversationType === 'direct' ? c.peer_username : '' })}
       <span class="message-conversation-body">
         <span class="message-conversation-top">
           <strong>${esc(title)}</strong>
@@ -4644,7 +4673,7 @@ function renderMessageActionMenu(message) {
     ${!recalled ? `<button class="message-menu-item" type="button" onclick="closeMessageActionMenu(); replyToMessage(${Number(message.id)}, ${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)}, false)">回复</button>` : ''}
     ${canFavoriteGif ? `<button class="message-menu-item" type="button" onclick="addMessageGifFavoriteFromMessage(${jsArg(messageActionTargetId(message))})">添加到表情</button>` : ''}
     ${copyText ? `<button class="message-menu-item" type="button" onclick="copyMessageText(${Number(message.id)})">复制</button>` : ''}
-    ${canEditMessage(message) ? `<button class="message-menu-item" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(message.body_md || '')}, ${message.has_attachment ? 'true' : 'false'})">编辑</button>` : ''}
+    ${canEditMessage(message) ? `<button class="message-menu-item" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(message.body_md || '')}, ${message.has_attachment ? 'true' : 'false'}, ${recalled ? 'true' : 'false'})">编辑</button>` : ''}
     ${canRecallMessage(message) ? `<button class="message-menu-item" type="button" onclick="recallMessageAction(${Number(message.id)}, ${jsArg(conversationType)})">撤回</button>` : ''}
     ${nestedItems ? `
       <div class="message-menu-submenu">
@@ -4665,6 +4694,7 @@ function renderMessageRow(message) {
   const senderLabel = messageSenderDisplayLabel(message);
   const groupMessage = isGroupConversationMessage(message);
   const avatarName = groupMessage ? senderLabel : (message.sender_username || senderLabel || '用户');
+  const avatarUsername = message.sender_username || (mine ? state.user?.username || '' : '');
   const avatarUrl = message.sender_avatar_url || (mine ? state.user?.avatar_url || '' : '');
   const deleted = isRecalledMessage(message);
   const localOnly = isTransientLocalMessage(message);
@@ -4702,7 +4732,7 @@ function renderMessageRow(message) {
       ${localOnly ? '' : `data-server-message-id="${esc(message.id)}"`}
       oncontextmenu="openMessageActionMenu(event, ${jsArg(actionTargetId)})"
     >
-      ${renderMessageAvatar(avatarName, avatarUrl)}
+      ${renderMessageProfileAvatar(avatarName, avatarUrl, avatarUsername)}
       <div class="message-content">
         ${groupMessage ? `<div class="message-sender-name">${esc(mine ? `${senderLabel}（我）` : senderLabel)}</div>` : ''}
         <div class="message-bubble">
@@ -4760,7 +4790,7 @@ function renderMessageThread(peer, messages, options = {}) {
     : (peer.role || peer.peer_role || 'USER');
   return `
     <div class="message-thread-header">
-      ${renderConversationAvatar(conversationType, title, peer.avatar_url || peer.peer_avatar_url)}
+      ${renderConversationAvatar(conversationType, title, peer.avatar_url || peer.peer_avatar_url, { username: conversationType === 'direct' ? (peer.username || peer.peer_username) : '' })}
       <div style="min-width: 0; flex: 1;">
         <div style="font-weight: 700; color: var(--text-main);">${esc(title)}</div>
         <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}${peer.is_pinned ? ' · PIN' : ''}${peer.is_muted ? ' · MUTE' : ''}${peer.is_archived ? ' · ARCH' : ''}</div>
@@ -6490,7 +6520,7 @@ async function sendFilesToPeer(peerId, files, options = {}) {
   });
 }
 
-function showMessageEditModal(messageId, conversationType, currentBody = '', allowEmpty = false) {
+function showMessageEditModal(messageId, conversationType, currentBody = '', allowEmpty = false, wasRecalled = false) {
   closeMessageActionMenu();
   openModal({
     title: '编辑消息',
@@ -6499,7 +6529,7 @@ function showMessageEditModal(messageId, conversationType, currentBody = '', all
         <label for="messageEditBody">消息内容</label>
         <textarea id="messageEditBody" rows="6" maxlength="4000" data-allow-empty="${allowEmpty ? '1' : '0'}">${esc(currentBody)}</textarea>
       </div>
-      <div class="text-muted" style="font-size: 12px;">发送后 2 分钟内可编辑。</div>
+      <div class="text-muted" style="font-size: 12px;">发送后 2 分钟内可编辑。${wasRecalled ? '保存后这条消息会重新显示。' : ''}</div>
       <div id="messageEditError" class="notice error" style="display:none"></div>
     `,
     footer: `
@@ -9927,7 +9957,7 @@ Object.assign(window, {
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile, downloadLocalMessageFile,
   refreshMessageThreadNow, quoteMessage, replyToMessage, clearMessageReplyTarget,
-  openMessageActionMenu, closeMessageActionMenu, copyMessageText, recallMessageAction,
+  openChatUserProfile, handleChatAvatarProfileKeydown, openMessageActionMenu, closeMessageActionMenu, copyMessageText, recallMessageAction,
   showMessageEditModal, submitMessageEdit, deleteMessageAction, showMessageReportModal, submitMessageReport,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent

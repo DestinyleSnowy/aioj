@@ -8,6 +8,7 @@ from app.routers.messages import (
     clamp_limit,
     delete_direct_message,
     edit_direct_message,
+    edit_group_message,
     extract_message_mentions,
     get_group_message_conversation,
     get_message_conversation,
@@ -264,6 +265,54 @@ def test_edit_direct_message_allows_empty_attachment_caption(monkeypatch):
     assert len(conn.calls) == 1
     _, params = conn.calls[0]
     assert params == {"message_id": 15, "body_md": ""}
+
+
+def test_edit_direct_message_restores_recalled_message(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_direct_message_for_user",
+        lambda *_args, **_kwargs: {
+            "sender_id": 9,
+            "deleted_at": datetime.now(timezone.utc),
+            "attachment_object_key": None,
+            "created_at": datetime.now(timezone.utc),
+        },
+    )
+
+    result = edit_direct_message(15, {"body_md": "  revised  "}, user={"id": 9})
+
+    assert result == {"ok": True, "message_id": 15}
+    assert len(conn.calls) == 1
+    statement, params = conn.calls[0]
+    assert "deleted_at = null" in statement
+    assert "deleted_by_user_id = null" in statement
+    assert params == {"message_id": 15, "body_md": "revised"}
+
+
+def test_edit_group_message_restores_recalled_message(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_group_message_for_user",
+        lambda *_args, **_kwargs: {
+            "sender_id": 9,
+            "deleted_at": datetime.now(timezone.utc),
+            "attachment_object_key": None,
+            "created_at": datetime.now(timezone.utc),
+        },
+    )
+
+    result = edit_group_message(21, {"body_md": "  group revised  "}, user={"id": 9})
+
+    assert result == {"ok": True, "message_id": 21}
+    assert len(conn.calls) == 1
+    statement, params = conn.calls[0]
+    assert "deleted_at = null" in statement
+    assert "deleted_by_user_id = null" in statement
+    assert params == {"message_id": 21, "body_md": "group revised"}
 
 
 def test_require_message_mutation_window_rejects_expired_message():

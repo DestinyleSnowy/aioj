@@ -2532,8 +2532,6 @@ def edit_direct_message(message_id: int, payload: dict, user=Depends(require_use
         message = get_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
         if int(message["sender_id"]) != int(user["id"]):
             raise HTTPException(status_code=403, detail="Only the sender can edit this message")
-        if message["deleted_at"]:
-            raise HTTPException(status_code=400, detail="Recalled messages cannot be edited")
         require_message_mutation_window(message, action="edited")
         body = normalize_edited_message_body(message, payload)
         conn.execute(
@@ -2541,7 +2539,9 @@ def edit_direct_message(message_id: int, payload: dict, user=Depends(require_use
                 """
                 update direct_messages
                 set body_md = :body_md,
-                    edited_at = now()
+                    edited_at = now(),
+                    deleted_at = null,
+                    deleted_by_user_id = null
                 where id = :message_id
                 """
             ),
@@ -2587,8 +2587,6 @@ def edit_group_message(message_id: int, payload: dict, user=Depends(require_user
         message = get_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
         if int(message["sender_id"]) != int(user["id"]):
             raise HTTPException(status_code=403, detail="Only the sender can edit this message")
-        if message["deleted_at"]:
-            raise HTTPException(status_code=400, detail="Recalled messages cannot be edited")
         require_message_mutation_window(message, action="edited")
         body = normalize_edited_message_body(message, payload)
         conn.execute(
@@ -2596,7 +2594,9 @@ def edit_group_message(message_id: int, payload: dict, user=Depends(require_user
                 """
                 update group_messages
                 set body_md = :body_md,
-                    edited_at = now()
+                    edited_at = now(),
+                    deleted_at = null,
+                    deleted_by_user_id = null
                 where id = :message_id
                 """
             ),
