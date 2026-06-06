@@ -338,6 +338,19 @@ create table if not exists message_reports (
   )
 );
 
+create table if not exists message_hidden_entries (
+  id bigserial primary key,
+  user_id bigint not null references users(id) on delete cascade,
+  direct_message_id bigint references direct_messages(id) on delete cascade,
+  group_message_id bigint references group_messages(id) on delete cascade,
+  hidden_at timestamptz not null default now(),
+  constraint message_hidden_entries_scope_check check (
+    ((direct_message_id is not null)::integer + (group_message_id is not null)::integer) = 1
+  ),
+  constraint message_hidden_entries_unique_direct unique (user_id, direct_message_id),
+  constraint message_hidden_entries_unique_group unique (user_id, group_message_id)
+);
+
 create table if not exists audit_logs (
   id bigserial primary key,
   user_id bigint references users(id) on delete set null,
@@ -383,6 +396,7 @@ create index if not exists idx_message_conversation_preferences_user_flags on me
 create index if not exists idx_user_message_blocks_blocked on user_message_blocks(blocked_user_id, blocker_id);
 create index if not exists idx_message_reports_reporter_created on message_reports(reporter_id, created_at desc, id desc);
 create index if not exists idx_message_reports_status_created on message_reports(status, created_at desc, id desc);
+create index if not exists idx_message_hidden_entries_hidden_at on message_hidden_entries(user_id, hidden_at desc, id desc);
 create index if not exists idx_audit_logs_created_desc on audit_logs(created_at desc, id desc);
 create index if not exists idx_audit_logs_user_created on audit_logs(user_id, created_at desc, id desc);
 create index if not exists idx_audit_logs_resource on audit_logs(resource_type, resource_id, created_at desc);

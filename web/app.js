@@ -44,6 +44,8 @@ const state = {
   messageLayoutCleanup: null,
   messageImagePreview: null,
   messageReplyTarget: null,
+  messageThreadItems: [],
+  messageActionMenuCleanup: null,
   newMessagePendingFiles: [],
   newGroupMembers: [],
   messageActiveGroup: null,
@@ -59,6 +61,7 @@ let problemEditorState = null;
 let problemEditorTempId = 0;
 
 const MESSAGE_REFRESH_INTERVAL_MS = 5000;
+const MESSAGE_MUTATION_WINDOW_MS = 2 * 60 * 1000;
 const MESSAGE_THREAD_PAGE_SIZE = 20;
 const MESSAGE_THREAD_TOP_LOAD_THRESHOLD_PX = 32;
 const MESSAGE_FILE_SIZE_LIMIT_BYTES = 20 * 1024 * 1024;
@@ -266,6 +269,47 @@ function messageMetaLabel(message) {
     return `@${username} · ${timestamp}`;
   }
   return timestamp;
+}
+
+function isRecalledMessage(message) {
+  return !!message?.is_recalled || !!message?.is_deleted || !!message?.deleted_at;
+}
+
+function messageActionWindowOpen(message) {
+  const createdAt = Date.parse(message?.created_at || '');
+  if (!Number.isFinite(createdAt)) return false;
+  return (Date.now() - createdAt) <= MESSAGE_MUTATION_WINDOW_MS;
+}
+
+function canEditMessage(message) {
+  return Number(message?.sender_id || 0) === Number(state.user?.id || 0)
+    && !isRecalledMessage(message)
+    && messageActionWindowOpen(message);
+}
+
+function canRecallMessage(message) {
+  return Number(message?.sender_id || 0) === Number(state.user?.id || 0)
+    && !isRecalledMessage(message)
+    && messageActionWindowOpen(message);
+}
+
+function recallNoticeText(message) {
+  if (!message) return '一条消息被撤回';
+  const mine = Number(message.sender_id || 0) === Number(state.user?.id || 0);
+  return `${mine ? '你' : messageSenderDisplayLabel(message)}撤回了一条消息`;
+}
+
+function conversationRecallPreviewText(conversation) {
+  if (!conversation?.last_deleted_at) return '';
+  const mine = Number(conversation.last_sender_id || 0) === Number(state.user?.id || 0);
+  const sender = conversation.conversation_type === 'group'
+    ? (conversation.last_sender_group_nickname || conversation.last_sender_username || '成员')
+    : (conversation.last_sender_username || '对方');
+  return `${mine ? '你' : sender}撤回了一条消息`;
+}
+
+function currentThreadMessage(messageId) {
+  return (state.messageThreadItems || []).find((item) => Number(item?.id || 0) === Number(messageId || 0)) || null;
 }
 
 function isRelativeMdTarget(value) {
@@ -3694,8 +3738,18 @@ async function pollMessageUnreadState() {
   const active = conversations.find(c => (c.conversation_key || messageConversationKey(c.conversation_type, c.group_id || c.peer_id)) === conversationKey);
   const list = $('messageThreadList');
   const currentNewestId = newestRenderedMessageId(list);
+  const currentNewestMessage = currentThreadMessage(currentNewestId);
   const nextNewestId = Number(active?.last_message_id || 0);
-  const shouldRefreshThread = !!active && nextNewestId > currentNewestId && (messageThreadIsNearBottom(list) || Number(active?.last_sender_id) === Number(state.user?.id || 0));
+  const activeSummaryChanged = !!active && nextNewestId === currentNewestId && (
+    String(active?.last_deleted_at || '') !== String(currentNewestMessage?.deleted_at || '')
+    || String(active?.last_body_md || '') !== String(currentNewestMessage?.body_md || '')
+    || String(active?.last_attachment_filename || '') !== String(currentNewestMessage?.attachment_filename || '')
+    || Boolean(active?.last_has_attachment) !== Boolean(currentNewestMessage?.has_attachment)
+  );
+  const shouldRefreshThread = !!active && (
+    (nextNewestId > currentNewestId && (messageThreadIsNearBottom(list) || Number(active?.last_sender_id) === Number(state.user?.id || 0)))
+    || activeSummaryChanged
+  );
   if (shouldRefreshThread) {
     await refreshMessages(conversationKey, { preserveComposer: true, focusComposer: false, scrollToBottom: true });
     updateMessageThreadUnreadBadge(0);
@@ -3731,6 +3785,7 @@ function ensureMessageAutoRefresh() {
 async function renderMessages(target = null, options = {}) {
   setPage('聊天');
   document.body.classList.add('messages-page-active');
+  closeMessageActionMenu();
   const app = $('app');
   app.classList.add('messages-page');
   if (!state.user) {
@@ -3778,6 +3833,7 @@ async function renderMessages(target = null, options = {}) {
       return itemKey === selected.key;
     });
     const threadItems = thread?.items || [];
+    state.messageThreadItems = threadItems;
 
     app.innerHTML = `
       <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
@@ -3827,13 +3883,15 @@ async function renderMessages(target = null, options = {}) {
               ? `${Number(c.group_member_count || 0)} 位成员`
               : esc(c.peer_role || 'USER');
             const stateBits = [c.is_pinned ? 'PIN' : '', c.is_muted ? 'MUTE' : '', c.is_archived ? 'ARCH' : ''].filter(Boolean).join(' · ');
-            const previewPrefix = c.last_message_id
+            const previewPrefix = c.last_deleted_at
+              ? ''
+              : c.last_message_id
               ? (conversationType === 'group'
                 ? (incoming ? `${c.last_sender_group_nickname || c.last_sender_username || '成员'}：` : '我：')
                 : (incoming ? '' : '我：'))
               : '';
             const previewText = c.last_deleted_at
-              ? '消息已删除'
+              ? conversationRecallPreviewText(c)
               : c.last_message_id
               ? messagePreview(c.last_body_md, 96, c.last_attachment_content_type || (c.last_has_attachment ? 'application/octet-stream' : ''))
               : (conversationType === 'group' ? '群聊已创建' : '空消息');
@@ -3892,6 +3950,7 @@ async function renderMessages(target = null, options = {}) {
     state.messageActiveConversationKey = selected.key;
     state.messageActivePeerId = selected.type === 'direct' ? selected.id : 0;
     state.messageActiveGroup = selected.type === 'group' ? activeConversation : null;
+    if (!selected.id) state.messageThreadItems = [];
     if (!selected.key) state.messageReplyTarget = null;
     updateMessageReplyBanner();
 
@@ -4127,7 +4186,7 @@ function quoteMessage(sender, body = '', attachmentLabel = '') {
 
 function replyPreviewText(sender, body = '', attachmentLabel = '', deleted = false) {
   const senderLabel = String(sender || '用户').trim() || '用户';
-  if (deleted) return `${senderLabel}：已删除消息`;
+  if (deleted) return `${senderLabel}：消息已撤回`;
   const pieces = [String(attachmentLabel || '').trim(), String(body || '').trim()].filter(Boolean);
   const content = (pieces.join(' ') || '空消息').replace(/\s+/g, ' ').trim();
   const clipped = content.length > 120 ? `${content.slice(0, 119)}…` : content;
@@ -4200,39 +4259,155 @@ function updateMessageReplyBanner() {
   `;
 }
 
+function closeMessageActionMenu() {
+  const cleanup = state.messageActionMenuCleanup;
+  if (typeof cleanup === 'function') cleanup();
+  state.messageActionMenuCleanup = null;
+}
+
+function messageMenuCopyText(message) {
+  const parts = [];
+  const attachmentLabel = messageAttachmentQuoteLabel(message);
+  if (attachmentLabel) parts.push(attachmentLabel);
+  if (message?.body_md) parts.push(String(message.body_md));
+  return parts.join('\n').trim();
+}
+
+function positionMessageActionMenu(menu, left, top) {
+  const padding = 12;
+  const rect = menu.getBoundingClientRect();
+  const nextLeft = Math.max(padding, Math.min(left, window.innerWidth - rect.width - padding));
+  const nextTop = Math.max(padding, Math.min(top, window.innerHeight - rect.height - padding));
+  menu.style.left = `${nextLeft}px`;
+  menu.style.top = `${nextTop}px`;
+}
+
+function openMessageActionMenu(event, messageId) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+
+  const message = currentThreadMessage(messageId);
+  if (!message) return;
+
+  closeMessageActionMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'message-action-menu';
+  if ((event?.clientX || 0) > window.innerWidth - 260) {
+    menu.classList.add('submenu-left');
+  }
+  menu.innerHTML = renderMessageActionMenu(message);
+  document.body.appendChild(menu);
+
+  const targetRect = event?.currentTarget?.getBoundingClientRect?.();
+  const preferredLeft = Number.isFinite(event?.clientX)
+    ? event.clientX
+    : Math.max(12, (targetRect?.right || 0) - 16);
+  const preferredTop = Number.isFinite(event?.clientY)
+    ? event.clientY
+    : Math.max(12, (targetRect?.bottom || 0) + 6);
+  positionMessageActionMenu(menu, preferredLeft, preferredTop);
+
+  const onPointerDown = (nextEvent) => {
+    if (!menu.contains(nextEvent.target)) closeMessageActionMenu();
+  };
+  const onEscape = (nextEvent) => {
+    if (nextEvent.key === 'Escape') closeMessageActionMenu();
+  };
+  const onWindowChange = () => closeMessageActionMenu();
+
+  const cleanup = () => {
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onEscape, true);
+    window.removeEventListener('resize', onWindowChange);
+    window.removeEventListener('scroll', onWindowChange, true);
+    menu.remove();
+    if (state.messageActionMenuCleanup === cleanup) {
+      state.messageActionMenuCleanup = null;
+    }
+  };
+
+  state.messageActionMenuCleanup = cleanup;
+  window.setTimeout(() => {
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onEscape, true);
+    window.addEventListener('resize', onWindowChange);
+    window.addEventListener('scroll', onWindowChange, true);
+  }, 0);
+}
+
+function renderMessageActionMenu(message) {
+  const senderLabel = messageSenderDisplayLabel(message);
+  const attachmentLabel = messageAttachmentQuoteLabel(message);
+  const conversationType = isGroupConversationMessage(message) ? 'group' : 'direct';
+  const recalled = isRecalledMessage(message);
+  const mine = Number(message?.sender_id || 0) === Number(state.user?.id || 0);
+  const copyText = messageMenuCopyText(message);
+  const nestedItems = [
+    `<button class="message-menu-item danger" type="button" onclick="deleteMessageAction(${Number(message.id)}, ${jsArg(conversationType)})">删除</button>`,
+    !mine && !recalled
+      ? `<button class="message-menu-item" type="button" onclick="showMessageReportModal(${Number(message.id)}, ${jsArg(conversationType)})">举报</button>`
+      : '',
+  ].filter(Boolean).join('');
+
+  return `
+    ${!recalled ? `<button class="message-menu-item" type="button" onclick="closeMessageActionMenu(); replyToMessage(${Number(message.id)}, ${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)}, false)">回复</button>` : ''}
+    ${copyText ? `<button class="message-menu-item" type="button" onclick="copyMessageText(${Number(message.id)})">复制</button>` : ''}
+    ${canEditMessage(message) ? `<button class="message-menu-item" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(conversationType)}, ${jsArg(message.body_md || '')}, ${message.has_attachment ? 'true' : 'false'})">编辑</button>` : ''}
+    ${canRecallMessage(message) ? `<button class="message-menu-item" type="button" onclick="recallMessageAction(${Number(message.id)}, ${jsArg(conversationType)})">撤回</button>` : ''}
+    ${nestedItems ? `
+      <div class="message-menu-submenu">
+        <button class="message-menu-item has-submenu" type="button">
+          更多
+          <span aria-hidden="true">›</span>
+        </button>
+        <div class="message-menu-submenu-panel">
+          ${nestedItems}
+        </div>
+      </div>
+    ` : ''}
+  `;
+}
+
 function renderMessageRow(message) {
   const mine = Number(message.sender_id) === Number(state.user.id);
   const senderLabel = messageSenderDisplayLabel(message);
-  const attachmentLabel = messageAttachmentQuoteLabel(message);
   const groupMessage = isGroupConversationMessage(message);
   const avatarName = groupMessage ? senderLabel : (message.sender_username || senderLabel || '用户');
   const avatarUrl = message.sender_avatar_url || (mine ? state.user?.avatar_url || '' : '');
-  const deleted = !!message.is_deleted || !!message.deleted_at;
-  const canDelete = !deleted && (mine || (groupMessage && String(state.messageActiveGroup?.current_user_member_role || '') === 'OWNER'));
-  const canEdit = !deleted && mine;
-  const canReport = !mine;
+  const deleted = isRecalledMessage(message);
   const metaBits = [messageMetaLabel(message)];
   if (!groupMessage && mine && message.read_at) metaBits.push('已读');
   if (message.edited_at && !deleted) metaBits.push('已编辑');
-  if (deleted) metaBits.push('已删除');
+  const menuBtn = `
+    <button
+      class="message-menu-btn"
+      type="button"
+      aria-label="消息操作"
+      onclick="openMessageActionMenu(event, ${Number(message.id)})"
+    >···</button>
+  `;
+  if (deleted) {
+    return `
+      <div class="message-system-row" data-message-id="${esc(message.id)}" oncontextmenu="openMessageActionMenu(event, ${Number(message.id)})">
+        <span>${esc(recallNoticeText(message))}</span>
+        ${menuBtn}
+      </div>
+    `;
+  }
   return `
-    <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id)}">
+    <div class="message-row ${mine ? 'mine' : ''}" data-message-id="${esc(message.id)}" oncontextmenu="openMessageActionMenu(event, ${Number(message.id)})">
       ${renderMessageAvatar(avatarName, avatarUrl)}
       <div class="message-content">
         ${groupMessage ? `<div class="message-sender-name">${esc(mine ? `${senderLabel}（我）` : senderLabel)}</div>` : ''}
         <div class="message-bubble">
           ${renderMessageReplyPreview(message)}
-          ${deleted ? '<div class="text-muted">此消息已删除</div>' : ''}
-          ${!deleted && message.has_attachment ? renderMessageAttachment(message) : ''}
-          ${!deleted && message.body_md ? renderMd(message.body_md) : ''}
+          ${message.has_attachment ? renderMessageAttachment(message) : ''}
+          ${message.body_md ? renderMd(message.body_md) : ''}
           <div class="message-meta">
             <span>${esc(metaBits.join(' · '))}</span>
             <span class="message-action-row">
-              ${!deleted ? `<button class="message-quote-btn" type="button" onclick="replyToMessage(${Number(message.id)}, ${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)}, ${deleted ? 'true' : 'false'})">回复</button>` : ''}
-              ${!deleted ? `<button class="message-quote-btn" type="button" onclick="quoteMessage(${jsArg(senderLabel)}, ${jsArg(message.body_md || '')}, ${jsArg(attachmentLabel)})">引用</button>` : ''}
-              ${canEdit ? `<button class="message-quote-btn" type="button" onclick="showMessageEditModal(${Number(message.id)}, ${jsArg(groupMessage ? 'group' : 'direct')}, ${jsArg(message.body_md || '')})">编辑</button>` : ''}
-              ${canDelete ? `<button class="message-quote-btn" type="button" onclick="deleteMessageAction(${Number(message.id)}, ${jsArg(groupMessage ? 'group' : 'direct')})">删除</button>` : ''}
-              ${canReport ? `<button class="message-quote-btn" type="button" onclick="showMessageReportModal(${Number(message.id)}, ${jsArg(groupMessage ? 'group' : 'direct')})">举报</button>` : ''}
+              ${menuBtn}
             </span>
           </div>
         </div>
@@ -5656,14 +5831,16 @@ async function sendFilesToPeer(peerId, files, options = {}) {
   }
 }
 
-function showMessageEditModal(messageId, conversationType, currentBody = '') {
+function showMessageEditModal(messageId, conversationType, currentBody = '', allowEmpty = false) {
+  closeMessageActionMenu();
   openModal({
     title: '编辑消息',
     body: `
       <div class="form-group">
         <label for="messageEditBody">消息内容</label>
-        <textarea id="messageEditBody" rows="6" maxlength="4000">${esc(currentBody)}</textarea>
+        <textarea id="messageEditBody" rows="6" maxlength="4000" data-allow-empty="${allowEmpty ? '1' : '0'}">${esc(currentBody)}</textarea>
       </div>
+      <div class="text-muted" style="font-size: 12px;">发送后 2 分钟内可编辑。</div>
       <div id="messageEditError" class="notice error" style="display:none"></div>
     `,
     footer: `
@@ -5676,8 +5853,10 @@ function showMessageEditModal(messageId, conversationType, currentBody = '') {
 async function submitMessageEdit(messageId, conversationType) {
   const btn = $('messageEditSubmitBtn');
   const errEl = $('messageEditError');
-  const body = $('messageEditBody')?.value.trim() || '';
-  if (!body) {
+  const input = $('messageEditBody');
+  const body = input?.value.trim() || '';
+  const allowEmpty = String(input?.dataset?.allowEmpty || '') === '1';
+  if (!body && !allowEmpty) {
     if (errEl) { errEl.style.display = ''; errEl.textContent = '请输入消息内容。'; }
     return;
   }
@@ -5700,8 +5879,37 @@ async function submitMessageEdit(messageId, conversationType) {
   }
 }
 
+async function copyMessageText(messageId) {
+  const message = currentThreadMessage(messageId);
+  const text = messageMenuCopyText(message);
+  closeMessageActionMenu();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('已复制消息', 'success');
+  } catch {
+    toast('复制失败，请重试', 'error');
+  }
+}
+
+async function recallMessageAction(messageId, conversationType) {
+  closeMessageActionMenu();
+  try {
+    const endpoint = conversationType === 'group'
+      ? `/api/messages/group-messages/${Number(messageId)}/recall`
+      : `/api/messages/direct-messages/${Number(messageId)}/recall`;
+    await api(endpoint, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    await refreshMessageThreadNow();
+  } catch (err) {
+    toast(`撤回消息失败: ${err.message}`, 'error');
+  }
+}
+
 async function deleteMessageAction(messageId, conversationType) {
-  if (!confirm('确认删除这条消息吗？')) return;
+  closeMessageActionMenu();
   try {
     const endpoint = conversationType === 'group'
       ? `/api/messages/group-messages/${Number(messageId)}`
@@ -5717,6 +5925,7 @@ async function deleteMessageAction(messageId, conversationType) {
 }
 
 function showMessageReportModal(messageId, conversationType) {
+  closeMessageActionMenu();
   openModal({
     title: '举报消息',
     body: `
@@ -9057,6 +9266,7 @@ Object.assign(window, {
   handleNewMessageKeydown, updateNewMessageFileLabel, openMessageImage, openMessageImageFromAttachment,
   showPreviousMessageImage, showNextMessageImage, downloadMessageFile,
   refreshMessageThreadNow, quoteMessage, replyToMessage, clearMessageReplyTarget,
+  openMessageActionMenu, closeMessageActionMenu, copyMessageText, recallMessageAction,
   showMessageEditModal, submitMessageEdit, deleteMessageAction, showMessageReportModal, submitMessageReport,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent

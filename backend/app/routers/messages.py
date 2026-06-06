@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import mimetypes
 import re
@@ -23,6 +24,7 @@ MAX_GROUP_NICKNAME_LENGTH = 50
 MAX_GROUP_MEMBERS = 50
 MAX_REPORT_REASON_LENGTH = 80
 MAX_REPORT_DETAILS_LENGTH = 2000
+MESSAGE_MUTATION_WINDOW_SECONDS = 120
 PLAIN_MENTION_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])@([A-Za-z0-9][A-Za-z0-9_.-]{2,49}|all)\b", re.IGNORECASE)
 BRACED_MENTION_PATTERN = re.compile(r"@\{([^{}\r\n]{1,50})\}")
 IMAGE_CONTENT_TYPES = {
@@ -54,6 +56,32 @@ def normalize_edited_message_body(message, payload: dict) -> str:
     if message.get("attachment_object_key"):
         return ""
     raise HTTPException(status_code=400, detail="Message body is required")
+
+
+def message_hidden_filter_sql(message_alias: str, *, scope: str, user_param: str = "user_id") -> str:
+    column = "direct_message_id" if scope == "direct" else "group_message_id"
+    return f"""
+      not exists (
+        select 1
+        from message_hidden_entries hidden
+        where hidden.user_id = :{user_param}
+          and hidden.{column} = {message_alias}.id
+      )
+    """
+
+
+def message_mutation_deadline(message) -> datetime:
+    created_at = message.get("created_at")
+    if not isinstance(created_at, datetime):
+        raise HTTPException(status_code=400, detail="Message timestamp is unavailable")
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return created_at + timedelta(seconds=MESSAGE_MUTATION_WINDOW_SECONDS)
+
+
+def require_message_mutation_window(message, *, action: str) -> None:
+    if datetime.now(timezone.utc) > message_mutation_deadline(message):
+        raise HTTPException(status_code=400, detail=f"Messages can only be {action} within 2 minutes")
 
 
 def normalize_recipient_id(value) -> int | None:
@@ -347,6 +375,7 @@ def serialize_message_row(row) -> dict:
     if "sender_group_nickname" in data:
         data["sender_group_nickname"] = sender_group_nickname or data.get("sender_username")
     data["is_deleted"] = bool(data.get("deleted_at"))
+    data["is_recalled"] = data["is_deleted"]
     if data["is_deleted"]:
         data["has_attachment"] = False
         data["attachment_id"] = None
@@ -882,6 +911,34 @@ def get_group_message_for_user(conn, *, message_id: int, user_id: int):
     return row
 
 
+def hide_direct_message_for_user(conn, *, message_id: int, user_id: int) -> None:
+    conn.execute(
+        text(
+            """
+            insert into message_hidden_entries(user_id, direct_message_id)
+            values (:user_id, :message_id)
+            on conflict (user_id, direct_message_id) do update
+            set hidden_at = excluded.hidden_at
+            """
+        ),
+        {"user_id": user_id, "message_id": message_id},
+    )
+
+
+def hide_group_message_for_user(conn, *, message_id: int, user_id: int) -> None:
+    conn.execute(
+        text(
+            """
+            insert into message_hidden_entries(user_id, group_message_id)
+            values (:user_id, :message_id)
+            on conflict (user_id, group_message_id) do update
+            set hidden_at = excluded.hidden_at
+            """
+        ),
+        {"user_id": user_id, "message_id": message_id},
+    )
+
+
 def message_attachment_response(row):
     if not row:
         raise HTTPException(status_code=404, detail="File not found")
@@ -910,6 +967,13 @@ def direct_message_unread_count(user=Depends(require_user)):
                 from direct_messages
                 where recipient_id = :user_id
                   and is_read = false
+                  and deleted_at is null
+                  and not exists (
+                    select 1
+                    from message_hidden_entries hidden
+                    where hidden.user_id = :user_id
+                      and hidden.direct_message_id = direct_messages.id
+                  )
                 """
             ),
             {"user_id": user["id"]},
@@ -928,6 +992,13 @@ def direct_message_unread_count(user=Depends(require_user)):
                 where gm.sender_id <> :user_id
                   and gm.created_at >= mgm.joined_at
                   and gm.id > coalesce(gmr.last_read_message_id, 0)
+                  and gm.deleted_at is null
+                  and not exists (
+                    select 1
+                    from message_hidden_entries hidden
+                    where hidden.user_id = :user_id
+                      and hidden.group_message_id = gm.id
+                  )
                 """
             ),
             {"user_id": user["id"]},
@@ -1008,8 +1079,11 @@ def list_message_conversations(limit: int = 50, q: str = "", include_archived: b
                         else dm.sender_id
                       end as peer_id
                     from direct_messages dm
-                    where dm.sender_id = :user_id
-                       or dm.recipient_id = :user_id
+                    where (
+                        dm.sender_id = :user_id
+                        or dm.recipient_id = :user_id
+                      )
+                      and {message_hidden_filter_sql("dm", scope="direct")}
                   ),
                   ranked as (
                     select
@@ -1021,11 +1095,13 @@ def list_message_conversations(limit: int = 50, q: str = "", include_archived: b
                     from scoped
                   ),
                   unread as (
-                    select sender_id as peer_id, count(*) as unread_count
-                    from direct_messages
-                    where recipient_id = :user_id
-                      and is_read = false
-                    group by sender_id
+                    select dm.sender_id as peer_id, count(*) as unread_count
+                    from direct_messages dm
+                    where dm.recipient_id = :user_id
+                      and dm.is_read = false
+                      and dm.deleted_at is null
+                      and {message_hidden_filter_sql("dm", scope="direct")}
+                    group by dm.sender_id
                   )
                   select
                     'direct' as conversation_type,
@@ -1103,6 +1179,8 @@ def list_message_conversations(limit: int = 50, q: str = "", include_archived: b
                     where gm.sender_id <> :user_id
                       and gm.created_at >= mgm.joined_at
                       and gm.id > coalesce(gmr.last_read_message_id, 0)
+                      and gm.deleted_at is null
+                      and {message_hidden_filter_sql("gm", scope="group")}
                     group by gm.group_id
                   )
                   select
@@ -1146,6 +1224,7 @@ def list_message_conversations(limit: int = 50, q: str = "", include_archived: b
                     from group_messages gm
                     where gm.group_id = g.id
                       and gm.created_at >= g.joined_at
+                      and {message_hidden_filter_sql("gm", scope="group")}
                     order by gm.created_at desc, gm.id desc
                     limit 1
                   ) last_message on true
@@ -1245,6 +1324,7 @@ def get_message_conversation(
                         (sender_id = :user_id and recipient_id = :peer_id)
                         or (sender_id = :peer_id and recipient_id = :user_id)
                       )
+                      and {message_hidden_filter_sql("direct_messages", scope="direct")}
                     """
                 ),
                 {"user_id": user["id"], "peer_id": peer_id, "before_id": before_id},
@@ -1303,6 +1383,7 @@ def get_message_conversation(
                     (dm.sender_id = :user_id and dm.recipient_id = :peer_id)
                     or (dm.sender_id = :peer_id and dm.recipient_id = :user_id)
                   )
+                  and {message_hidden_filter_sql("dm", scope="direct")}
                   {before_filter}
                   order by dm.created_at desc, dm.id desc
                   limit :limit
@@ -1488,6 +1569,7 @@ def get_group_message_conversation(
                     where id = :before_id
                       and group_id = :group_id
                       and created_at >= :joined_at
+                      and {message_hidden_filter_sql("group_messages", scope="group")}
                     """
                 ),
                 {"group_id": group_id, "joined_at": group["joined_at"], "before_id": before_id},
@@ -1551,6 +1633,7 @@ def get_group_message_conversation(
                   left join users reply_sender on reply_sender.id = reply.sender_id
                   where gm.group_id = :group_id
                     and gm.created_at >= :joined_at
+                    and {message_hidden_filter_sql("gm", scope="group")}
                   {before_filter}
                   order by gm.created_at desc, gm.id desc
                   limit :limit
@@ -2201,6 +2284,12 @@ def get_direct_message_attachment(message_id: int, user=Depends(require_user)):
                   and (sender_id = :user_id or recipient_id = :user_id)
                   and attachment_object_key is not null
                   and deleted_at is null
+                  and not exists (
+                    select 1
+                    from message_hidden_entries hidden
+                    where hidden.user_id = :user_id
+                      and hidden.direct_message_id = direct_messages.id
+                  )
                 """
             ),
             {"message_id": message_id, "user_id": user["id"]},
@@ -2229,6 +2318,12 @@ def get_group_message_attachment(message_id: int, user=Depends(require_user)):
                   and gm.created_at >= mgm.joined_at
                   and gm.attachment_object_key is not null
                   and gm.deleted_at is null
+                  and not exists (
+                    select 1
+                    from message_hidden_entries hidden
+                    where hidden.user_id = :user_id
+                      and hidden.group_message_id = gm.id
+                  )
                 """
             ),
             {"message_id": message_id, "user_id": user["id"]},
@@ -2392,7 +2487,8 @@ def edit_direct_message(message_id: int, payload: dict, user=Depends(require_use
         if int(message["sender_id"]) != int(user["id"]):
             raise HTTPException(status_code=403, detail="Only the sender can edit this message")
         if message["deleted_at"]:
-            raise HTTPException(status_code=400, detail="Deleted messages cannot be edited")
+            raise HTTPException(status_code=400, detail="Recalled messages cannot be edited")
+        require_message_mutation_window(message, action="edited")
         body = normalize_edited_message_body(message, payload)
         conn.execute(
             text(
@@ -2408,25 +2504,35 @@ def edit_direct_message(message_id: int, payload: dict, user=Depends(require_use
     return {"ok": True, "message_id": message_id}
 
 
-@router.delete("/api/messages/direct-messages/{message_id}")
-def delete_direct_message(message_id: int, user=Depends(require_user)):
+@router.post("/api/messages/direct-messages/{message_id}/recall")
+def recall_direct_message(message_id: int, user=Depends(require_user)):
     with engine.begin() as conn:
         message = get_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
         if int(message["sender_id"]) != int(user["id"]):
-            raise HTTPException(status_code=403, detail="Only the sender can delete this message")
+            raise HTTPException(status_code=403, detail="Only the sender can recall this message")
+        if message["deleted_at"]:
+            return {"ok": True, "message_id": message_id, "recalled": True}
+        require_message_mutation_window(message, action="recalled")
         conn.execute(
             text(
                 """
                 update direct_messages
-                set deleted_at = coalesce(deleted_at, now()),
-                    deleted_by_user_id = coalesce(deleted_by_user_id, :user_id),
-                    edited_at = now()
+                set deleted_at = now(),
+                    deleted_by_user_id = :user_id
                 where id = :message_id
                 """
             ),
             {"message_id": message_id, "user_id": user["id"]},
         )
-    return {"ok": True, "message_id": message_id, "deleted": True}
+    return {"ok": True, "message_id": message_id, "recalled": True}
+
+
+@router.delete("/api/messages/direct-messages/{message_id}")
+def delete_direct_message(message_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        get_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
+        hide_direct_message_for_user(conn, message_id=message_id, user_id=user["id"])
+    return {"ok": True, "message_id": message_id, "deleted_for_me": True}
 
 
 @router.patch("/api/messages/group-messages/{message_id}")
@@ -2436,7 +2542,8 @@ def edit_group_message(message_id: int, payload: dict, user=Depends(require_user
         if int(message["sender_id"]) != int(user["id"]):
             raise HTTPException(status_code=403, detail="Only the sender can edit this message")
         if message["deleted_at"]:
-            raise HTTPException(status_code=400, detail="Deleted messages cannot be edited")
+            raise HTTPException(status_code=400, detail="Recalled messages cannot be edited")
+        require_message_mutation_window(message, action="edited")
         body = normalize_edited_message_body(message, payload)
         conn.execute(
             text(
@@ -2452,26 +2559,35 @@ def edit_group_message(message_id: int, payload: dict, user=Depends(require_user
     return {"ok": True, "message_id": message_id}
 
 
-@router.delete("/api/messages/group-messages/{message_id}")
-def delete_group_message(message_id: int, user=Depends(require_user)):
+@router.post("/api/messages/group-messages/{message_id}/recall")
+def recall_group_message(message_id: int, user=Depends(require_user)):
     with engine.begin() as conn:
         message = get_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
-        can_delete = int(message["sender_id"]) == int(user["id"]) or str(message["current_member_role"]) == "OWNER"
-        if not can_delete:
-            raise HTTPException(status_code=403, detail="You do not have permission to delete this message")
+        if int(message["sender_id"]) != int(user["id"]):
+            raise HTTPException(status_code=403, detail="Only the sender can recall this message")
+        if message["deleted_at"]:
+            return {"ok": True, "message_id": message_id, "recalled": True}
+        require_message_mutation_window(message, action="recalled")
         conn.execute(
             text(
                 """
                 update group_messages
-                set deleted_at = coalesce(deleted_at, now()),
-                    deleted_by_user_id = coalesce(deleted_by_user_id, :user_id),
-                    edited_at = now()
+                set deleted_at = now(),
+                    deleted_by_user_id = :user_id
                 where id = :message_id
                 """
             ),
             {"message_id": message_id, "user_id": user["id"]},
         )
-    return {"ok": True, "message_id": message_id, "deleted": True}
+    return {"ok": True, "message_id": message_id, "recalled": True}
+
+
+@router.delete("/api/messages/group-messages/{message_id}")
+def delete_group_message(message_id: int, user=Depends(require_user)):
+    with engine.begin() as conn:
+        get_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
+        hide_group_message_for_user(conn, message_id=message_id, user_id=user["id"])
+    return {"ok": True, "message_id": message_id, "deleted_for_me": True}
 
 
 @router.post("/api/messages/conversations/{peer_id}/read")

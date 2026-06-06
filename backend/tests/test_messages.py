@@ -1,9 +1,12 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import HTTPException
 
 from app.routers.messages import (
     build_group_payload,
     clamp_limit,
+    delete_direct_message,
     edit_direct_message,
     extract_message_mentions,
     list_message_conversations,
@@ -14,7 +17,9 @@ from app.routers.messages import (
     normalize_message_cursor,
     normalize_edited_message_body,
     normalize_optional_message_body,
+    recall_direct_message,
     report_message,
+    require_message_mutation_window,
     require_group_owner,
     safe_attachment_filename,
     trim_message_page,
@@ -230,6 +235,7 @@ def test_edit_direct_message_allows_empty_attachment_caption(monkeypatch):
             "sender_id": 9,
             "deleted_at": None,
             "attachment_object_key": "messages/demo.bin",
+            "created_at": datetime.now(timezone.utc),
         },
     )
 
@@ -239,6 +245,55 @@ def test_edit_direct_message_allows_empty_attachment_caption(monkeypatch):
     assert len(conn.calls) == 1
     _, params = conn.calls[0]
     assert params == {"message_id": 15, "body_md": ""}
+
+
+def test_require_message_mutation_window_rejects_expired_message():
+    with pytest.raises(HTTPException) as excinfo:
+        require_message_mutation_window(
+            {"created_at": datetime.now(timezone.utc) - timedelta(minutes=3)},
+            action="edited",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == "Messages can only be edited within 2 minutes"
+
+
+def test_recall_direct_message_marks_message_recalled(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_direct_message_for_user",
+        lambda *_args, **_kwargs: {
+            "sender_id": 9,
+            "deleted_at": None,
+            "created_at": datetime.now(timezone.utc),
+        },
+    )
+
+    result = recall_direct_message(15, user={"id": 9})
+
+    assert result == {"ok": True, "message_id": 15, "recalled": True}
+    assert len(conn.calls) == 1
+    _, params = conn.calls[0]
+    assert params == {"message_id": 15, "user_id": 9}
+
+
+def test_delete_direct_message_hides_message_for_current_user(monkeypatch):
+    conn = _FakeConn()
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_direct_message_for_user",
+        lambda *_args, **_kwargs: {"sender_id": 7},
+    )
+
+    result = delete_direct_message(15, user={"id": 9})
+
+    assert result == {"ok": True, "message_id": 15, "deleted_for_me": True}
+    assert len(conn.calls) == 1
+    _, params = conn.calls[0]
+    assert params == {"user_id": 9, "message_id": 15}
 
 
 def test_report_message_rejects_reporting_own_direct_message(monkeypatch):
