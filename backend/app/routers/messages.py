@@ -1886,6 +1886,7 @@ def get_message_conversation(
     peer_id: int,
     limit: int = 100,
     before_id: int | None = None,
+    mark_read: bool = True,
     user=Depends(require_user),
 ):
     if peer_id == user["id"]:
@@ -2042,19 +2043,20 @@ def get_message_conversation(
                 None,
             )
             first_unread_message_id = int(unread_row["id"]) if unread_row else None
-            conn.execute(
-                text(
-                    """
-                    update direct_messages
-                    set is_read = true,
-                        read_at = coalesce(read_at, now())
-                    where sender_id = :peer_id
-                      and recipient_id = :user_id
-                      and is_read = false
-                    """
-                ),
-                {"peer_id": peer_id, "user_id": user["id"]},
-            )
+            if mark_read:
+                conn.execute(
+                    text(
+                        """
+                        update direct_messages
+                        set is_read = true,
+                            read_at = coalesce(read_at, now())
+                        where sender_id = :peer_id
+                          and recipient_id = :user_id
+                          and is_read = false
+                        """
+                    ),
+                    {"peer_id": peer_id, "user_id": user["id"]},
+                )
 
     with engine.connect() as conn:
         message_rows = hydrate_message_rows(conn, trimmed_rows, user_id=user["id"])
@@ -2215,6 +2217,7 @@ def get_group_message_conversation(
     group_id: int,
     limit: int = 100,
     before_id: int | None = None,
+    mark_read: bool = True,
     user=Depends(require_user),
 ):
     limit = clamp_limit(limit, default=100, max_value=200)
@@ -2346,13 +2349,14 @@ def get_group_message_conversation(
     if before_id is None:
         unread_row = next((row for row in trimmed_rows if bool(row.get("was_unread"))), None)
         first_unread_message_id = int(unread_row["id"]) if unread_row else None
-        with engine.begin() as conn:
-            mark_group_messages_read(
-                conn,
-                group_id=group_id,
-                user_id=user["id"],
-                joined_at=group["joined_at"],
-            )
+        if mark_read:
+            with engine.begin() as conn:
+                mark_group_messages_read(
+                    conn,
+                    group_id=group_id,
+                    user_id=user["id"],
+                    joined_at=group["joined_at"],
+                )
 
     group_payload = apply_conversation_preferences_payload(build_group_payload(group, members), preferences)
     return {

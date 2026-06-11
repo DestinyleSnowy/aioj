@@ -57,6 +57,7 @@ const state = {
   messageReplyTarget: null,
   messageThreadItems: [],
   messageThreadFirstUnreadId: 0,
+  messageDeferredReadConversationKey: '',
   messageTransientItems: new Map(),
   messageActionMenuCleanup: null,
   messageEmojiPanelConversationKey: '',
@@ -3697,13 +3698,31 @@ function currentMessageConversationKey(options = {}) {
   return messageConversationFromPath(location.pathname, options).key;
 }
 
+function shouldMarkMessageConversationRead(options = {}) {
+  if (typeof options.markRead === 'boolean') return options.markRead;
+  return !document.hidden;
+}
+
+function setDeferredMessageConversationRead(conversationKey = '', shouldDefer = false) {
+  const key = parseMessageConversationKey(conversationKey).key;
+  if (!key) {
+    state.messageDeferredReadConversationKey = '';
+    return;
+  }
+  if (shouldDefer) {
+    state.messageDeferredReadConversationKey = key;
+  } else if (state.messageDeferredReadConversationKey === key) {
+    state.messageDeferredReadConversationKey = '';
+  }
+}
+
 function messageConversationPath(target) {
   const parsed = parseMessageConversationKey(target);
   if (!parsed.id) return '/messages';
   return parsed.type === 'group' ? `/messages/groups/${parsed.id}` : `/messages/${parsed.id}`;
 }
 
-function messageConversationApiPath(target, { beforeId = null } = {}) {
+function messageConversationApiPath(target, { beforeId = null, markRead = null } = {}) {
   const parsed = parseMessageConversationKey(target);
   if (!parsed.id) return '';
   const base = parsed.type === 'group'
@@ -3711,6 +3730,7 @@ function messageConversationApiPath(target, { beforeId = null } = {}) {
     : `/api/messages/conversations/${parsed.id}`;
   const params = new URLSearchParams({ limit: String(MESSAGE_THREAD_PAGE_SIZE) });
   if (beforeId) params.set('before_id', String(beforeId));
+  if (typeof markRead === 'boolean') params.set('mark_read', markRead ? '1' : '0');
   return `${base}?${params.toString()}`;
 }
 
@@ -4364,6 +4384,22 @@ async function pollMessageUnreadState() {
   updateMessageConversationSidebar(conversations, conversationKey);
   if (!conversationKey) return;
   const active = conversations.find(c => (c.conversation_key || messageConversationKey(c.conversation_type, c.group_id || c.peer_id)) === conversationKey);
+  const activeUnreadCount = Number(active?.unread_count || 0);
+  if (document.hidden) {
+    setDeferredMessageConversationRead(conversationKey, activeUnreadCount > 0);
+    updateMessageThreadUnreadBadge(activeUnreadCount);
+    return;
+  }
+  if (state.messageDeferredReadConversationKey === conversationKey && activeUnreadCount > 0) {
+    await refreshMessages(conversationKey, {
+      preserveComposer: true,
+      focusComposer: false,
+      scrollToBottom: false,
+      markRead: true,
+    });
+    updateMessageThreadUnreadBadge(0);
+    return;
+  }
   const list = $('messageThreadList');
   const currentNewestId = newestRenderedMessageId(list);
   const currentNewestMessage = currentThreadMessage(currentNewestId);
@@ -4379,11 +4415,16 @@ async function pollMessageUnreadState() {
     || activeSummaryChanged
   );
   if (shouldRefreshThread) {
-    await refreshMessages(conversationKey, { preserveComposer: true, focusComposer: false, scrollToBottom: true });
+    await refreshMessages(conversationKey, {
+      preserveComposer: true,
+      focusComposer: false,
+      scrollToBottom: true,
+      markRead: true,
+    });
     updateMessageThreadUnreadBadge(0);
     return;
   }
-  updateMessageThreadUnreadBadge(Number(active?.unread_count || 0));
+  updateMessageThreadUnreadBadge(activeUnreadCount);
 }
 
 function ensureMessageAutoRefresh() {
@@ -4462,20 +4503,30 @@ async function renderMessages(target = null, options = {}) {
       state.messageEventSignature = '';
     }
     let thread = null;
+    const shouldMarkRead = !!selected.id && shouldMarkMessageConversationRead(options);
 
     if (selected.id) {
-      thread = await api(messageConversationApiPath(selected.key), { headers: authHeaders() });
-      conversations.forEach((item) => {
-        const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
-        if (itemKey === selected.key) item.unread_count = 0;
-      });
-      await refreshMessageCount();
+      thread = await api(messageConversationApiPath(selected.key, { markRead: shouldMarkRead }), { headers: authHeaders() });
+      if (shouldMarkRead) {
+        conversations.forEach((item) => {
+          const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
+          if (itemKey === selected.key) item.unread_count = 0;
+        });
+        setDeferredMessageConversationRead(selected.key, false);
+        await refreshMessageCount();
+      }
     }
 
-    const activeConversation = thread?.peer || thread?.group || conversations.find((item) => {
+    const activeConversationSummary = conversations.find((item) => {
       const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
       return itemKey === selected.key;
     });
+    const activeConversation = thread?.peer || thread?.group || activeConversationSummary;
+    const activeUnreadCount = Number(activeConversationSummary?.unread_count || 0);
+    setDeferredMessageConversationRead(
+      selected.key,
+      !!selected.id && !shouldMarkRead && (activeUnreadCount > 0 || Number(thread?.first_unread_message_id || 0) > 0),
+    );
     const threadItems = thread?.items || [];
     const combinedThreadItems = [...threadItems, ...transientMessagesForConversation(selected.key)];
     state.messageThreadItems = combinedThreadItems;
@@ -4572,7 +4623,7 @@ async function renderMessages(target = null, options = {}) {
     if (!selected.key) state.messageReplyTarget = null;
     updateMessageReplyBanner();
 
-    updateMessageThreadUnreadBadge(0);
+    updateMessageThreadUnreadBadge(shouldMarkRead ? 0 : activeUnreadCount);
     if (selected.id && activeConversation) {
       const scrolledToUnread = state.messageThreadFirstUnreadId
         && options.preferUnread !== false
@@ -10172,6 +10223,13 @@ function route() {
 // ─── Dom Initialize ─────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   initSidebarMode();
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !state.user || !location.pathname.startsWith('/messages') || state.messageRefreshInFlight) return;
+    state.messageRefreshInFlight = true;
+    void pollMessageUnreadState().finally(() => {
+      state.messageRefreshInFlight = false;
+    });
+  });
 
   $('authBtn').addEventListener('click', () => showAuthModal());
   $('logoutBtn').addEventListener('click', logout);

@@ -609,6 +609,75 @@ def test_get_message_conversation_reports_first_unread_message_id(monkeypatch):
     assert "update direct_messages" in conn.calls[2][0].lower()
 
 
+def test_get_message_conversation_can_skip_mark_read(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn = _SequenceConn(
+        [
+            {
+                "id": 8,
+                "username": "peer",
+                "role": "USER",
+                "avatar_object_key": None,
+                "avatar_updated_at": None,
+                "is_disabled": False,
+            },
+            [
+                {
+                    "id": 11,
+                    "sender_id": 8,
+                    "sender_username": "peer",
+                    "sender_avatar_object_key": None,
+                    "sender_avatar_updated_at": None,
+                    "recipient_id": 3,
+                    "recipient_username": "me",
+                    "recipient_avatar_object_key": None,
+                    "recipient_avatar_updated_at": None,
+                    "body_md": "hello",
+                    "reply_to_message_id": None,
+                    "has_attachment": False,
+                    "attachment_id": None,
+                    "attachment_content_type": None,
+                    "attachment_filename": None,
+                    "attachment_size_bytes": None,
+                    "is_read": False,
+                    "created_at": now,
+                    "read_at": None,
+                    "edited_at": None,
+                    "deleted_at": None,
+                    "deleted_by_user_id": None,
+                    "reply_to_body_md": None,
+                    "reply_to_has_attachment": False,
+                    "reply_to_attachment_content_type": None,
+                    "reply_to_attachment_filename": None,
+                    "reply_to_deleted_at": None,
+                    "reply_to_sender_username": None,
+                }
+            ],
+        ]
+    )
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_user_block_state",
+        lambda *_args, **_kwargs: {"is_blocked_by_me": False, "has_blocked_me": False},
+    )
+    monkeypatch.setattr(
+        "app.routers.messages.get_user_message_preferences",
+        lambda *_args, **_kwargs: {"dm_policy": "EVERYONE"},
+    )
+    monkeypatch.setattr(
+        "app.routers.messages.get_conversation_preferences",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr("app.routers.messages.hydrate_message_rows", lambda _conn, rows, **_kwargs: rows)
+
+    result = get_message_conversation(8, mark_read=False, user={"id": 3})
+
+    assert result["first_unread_message_id"] == 11
+    assert len(conn.calls) == 2
+    assert all("update direct_messages" not in call[0].lower() for call in conn.calls)
+
+
 def test_get_group_message_conversation_before_cursor_expands_hidden_filter_sql(monkeypatch):
     now = datetime.now(timezone.utc)
     conn = _SequenceConn(
@@ -644,6 +713,36 @@ def test_get_group_message_conversation_before_cursor_expands_hidden_filter_sql(
     anchor_statement = conn.calls[1][0]
     assert "{message_hidden_filter_sql" not in anchor_statement
     assert "message_hidden_entries" in anchor_statement
+
+
+def test_get_group_message_conversation_can_skip_mark_read(monkeypatch):
+    now = datetime.now(timezone.utc)
+    conn = _SequenceConn([0, []])
+
+    monkeypatch.setattr("app.routers.messages.engine", _FakeEngine(conn))
+    monkeypatch.setattr(
+        "app.routers.messages.get_group_membership",
+        lambda *_args, **_kwargs: {
+            "id": 5,
+            "name": "team",
+            "owner_id": 3,
+            "created_at": now,
+            "updated_at": now,
+            "member_role": "OWNER",
+            "group_nickname": "Captain",
+            "joined_at": now - timedelta(days=1),
+            "member_count": 2,
+        },
+    )
+    monkeypatch.setattr("app.routers.messages.get_conversation_preferences", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("app.routers.messages.list_group_members", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("app.routers.messages.hydrate_message_rows", lambda _conn, rows, **_kwargs: rows)
+
+    result = get_group_message_conversation(5, mark_read=False, user={"id": 3})
+
+    assert result["first_unread_message_id"] is None
+    assert len(conn.calls) == 2
+    assert all("insert into group_message_reads" not in call[0].lower() for call in conn.calls)
 
 
 def test_hydrate_message_rows_adds_reactions_favorites_and_group_reads():
