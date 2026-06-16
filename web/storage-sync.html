@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Storage Sync</title>
+</head>
+<body>
+  <script>
+    const ALLOWED_ORIGINS = [
+      'https://yxyx.space',
+      'https://www.yxyx.space',
+      'https://hello.yxyx.space'
+    ];
+
+    window.addEventListener('message', (event) => {
+      if (!ALLOWED_ORIGINS.includes(event.origin)) return;
+
+      const { action, key, value } = event.data || {};
+      
+      if (action === 'get') {
+        const stored = localStorage.getItem(key);
+        event.source.postMessage({ action: 'get_response', key, value: stored }, event.origin);
+      } else if (action === 'set') {
+        localStorage.setItem(key, value);
+      }
+    });
+
+    // Notify parent that the iframe is ready
+    if (window.parent && window.parent !== window) {
+      window.parent.postMessage({ action: 'ready' }, '*');
+    }
+  </script>
+</body>
+</html>
