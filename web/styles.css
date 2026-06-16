@@ -4479,8 +4479,8 @@ body.chat-only-mode {
   --bg-elevated: #1a1a1a;
 
   --text-main: #fff;
-  --text-secondary: #999;
-  --text-muted: #555;
+  --text-secondary: #ccc;
+  --text-muted: #888;
   --text-inverse: #000;
 
   --border-subtle: 1px solid #222;
@@ -4488,11 +4488,11 @@ body.chat-only-mode {
   --border-glow: 1px solid #333;
 
   --color-primary: #fff;
-  --color-accent: #999;
+  --color-accent: #ccc;
   --color-success: #fff;
   --color-warning: #fff;
   --color-danger: #e55;
-  --color-info: #999;
+  --color-info: #ccc;
 
   --bg-accent-subtle: rgba(255,255,255,0.03);
   --bg-success-subtle: rgba(255,255,255,0.03);
@@ -4546,7 +4546,7 @@ body.chat-only-mode .sidebar-footer .user-avatar {
   box-shadow: none !important;
 }
 body.chat-only-mode .sidebar .nav-link {
-  color: #999 !important;
+  color: #ccc !important;
   border: none !important;
   border-radius: 8px !important;
   transition: all 0.15s ease !important;
@@ -4585,7 +4585,7 @@ body.chat-only-mode .user-dropdown {
   box-shadow: 0 8px 30px rgba(0,0,0,0.8) !important;
 }
 body.chat-only-mode .dropdown-item {
-  color: #999 !important;
+  color: #ccc !important;
 }
 body.chat-only-mode .dropdown-item:hover {
   background: #111 !important;
@@ -4619,7 +4619,7 @@ body.chat-only-mode .btn-secondary:hover {
 
 body.chat-only-mode .message-scroll-bottom-btn {
   background: #111 !important;
-  color: #999 !important;
+  color: #bbb !important;
   border: 1px solid #222 !important;
   border-radius: 20px !important;
   padding: 6px 14px !important;
@@ -4693,8 +4693,11 @@ body.chat-only-mode .message-conversation-top strong {
   color: #fff !important;
   font-weight: 500 !important;
 }
+body.chat-only-mode .message-conversation-top span {
+  color: #888 !important;
+}
 body.chat-only-mode .message-preview {
-  color: #555 !important;
+  color: #999 !important;
 }
 body.chat-only-mode .message-unread-dot {
   background: #fff !important;
@@ -4704,23 +4707,42 @@ body.chat-only-mode .message-unread-dot {
 
 /* ── Chat bubbles ── */
 body.chat-only-mode .message-bubble {
-  background: #161616 !important;
+  background: #1c1c1e !important;
   border: none !important;
   border-radius: 16px !important;
   padding: 10px 16px !important;
-  color: #ddd !important;
+  color: #fff !important;
   box-shadow: none !important;
 }
+body.chat-only-mode .message-bubble,
+body.chat-only-mode .message-bubble * {
+  color: #fff !important;
+}
+body.chat-only-mode .message-bubble a {
+  color: #38bdf8 !important;
+  text-decoration: underline !important;
+}
 body.chat-only-mode .message-row.mine .message-bubble {
-  background: #252525 !important;
+  background: #2c2c2e !important;
   color: #fff !important;
   border: none !important;
   box-shadow: none !important;
 }
+body.chat-only-mode .message-row.mine .message-bubble * {
+  color: #fff !important;
+}
+body.chat-only-mode .message-row.mine .message-bubble a {
+  color: #38bdf8 !important;
+  text-decoration: underline !important;
+}
 
 body.chat-only-mode .message-sender-name {
-  color: #666 !important;
+  color: #aaa !important;
   font-weight: 600 !important;
+}
+
+body.chat-only-mode .message-meta {
+  color: #888 !important;
 }
 
 /* ── Avatars ── */
