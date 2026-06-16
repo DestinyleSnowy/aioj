@@ -4741,7 +4741,8 @@ body.chat-only-mode .message-sender-name {
   font-weight: 600 !important;
 }
 
-body.chat-only-mode .message-meta {
+body.chat-only-mode .message-meta,
+body.chat-only-mode .message-meta * {
   color: #666 !important;
 }
 
