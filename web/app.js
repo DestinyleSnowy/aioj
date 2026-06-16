@@ -10169,57 +10169,20 @@ function route() {
   app.className = 'content animate-fade-in';
 
   // Route matching
-  if (path === '/') return renderDashboard();
-  if (path === '/problems') return renderProblems();
-  if (path === '/contests') return renderContests();
-  if (path === '/submissions') return renderSubmissions();
-  if (path === '/notifications') return renderNotifications();
-  if (path === '/messages') return renderMessages();
-  if (path === '/account') return renderAccount();
-  if (path === '/admin/users' || path === '/users') return renderUsers();
-  if (path === '/admin/audit') return renderAuditLogs();
-  if (path === '/judge-admin') return renderJudgeAdmin();
-  if (path === '/problem-admin') return renderProblemAdmin();
-  if (path === '/edit') return renderProblemEditIndex();
-  if (path === '/contest-admin') return renderContestAdmin();
+  if (path === '/' || path === '/messages') return renderMessages();
 
   // Parameterized routes
   let match;
-  if ((match = path.match(/^\/edit\/([^/]+)$/))) {
-    return renderProblemEditorPage(decodeURIComponent(match[1]));
-  }
-  if ((match = path.match(/^\/contests\/([^/]+)\/problems\/([^/]+)$/))) {
-    return renderProblemDetail(match[2], match[1]);
-  }
   if ((match = path.match(/^\/messages\/groups\/(\d+)$/))) {
     return renderMessages(`group:${match[1]}`);
   }
   if ((match = path.match(/^\/messages\/(\d+)$/))) {
     return renderMessages(`direct:${match[1]}`);
   }
-  if ((match = path.match(/^\/users\/([^/]+)$/))) {
-    return renderUserProfile(decodeURIComponent(match[1]));
-  }
-  if ((match = path.match(/^\/contests\/([^/]+)$/))) {
-    return renderContestDetail(match[1]);
-  }
-  if ((match = path.match(/^\/problems\/([^/]+)$/))) {
-    return renderProblemDetail(match[1]);
-  }
-  if ((match = path.match(/^\/submissions\/(\d+)$/))) {
-    return renderSubmissionDetail(match[1]);
-  }
 
-  // 404 handler
-  setPage('异常访问');
-  app.innerHTML = `
-    <div class="empty-state">
-      <div class="empty-icon">🔍</div>
-      <h2 style="font-family: var(--font-display); font-size: 20px; font-weight:700; margin-bottom: 6px;">工作区不存在</h2>
-      <p class="text-muted" style="margin-bottom: 16px;">您访问的路由指向了系统未定义的核心节点，请核对地址栏 URL</p>
-      <a href="/" class="btn btn-primary" data-link>回到平台首页</a>
-    </div>
-  `;
+  // Redirect any other paths to root which renders messages
+  history.replaceState(null, '', '/');
+  return renderMessages();
 }
 
 // ─── Dom Initialize ─────────────────────────────────────────────────────────
