@@ -10210,7 +10210,11 @@ function route() {
   }
 
   if (window.location.hostname === 'hello.yxyx.space') {
-    const isMessagesPath = path === '/' || path === '/messages' || /^\/messages\/(?:groups\/\d+|\d+)$/.test(path);
+    if (path === '/messages') {
+      history.replaceState(null, '', '/');
+      path = '/';
+    }
+    const isMessagesPath = path === '/' || /^\/messages\/(?:groups\/\d+|\d+)$/.test(path);
     if (!isMessagesPath) {
       history.replaceState(null, '', '/');
       path = '/';
@@ -10218,7 +10222,8 @@ function route() {
   } else {
     // If we are on the main site (e.g. yxyx.space), clicking messages should redirect to hello.yxyx.space
     if (path === '/messages' || path.startsWith('/messages/')) {
-      window.location.href = `https://hello.yxyx.space${path}`;
+      const targetPath = path === '/messages' ? '/' : path;
+      window.location.href = `https://hello.yxyx.space${targetPath}`;
       return;
     }
   }
