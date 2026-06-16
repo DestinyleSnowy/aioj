@@ -4694,7 +4694,7 @@ body.chat-only-mode .message-conversation-top strong {
   font-weight: 500 !important;
 }
 body.chat-only-mode .message-conversation-top span {
-  color: #888 !important;
+  color: #666 !important;
 }
 body.chat-only-mode .message-preview {
   color: #999 !important;
@@ -4742,7 +4742,7 @@ body.chat-only-mode .message-sender-name {
 }
 
 body.chat-only-mode .message-meta {
-  color: #888 !important;
+  color: #666 !important;
 }
 
 /* ── Avatars ── */
