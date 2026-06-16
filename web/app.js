@@ -23,8 +23,59 @@ initTheme();
 // ─── Utilities ──────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
 
+function getCookie(name) {
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length === 2) return parts.pop().split(';').shift();
+  return '';
+}
+
+function setCookie(name, value, days) {
+  let expires = "";
+  if (days) {
+    const date = new Date();
+    date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+    expires = "; expires=" + date.toUTCString();
+  }
+  const host = window.location.hostname;
+  const domain = host.endsWith('yxyx.space') ? "; domain=.yxyx.space" : "";
+  document.cookie = name + "=" + (value || "") + expires + "; path=/" + domain + "; SameSite=Lax; Secure";
+}
+
+function eraseCookie(name) {
+  const host = window.location.hostname;
+  const domain = host.endsWith('yxyx.space') ? "; domain=.yxyx.space" : "";
+  document.cookie = name + '=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;' + domain + "; SameSite=Lax; Secure";
+}
+
+const originalSetItem = localStorage.setItem.bind(localStorage);
+const originalRemoveItem = localStorage.removeItem.bind(localStorage);
+
+localStorage.setItem = function(key, value) {
+  originalSetItem(key, value);
+  if (key === 'aioj_token') {
+    setCookie('aioj_token', value, 7);
+  }
+};
+
+localStorage.removeItem = function(key) {
+  originalRemoveItem(key);
+  if (key === 'aioj_token') {
+    eraseCookie('aioj_token');
+  }
+};
+
 const state = {
-  token: localStorage.getItem('aioj_token') || '',
+  token: (() => {
+    const cookieTok = getCookie('aioj_token');
+    const localTok = localStorage.getItem('aioj_token');
+    const tok = cookieTok || localTok || '';
+    if (tok) {
+      if (!cookieTok) setCookie('aioj_token', tok, 7);
+      if (!localTok) originalSetItem('aioj_token', tok);
+    }
+    return tok;
+  })(),
   user: null,
   healthOk: false,
   currentRoute: '',
@@ -10163,6 +10214,12 @@ function route() {
     if (!isMessagesPath) {
       history.replaceState(null, '', '/');
       path = '/';
+    }
+  } else {
+    // If we are on the main site (e.g. yxyx.space), clicking messages should redirect to hello.yxyx.space
+    if (path === '/messages' || path.startsWith('/messages/')) {
+      window.location.href = `https://hello.yxyx.space${path}`;
+      return;
     }
   }
 
