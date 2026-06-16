@@ -121,4 +121,4 @@ sudo systemctl enable --now aioj-judge-agent 2>/dev/null || true
 docker compose ps
 echo
 echo "Restore complete."
-echo "Open: https://yxyx.space/"
+echo "Open: https://chat.yxyx.space/"
