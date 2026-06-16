@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Chat — 在线聊天系统</title>
-  <meta name="description" content="一个简洁、智能、安全的在线聊天系统。" />
+  <title>AIOJ — AI Olympiad Judge</title>
+  <meta name="description" content="AIOJ 是一个面向 AI/ML 竞赛的智能在线评测平台，提供题目练习、比赛、排行榜等功能。" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -19,17 +19,17 @@
     <!-- Sidebar -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <a class="brand" href="/" data-link title="Chat">
+        <a class="brand" href="/" data-link title="AIOJ">
           <div class="brand-logo-container">
             <svg class="brand-logo-svg" viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
-              <path d="M8 9h8"></path>
-              <path d="M8 13h5"></path>
+              <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+              <path d="M2 17l10 5 10-5"></path>
+              <path d="M2 12l10 5 10-5"></path>
             </svg>
           </div>
           <div class="brand-text-container">
-            <div class="brand-title">Chat</div>
-            <div class="brand-subtitle">在线聊天</div>
+            <div class="brand-title">AIOJ</div>
+            <div class="brand-subtitle">AI Olympiad Judge</div>
           </div>
         </a>
 
@@ -44,6 +44,58 @@
       <nav class="nav" id="mainNav">
         <div class="nav-section-title">主要导航</div>
         
+        <a class="nav-link" data-route="/" href="/" data-link>
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="9"></rect>
+              <rect x="14" y="3" width="7" height="5"></rect>
+              <rect x="14" y="12" width="7" height="9"></rect>
+              <rect x="3" y="16" width="7" height="5"></rect>
+            </svg>
+          </span>
+          <span class="nav-text">平台概览</span>
+        </a>
+        
+        <a class="nav-link" data-route="/problems" href="/problems" data-link>
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+              <path d="M2 17l10 5 10-5"></path>
+              <path d="M2 12l10 5 10-5"></path>
+            </svg>
+          </span>
+          <span class="nav-text">公开题库</span>
+        </a>
+        
+        <a class="nav-link" data-route="/contests" href="/contests" data-link>
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="8" r="7"></circle>
+              <path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"></path>
+            </svg>
+          </span>
+          <span class="nav-text">竞技比赛</span>
+        </a>
+        
+        <a class="nav-link" data-route="/submissions" href="/submissions" data-link>
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+          </span>
+          <span class="nav-text">提交记录</span>
+        </a>
+
+        <a class="nav-link" data-route="/notifications" href="/notifications" data-link>
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"></path>
+              <path d="M9 17a3 3 0 0 0 6 0"></path>
+            </svg>
+          </span>
+          <span class="nav-text">通知中心</span>
+        </a>
+
         <a class="nav-link" data-route="/messages" href="/messages" data-link>
           <span class="nav-icon">
             <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -54,7 +106,80 @@
           </span>
           <span class="nav-text">聊天</span>
         </a>
+        
+        <a class="nav-link" data-route="/account" href="/account" data-link>
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </span>
+          <span class="nav-text">个人中心</span>
+        </a>
       </nav>
+
+      <div id="adminNav" style="display:none;">
+        <div class="nav-section-title">系统管理</div>
+        <nav class="nav">
+          <a class="nav-link" data-route="/admin/users" href="/admin/users" data-link>
+            <span class="nav-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+            </span>
+            <span class="nav-text">用户管理</span>
+          </a>
+          
+          <a class="nav-link" data-route="/problem-admin" href="/problem-admin" data-link>
+            <span class="nav-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+            </span>
+            <span class="nav-text">题目管理</span>
+          </a>
+          
+          <a class="nav-link" data-route="/contest-admin" href="/contest-admin" data-link>
+            <span class="nav-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+                <line x1="16" y1="2" x2="16" y2="6"></line>
+                <line x1="8" y1="2" x2="8" y2="6"></line>
+                <line x1="3" y1="10" x2="21" y2="10"></line>
+              </svg>
+            </span>
+            <span class="nav-text">比赛管理</span>
+          </a>
+
+          <a class="nav-link" data-route="/judge-admin" href="/judge-admin" data-link>
+            <span class="nav-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2l3 6 6 .9-4.5 4.4 1.1 6.2L12 16.8 6.4 19.5l1.1-6.2L3 8.9 9 8z"></path>
+                <path d="M12 8v4"></path>
+                <path d="M12 16h.01"></path>
+              </svg>
+            </span>
+            <span class="nav-text">评测运维</span>
+          </a>
+
+          <a class="nav-link" data-route="/admin/audit" href="/admin/audit" data-link>
+            <span class="nav-icon">
+              <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M9 11l3 3L22 4"></path>
+                <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+              </svg>
+            </span>
+            <span class="nav-text">审计日志</span>
+          </a>
+        </nav>
+      </div>
 
       <div class="sidebar-footer" id="sidebarUser">
         <span class="text-muted">未连接到账户</span>
@@ -75,7 +200,7 @@
           </button>
           
           <div class="page-title-box">
-            <h1 class="page-title" id="pageTitle">Chat</h1>
+            <h1 class="page-title" id="pageTitle">AIOJ</h1>
             <div class="page-subtitle" id="pageSubtitle"></div>
           </div>
         </div>
@@ -125,6 +250,13 @@
             <div class="user-dropdown-container" id="userDropdownContainer" style="display:none;">
               <div class="user-profile-capsule" id="userPill"></div>
               <div class="dropdown-menu" id="userDropdownMenu">
+                <a class="dropdown-item" href="/notifications" data-link>
+                  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 1 0-12 0v3.2a2 2 0 0 1-.6 1.4L4 17h5"></path>
+                    <path d="M9 17a3 3 0 0 0 6 0"></path>
+                  </svg>
+                  通知中心
+                </a>
                 <a class="dropdown-item" href="/messages" data-link>
                   <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
@@ -132,6 +264,21 @@
                     <path d="M8 13h5"></path>
                   </svg>
                   我的聊天
+                </a>
+                <a class="dropdown-item" id="profileHomeLink" href="/account" data-link>
+                  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M18 20a6 6 0 0 0-12 0"></path>
+                    <circle cx="12" cy="10" r="4"></circle>
+                    <circle cx="12" cy="12" r="10"></circle>
+                  </svg>
+                  个人主页
+                </a>
+                <a class="dropdown-item" href="/account" data-link>
+                  <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                  </svg>
+                  个人中心
                 </a>
                 <button class="dropdown-item text-danger" id="logoutBtn">
                   <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
