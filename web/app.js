@@ -1191,9 +1191,15 @@ function stopMessageAutoRefresh(options = {}) {
 function updateNav() {
   refreshDocumentTitle();
   const path = location.pathname || '/';
+  const isHello = window.location.hostname === 'hello.yxyx.space';
   document.querySelectorAll('.nav-link').forEach((a) => {
     const route = a.dataset.route || '/';
-    const active = route === '/' ? path === '/' : path.startsWith(route);
+    let active;
+    if (isHello) {
+      active = (route === '/messages');
+    } else {
+      active = route === '/' ? path === '/' : path.startsWith(route);
+    }
     a.classList.toggle('active', active);
   });
   
@@ -3737,7 +3743,21 @@ function messageConversationFromState() {
   return parseMessageConversationKey(state.messageActiveConversationKey || state.messageActivePeerId || '');
 }
 
+function isMessagesActivePath() {
+  if (window.location.hostname === 'hello.yxyx.space') {
+    return true;
+  }
+  return location.pathname.startsWith('/messages');
+}
+
 function messageConversationFromPath(path = location.pathname, { fallbackToState = false } = {}) {
+  const isHello = window.location.hostname === 'hello.yxyx.space';
+  if (isHello) {
+    let match = String(path || '').match(/^\/groups\/(\d+)$/);
+    if (match) return parseMessageConversationKey(`group:${match[1]}`);
+    match = String(path || '').match(/^\/(\d+)$/);
+    if (match) return parseMessageConversationKey(`direct:${match[1]}`);
+  }
   let match = String(path || '').match(/^\/messages\/groups\/(\d+)$/);
   if (match) return parseMessageConversationKey(`group:${match[1]}`);
   match = String(path || '').match(/^\/messages\/(\d+)$/);
@@ -3769,7 +3789,11 @@ function setDeferredMessageConversationRead(conversationKey = '', shouldDefer = 
 
 function messageConversationPath(target) {
   const parsed = parseMessageConversationKey(target);
-  if (!parsed.id) return '/messages';
+  const isHello = window.location.hostname === 'hello.yxyx.space';
+  if (!parsed.id) return isHello ? '/' : '/messages';
+  if (isHello) {
+    return parsed.type === 'group' ? `/groups/${parsed.id}` : `/${parsed.id}`;
+  }
   return parsed.type === 'group' ? `/messages/groups/${parsed.id}` : `/messages/${parsed.id}`;
 }
 
@@ -3793,7 +3817,9 @@ function messageConversationListApiPath(limit = 100) {
 }
 
 function currentMessagePeerId() {
-  const match = location.pathname.match(/^\/messages\/(\d+)$/);
+  const isHello = window.location.hostname === 'hello.yxyx.space';
+  const regex = isHello ? /^\/(\d+)$/ : /^\/messages\/(\d+)$/;
+  const match = location.pathname.match(regex);
   return match ? Number(match[1]) : Number(state.messageActivePeerId || 0);
 }
 
@@ -4358,13 +4384,13 @@ function handleMessageRealtimeState(payload = {}) {
   if (!changed || now - Number(state.messageEventLastRefreshAt || 0) < MESSAGE_EVENT_REFRESH_DEBOUNCE_MS) return;
   state.messageEventLastRefreshAt = now;
 
-  if (location.pathname.startsWith('/messages')) {
+  if (isMessagesActivePath()) {
     void pollMessageUnreadState();
   }
 }
 
 async function startMessageEventStream() {
-  if (!state.user || state.messageEventAbortController || !location.pathname.startsWith('/messages')) return;
+  if (!state.user || state.messageEventAbortController || !isMessagesActivePath()) return;
   const parsed = messageConversationFromPath(location.pathname, { fallbackToState: true });
   const controller = new AbortController();
   state.messageEventAbortController = controller;
@@ -4479,7 +4505,7 @@ async function pollMessageUnreadState() {
 }
 
 function ensureMessageAutoRefresh() {
-  if (location.pathname.startsWith('/messages')) {
+  if (isMessagesActivePath()) {
     void startMessageEventStream();
   } else {
     stopMessageEventStream();
@@ -4494,7 +4520,7 @@ function ensureMessageAutoRefresh() {
 
     state.messageRefreshInFlight = true;
     try {
-      if (location.pathname.startsWith('/messages')) {
+      if (isMessagesActivePath()) {
         await pollMessageUnreadState();
       } else {
         await Promise.allSettled([refreshNotificationCount(), refreshMessageCount()]);
@@ -4543,7 +4569,11 @@ async function renderMessages(target = null, options = {}) {
     state.messageConversationHasMore = !!conversationData.has_more;
     state.messageConversationNextOffset = Number(conversationData.next_offset || conversations.length || 0);
     const requested = target ? parseMessageConversationKey(target) : messageConversationFromPath();
-    const hasExplicitSelection = !!target || /^\/messages\/(?:groups\/\d+|\d+)$/.test(location.pathname || '');
+    const hasExplicitSelection = !!target || (
+      window.location.hostname === 'hello.yxyx.space'
+        ? /^\/(?:groups\/)?\d+$/.test(location.pathname || '')
+        : /^\/messages\/(?:groups\/\d+|\d+)$/.test(location.pathname || '')
+    );
     const selectedKey = requested.key || (hasExplicitSelection ? (
       conversations[0]?.conversation_key ||
       messageConversationKey(conversations[0]?.conversation_type, conversations[0]?.group_id || conversations[0]?.peer_id)
@@ -4753,8 +4783,9 @@ async function toggleMessageConversationArchived(conversationKey, nextValue) {
   try {
     await updateMessageConversationPreferences(conversationKey, { is_archived: !!nextValue });
     if (nextValue && !state.messageShowArchived) {
-      history.pushState(null, '', '/messages');
-      state.currentRoute = '/messages';
+      const messagesHomePath = window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages';
+      history.pushState(null, '', messagesHomePath);
+      state.currentRoute = messagesHomePath;
       await renderMessages(null, { silent: true, preserveComposer: false, scrollToBottom: false });
     } else {
       await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
@@ -4892,7 +4923,7 @@ async function unblockMessageUser(userId) {
     const conversationKey = messageConversationKey('direct', normalizedUserId);
     if (currentMessageConversationKey() === conversationKey) {
       await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
-    } else if (location.pathname === '/messages') {
+    } else if (location.pathname === (window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages')) {
       await renderMessages(null, { silent: true, preserveComposer: true, scrollToBottom: false });
     }
   } catch (err) {
@@ -6846,7 +6877,7 @@ async function leaveMessageGroup(groupId) {
     });
     closeModal();
     toast('已退出群聊', 'success');
-    history.pushState(null, '', '/messages');
+    history.pushState(null, '', window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages');
     await renderMessages(null, { silent: true, preserveComposer: false });
   } catch (err) {
     setMessageGroupSettingsError(err.message);
@@ -6862,7 +6893,7 @@ async function deleteMessageGroup(groupId) {
     });
     closeModal();
     toast('群聊已解散', 'success');
-    history.pushState(null, '', '/messages');
+    history.pushState(null, '', window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages');
     await renderMessages(null, { silent: true, preserveComposer: false });
   } catch (err) {
     setMessageGroupSettingsError(err.message);
@@ -9864,6 +9895,8 @@ async function renderContestAdmin() {
   }
 }
 
+
+
 function showCreateContestModal() {
   openModal({
     title: '编排新竞赛',
@@ -10213,8 +10246,12 @@ function route() {
     if (path === '/messages') {
       history.replaceState(null, '', '/');
       path = '/';
+    } else if (path.startsWith('/messages/')) {
+      const newPath = path.replace(/^\/messages/, '');
+      history.replaceState(null, '', newPath);
+      path = newPath;
     }
-    const isMessagesPath = path === '/' || /^\/messages\/(?:groups\/\d+|\d+)$/.test(path);
+    const isMessagesPath = path === '/' || /^\/(?:groups\/)?\d+$/.test(path);
     if (!isMessagesPath) {
       history.replaceState(null, '', '/');
       path = '/';
@@ -10222,7 +10259,7 @@ function route() {
   } else {
     // If we are on the main site (e.g. yxyx.space), clicking messages should redirect to hello.yxyx.space
     if (path === '/messages' || path.startsWith('/messages/')) {
-      const targetPath = path === '/messages' ? '/' : path;
+      const targetPath = path === '/messages' ? '/' : path.replace(/^\/messages/, '');
       window.location.href = `https://hello.yxyx.space${targetPath}`;
       return;
     }
@@ -10260,17 +10297,26 @@ function route() {
 
   // Parameterized routes
   let match;
+  if (window.location.hostname === 'hello.yxyx.space') {
+    if ((match = path.match(/^\/groups\/(\d+)$/))) {
+      return renderMessages(`group:${match[1]}`);
+    }
+    if ((match = path.match(/^\/(\d+)$/))) {
+      return renderMessages(`direct:${match[1]}`);
+    }
+  } else {
+    if ((match = path.match(/^\/messages\/groups\/(\d+)$/))) {
+      return renderMessages(`group:${match[1]}`);
+    }
+    if ((match = path.match(/^\/messages\/(\d+)$/))) {
+      return renderMessages(`direct:${match[1]}`);
+    }
+  }
   if ((match = path.match(/^\/edit\/([^/]+)$/))) {
     return renderProblemEditorPage(decodeURIComponent(match[1]));
   }
   if ((match = path.match(/^\/contests\/([^/]+)\/problems\/([^/]+)$/))) {
     return renderProblemDetail(match[2], match[1]);
-  }
-  if ((match = path.match(/^\/messages\/groups\/(\d+)$/))) {
-    return renderMessages(`group:${match[1]}`);
-  }
-  if ((match = path.match(/^\/messages\/(\d+)$/))) {
-    return renderMessages(`direct:${match[1]}`);
   }
   if ((match = path.match(/^\/users\/([^/]+)$/))) {
     return renderUserProfile(decodeURIComponent(match[1]));
@@ -10314,7 +10360,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   initSidebarMode();
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden || !state.user || !location.pathname.startsWith('/messages') || state.messageRefreshInFlight) return;
+    if (document.hidden || !state.user || !isMessagesActivePath() || state.messageRefreshInFlight) return;
     state.messageRefreshInFlight = true;
     void pollMessageUnreadState().finally(() => {
       state.messageRefreshInFlight = false;
