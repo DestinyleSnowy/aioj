@@ -153,7 +153,18 @@ const DEFAULT_SIGNATURE = '这只咪很懒，什么也没有留下';
 const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
 const SIDEBAR_MODE_COLLAPSED = 'collapsed';
 const SIDEBAR_MODE_EXPANDED = 'expanded';
-const MESSAGE_BUILTIN_EMOJIS = ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '😭', '😡', '😴', '🤔', '😅', '🥳', '🥺', '😇', '😋', '🤗', '👍', '👀', '🎉', '❤️', '💔', '💯', '🔥', '🌹', '🍉', '🍻', '🐱', '🐶', '🫡', '🙏'];
+const MESSAGE_BUILTIN_EMOJIS = [
+  // Faces & Expressions
+  '😀', '😁', '😂', '🤣', '😊', '😇', '🙂', '🙃', '😉', '😌', '😍', '🥰', '😘', '😗', '😙', '😚', '😋', '😛', '😝', '😜', '😜', '🤪', '🤨', '🧐', '🤓', '😎', '🥸', '🤩', '🥳', '😏', '😒', '😞', '😔', '😟', '😕', '🙁', '☹️', '😣', '😖', '😫', '😩', '🥺', '😢', '😭', '😤', '😠', '😡', '🤬', '🤯', '😳', '🥵', '🥶', '😱', '😨', '😰', '😥', '😓', '🤗', '🤔', '🫣', '🤭', '🥱', '😴', '🤤', '😪', '😵', '😵‍💫', '🤐', '🥴', '🤢', '🤮', '🤧', '😷', '🤒', '🤕', '🫨', '👀', '👁️', '👄',
+  // Hands & Gestures
+  '👍', '👎', '👊', '✊', '🤛', '🤜', '🤞', '🫰', '🤘', '🤟', '👌', '🤌', '🤏', '👈', '👉', '👆', '👇', '☝️', '✋', '🤚', '🖐️', '🖖', '👋', '🤙', '💪', '🦾', '🙏', '🤝', '👏', '🙌', '👐', '🤲', '✍️', '💅', '🤳', '🫡',
+  // Hearts & Symbols
+  '❤️', '🩷', '🧡', '💛', '💚', '💙', '🩵', '💜', '🖤', '🩶', '🤍', '🤎', '💔', '❤️‍🔥', '❤️‍🩹', '❣️', '💕', '💞', '💓', '💗', '💖', '💘', '💝', '💟', '💯', '🔥', '✨', '🌟', '⭐', '💥', '💢', '💫', '💦', '💨', '💬', '💭', '💤', '🌹', '🥀', '🌺',
+  // Celebrations & Food
+  '🎉', '🎊', '🎈', '🎁', '🎂', '🧁', '🍬', '🍭', '🍫', '🍩', '🍪', '🍺', '🍻', '🥂', '🍷', '🥃', '☕', '🍵', '🥤', '🧋', '🍉', '🍓', '🍒', '🍋', '🍇', '🍉', '🍟', '🍕', '🍔', '🌮', '🍣', '🍙',
+  // Tech, Objects & Animals
+  '🐱', '🐶', '🐼', '🐨', '🐯', '🦁', '🐰', '🦊', '🐻', '🐒', '🐧', '🐦', '🐣', '🦄', '🐬', '🐋', '🐟', '🐙', '🦋', '💻', '🖥️', '🎮', '📡', '💡', '💰', '🛡️', '🔑', '🚀', '🛸'
+];
 
 function unreadDocumentTitlePrefix() {
   const totalUnread = Number(state.notificationUnreadCount || 0) + Number(state.messageUnreadCount || 0);
@@ -643,8 +654,51 @@ function storedGifFavorites() {
 }
 
 function saveGifFavorites(items = []) {
-  writeStoredJson(MESSAGE_GIF_FAVORITES_STORAGE_KEY, items.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS));
+  const sliced = items.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS);
+  writeStoredJson(MESSAGE_GIF_FAVORITES_STORAGE_KEY, sliced);
+  
+  if (window.location.hostname === 'hello.yxyx.space') {
+    const iframe = document.getElementById('storageSyncIframe');
+    if (iframe && iframe.contentWindow) {
+      iframe.contentWindow.postMessage({
+        action: 'set',
+        key: MESSAGE_GIF_FAVORITES_STORAGE_KEY,
+        value: JSON.stringify(sliced)
+      }, 'https://yxyx.space');
+    }
+  }
 }
+
+// Storage Sync Listener for cross-subdomain local storage sharing
+window.addEventListener('message', (event) => {
+  if (event.origin !== 'https://yxyx.space' && event.origin !== 'https://www.yxyx.space') return;
+  
+  const { action, key, value } = event.data || {};
+  
+  if (action === 'ready') {
+    if (window.location.hostname === 'hello.yxyx.space') {
+      const iframe = document.getElementById('storageSyncIframe');
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.postMessage({
+          action: 'get',
+          key: MESSAGE_GIF_FAVORITES_STORAGE_KEY
+        }, 'https://yxyx.space');
+      }
+    }
+  } else if (action === 'get_response' && key === MESSAGE_GIF_FAVORITES_STORAGE_KEY) {
+    if (value) {
+      try {
+        const items = JSON.parse(value);
+        if (Array.isArray(items)) {
+          localStorage.setItem(MESSAGE_GIF_FAVORITES_STORAGE_KEY, value);
+          updateMessageComposerPanel();
+        }
+      } catch (e) {
+        console.error('Failed to parse synchronized GIF favorites:', e);
+      }
+    }
+  }
+});
 
 function newGifFavoriteId() {
   return `gif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
