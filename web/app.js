@@ -461,10 +461,19 @@ function transientMessagesForConversation(conversationKey) {
 
 function releaseTransientMessageResources(item) {
   if (item?.attachment_local_url) {
-    try {
-      URL.revokeObjectURL(item.attachment_local_url);
-    } catch {
-      // Ignore stale blob URLs during cleanup.
+    let isCached = false;
+    for (const cached of state.messageAttachmentCache.values()) {
+      if (cached.url === item.attachment_local_url) {
+        isCached = true;
+        break;
+      }
+    }
+    if (!isCached) {
+      try {
+        URL.revokeObjectURL(item.attachment_local_url);
+      } catch {
+        // Ignore stale blob URLs during cleanup.
+      }
     }
   }
 }
@@ -4030,13 +4039,18 @@ function setMessageHistoryLoader(list, text = '') {
 
 function clearMessageAttachmentCache() {
   for (const entry of state.messageAttachmentCache.values()) {
-    if (entry?.url) URL.revokeObjectURL(entry.url);
+    if (entry?.url) {
+      try {
+        URL.revokeObjectURL(entry.url);
+      } catch {}
+    }
   }
   state.messageAttachmentCache.clear();
   for (const items of state.messageTransientItems.values()) {
     items.forEach(releaseTransientMessageResources);
   }
   state.messageTransientItems.clear();
+  void AttachmentDB.clear();
 }
 
 function destroyMessageLayoutInteractions() {
@@ -4212,6 +4226,72 @@ function initMessageLayoutInteractions() {
   };
 }
 
+const AttachmentDB = {
+  dbName: 'aioj_attachments_cache',
+  storeName: 'attachments',
+  version: 1,
+
+  _getDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.dbName, this.version);
+      request.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(this.storeName)) {
+          db.createObjectStore(this.storeName);
+        }
+      };
+      request.onsuccess = (e) => resolve(e.target.result);
+      request.onerror = (e) => reject(e.target.error);
+    });
+  },
+
+  async get(key) {
+    try {
+      const db = await this._getDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readonly');
+        const store = tx.objectStore(this.storeName);
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    } catch (err) {
+      console.warn('IndexedDB get failed:', err);
+      return null;
+    }
+  },
+
+  async set(key, blob) {
+    try {
+      const db = await this._getDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readwrite');
+        const store = tx.objectStore(this.storeName);
+        const req = store.put(blob, key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (err) {
+      console.warn('IndexedDB set failed:', err);
+    }
+  },
+
+  async clear() {
+    try {
+      const db = await this._getDB();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(this.storeName, 'readwrite');
+        const store = tx.objectStore(this.storeName);
+        const req = store.clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (err) {
+      console.warn('IndexedDB clear failed:', err);
+    }
+  }
+};
+
 function normalizeMessageAttachmentTarget(scopeOrId, maybeId = null) {
   if (maybeId == null) {
     return { scope: 'direct', id: Number(scopeOrId || 0), key: messageAttachmentCacheKey('direct', scopeOrId) };
@@ -4247,9 +4327,22 @@ async function loadMessageAttachmentUrl(scopeOrId, maybeId = null) {
   if (cached?.promise) return cached.promise;
 
   const promise = (async () => {
+    // Check IndexedDB cache first
+    const cachedBlob = await AttachmentDB.get(target.key);
+    if (cachedBlob) {
+      const url = URL.createObjectURL(cachedBlob);
+      state.messageAttachmentCache.set(target.key, { url });
+      return url;
+    }
+
+    // Otherwise fetch from server
     const res = await fetch(messageAttachmentUrlPath(target.scope, target.id), { headers: authHeaders() });
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     const blob = await res.blob();
+    
+    // Save to IndexedDB cache
+    void AttachmentDB.set(target.key, blob);
+
     const url = URL.createObjectURL(blob);
     state.messageAttachmentCache.set(target.key, { url });
     return url;
@@ -5968,9 +6061,22 @@ async function downloadMessageFile(scopeOrId, attachmentIdOrFilename = null, fil
     ? filenameValue
     : (attachmentIdOrFilename || 'attachment');
   try {
-    const res = await fetch(messageAttachmentUrlPath(target.scope, target.id), { headers: authHeaders() });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const blob = await res.blob();
+    let blob = null;
+    const cached = getMessageAttachmentCacheEntry(target.scope, target.id);
+    if (cached?.url) {
+      const res = await fetch(cached.url);
+      if (res.ok) blob = await res.blob();
+    }
+    if (!blob) {
+      const dbBlob = await AttachmentDB.get(target.key);
+      if (dbBlob) blob = dbBlob;
+    }
+    if (!blob) {
+      const res = await fetch(messageAttachmentUrlPath(target.scope, target.id), { headers: authHeaders() });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      blob = await res.blob();
+      void AttachmentDB.set(target.key, blob);
+    }
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -7495,7 +7601,7 @@ async function performTransientSend(item, { focusComposer = false } = {}) {
   if (!target.key) return;
   try {
     if (item.has_attachment) {
-      await uploadMessageFiles({
+      const response = await uploadMessageFiles({
         conversationType: target.type,
         recipientId: target.type === 'direct' ? Number(target.id) : null,
         groupId: target.type === 'group' ? Number(target.id) : null,
@@ -7505,6 +7611,20 @@ async function performTransientSend(item, { focusComposer = false } = {}) {
         conversationKey: target.key,
         localId: item.local_id,
       });
+
+      // Seed the caches (in-memory URL and persistent IndexedDB blob) with the local file
+      if (response && response.message && item.attachment_local_url) {
+        const msg = response.message;
+        const scope = msg.group_id ? 'group' : 'direct';
+        const attachmentId = msg.attachment_id || msg.id;
+        if (attachmentId) {
+          const cacheKey = messageAttachmentCacheKey(scope, attachmentId);
+          state.messageAttachmentCache.set(cacheKey, { url: item.attachment_local_url });
+          if (item.retry_payload?.files?.[0]) {
+            void AttachmentDB.set(cacheKey, item.retry_payload.files[0]);
+          }
+        }
+      }
     } else if (target.type === 'group') {
       await api(`/api/messages/groups/${target.id}/messages`, {
         method: 'POST',
