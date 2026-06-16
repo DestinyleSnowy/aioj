@@ -4594,15 +4594,16 @@ body.chat-only-mode .dropdown-item:hover {
 
 /* ── Buttons ── */
 body.chat-only-mode .btn-primary {
-  background: #fff !important;
-  color: #000 !important;
-  border: none !important;
+  background: #000 !important;
+  color: #fff !important;
+  border: 1px solid #333 !important;
   font-weight: 600 !important;
   border-radius: 8px !important;
-  transition: opacity 0.15s ease !important;
+  transition: all 0.15s ease !important;
 }
 body.chat-only-mode .btn-primary:hover {
-  opacity: 0.85 !important;
+  background: #111 !important;
+  border-color: #444 !important;
 }
 body.chat-only-mode .btn-secondary {
   background: #000 !important;
@@ -4614,6 +4615,22 @@ body.chat-only-mode .btn-secondary {
 body.chat-only-mode .btn-secondary:hover {
   background: #111 !important;
   border-color: #444 !important;
+}
+
+body.chat-only-mode .message-scroll-bottom-btn {
+  background: #111 !important;
+  color: #999 !important;
+  border: 1px solid #222 !important;
+  border-radius: 20px !important;
+  padding: 6px 14px !important;
+  font-size: 12px !important;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+  transition: all 0.15s ease !important;
+}
+body.chat-only-mode .message-scroll-bottom-btn:hover {
+  background: #1a1a1a !important;
+  color: #fff !important;
+  border-color: #333 !important;
 }
 
 /* ── Inputs ── */

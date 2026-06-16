@@ -4697,7 +4697,8 @@ async function renderMessages(target = null, options = {}) {
     return;
   }
 
-  const silent = !!options.silent || !!app.querySelector('.messages-layout');
+  const layoutPresent = !!app.querySelector('.messages-layout');
+  const silent = !!options.silent || layoutPresent;
   const composerSnapshot = captureMessageComposerState();
   if (composerSnapshot && options.preserveComposer !== false) {
     saveMessageComposerDraft(composerSnapshot.conversationKey || composerSnapshot.peerId, composerSnapshot.value);
@@ -4712,15 +4713,21 @@ async function renderMessages(target = null, options = {}) {
   }
 
   try {
-    const conversationData = await ChatApi.listConversations({
-      limit: MESSAGE_CONVERSATION_PAGE_SIZE,
-      query: state.messageConversationSearch,
-      includeArchived: state.messageShowArchived,
-    });
-    const conversations = conversationData.items || [];
-    state.messageConversations = conversations;
-    state.messageConversationHasMore = !!conversationData.has_more;
-    state.messageConversationNextOffset = Number(conversationData.next_offset || conversations.length || 0);
+    let conversations = [];
+    if (options.localOnly && state.messageConversations) {
+      conversations = state.messageConversations;
+    } else {
+      const conversationData = await ChatApi.listConversations({
+        limit: MESSAGE_CONVERSATION_PAGE_SIZE,
+        query: state.messageConversationSearch,
+        includeArchived: state.messageShowArchived,
+      });
+      conversations = conversationData.items || [];
+      state.messageConversations = conversations;
+      state.messageConversationHasMore = !!conversationData.has_more;
+      state.messageConversationNextOffset = Number(conversationData.next_offset || conversations.length || 0);
+    }
+
     const requested = target ? parseMessageConversationKey(target) : messageConversationFromPath();
     const hasExplicitSelection = !!target || (
       window.location.hostname === 'hello.yxyx.space'
@@ -4740,14 +4747,21 @@ async function renderMessages(target = null, options = {}) {
     const shouldMarkRead = !!selected.id && shouldMarkMessageConversationRead(options);
 
     if (selected.id) {
-      thread = await api(messageConversationApiPath(selected.key, { markRead: shouldMarkRead }), { headers: authHeaders() });
-      if (shouldMarkRead) {
-        conversations.forEach((item) => {
-          const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
-          if (itemKey === selected.key) item.unread_count = 0;
-        });
-        setDeferredMessageConversationRead(selected.key, false);
-        await refreshMessageCount();
+      if (options.localOnly && state.messageServerThreadItems) {
+        // use local
+      } else {
+        thread = await api(messageConversationApiPath(selected.key, { markRead: shouldMarkRead }), { headers: authHeaders() });
+        state.messageServerThreadItems = thread?.items || [];
+        state.messageThreadHasMore = !!thread?.has_more;
+        state.messageThreadFirstUnreadId = Number(thread?.first_unread_message_id || 0);
+        if (shouldMarkRead) {
+          conversations.forEach((item) => {
+            const itemKey = item.conversation_key || messageConversationKey(item.conversation_type, item.group_id || item.peer_id);
+            if (itemKey === selected.key) item.unread_count = 0;
+          });
+          setDeferredMessageConversationRead(selected.key, false);
+          await refreshMessageCount();
+        }
       }
     }
 
@@ -4759,93 +4773,143 @@ async function renderMessages(target = null, options = {}) {
     const activeUnreadCount = Number(activeConversationSummary?.unread_count || 0);
     setDeferredMessageConversationRead(
       selected.key,
-      !!selected.id && !shouldMarkRead && (activeUnreadCount > 0 || Number(thread?.first_unread_message_id || 0) > 0),
+      !!selected.id && !shouldMarkRead && (activeUnreadCount > 0 || (thread ? Number(thread.first_unread_message_id || 0) : state.messageThreadFirstUnreadId) > 0),
     );
-    const threadItems = thread?.items || [];
+    const threadItems = state.messageServerThreadItems || [];
     const combinedThreadItems = [...threadItems, ...transientMessagesForConversation(selected.key)];
     state.messageThreadItems = combinedThreadItems;
-    state.messageThreadFirstUnreadId = Number(thread?.first_unread_message_id || 0);
 
-    app.innerHTML = `
-      <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
-        <div>
-          <h3 class="section-title">聊天</h3>
-          <div class="text-muted" style="font-size: 13px;">支持站内私聊和群聊，打开会话后会标记已读；置顶、归档、静音与拉黑会即时生效。</div>
-        </div>
-        <div class="row gap-sm" style="flex-wrap: wrap;">
-          <button class="btn btn-secondary" onclick="showMessagePreferencesModal()">聊天设置</button>
-          <button class="btn btn-secondary" onclick="showMessageFavoritesModal()">收藏</button>
-          <button class="btn btn-secondary" onclick="showJoinGroupInviteModal()">邀请码</button>
-          ${state.user?.role === 'ADMIN' ? '<button class="btn btn-secondary" onclick="showAdminMessageReportsModal()">举报队列</button>' : ''}
-          <button class="btn btn-secondary" onclick="showMessageBlocksModal()">拉黑名单</button>
-          <button class="btn btn-secondary" onclick="showCreateMessageGroupModal()">新建群聊</button>
-          <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
-        </div>
-      </div>
+    const isSameConversation = (selected.key === state.messageActiveConversationKey);
 
-      <div class="messages-layout">
-        <aside class="message-conversation-list">
-          <div class="row gap-sm mb-md" style="align-items: center; flex-wrap: wrap;">
-            <input
-              type="search"
-              value="${esc(state.messageConversationSearch)}"
-              placeholder="搜索会话"
-              style="flex: 1 1 180px;"
-              oninput="setMessageConversationSearch(this.value)"
-            />
-            <button class="btn btn-secondary btn-sm" type="button" onclick="toggleMessageArchivedFilter()">
-              ${state.messageShowArchived ? '隐藏归档' : '显示归档'}
-            </button>
+    if (layoutPresent && isSameConversation) {
+      const convList = $('messageConversationItems');
+      if (convList) {
+        convList.innerHTML = renderMessageConversationItems(conversations, selected.key);
+      }
+      const toggleArchivedBtn = app.querySelector('.message-conversation-list button[onclick="toggleMessageArchivedFilter()"]');
+      if (toggleArchivedBtn) {
+        toggleArchivedBtn.textContent = state.messageShowArchived ? '隐藏归档' : '显示归档';
+      }
+      const loadMoreBtn = $('messageLoadMoreConversationsBtn');
+      if (loadMoreBtn) {
+        loadMoreBtn.hidden = !state.messageConversationHasMore;
+      }
+      const threadPanel = app.querySelector('.message-thread-panel');
+      const list = $('messageThreadList');
+      if (selected.id && activeConversation && threadPanel && list) {
+        const badge = $('messageThreadUnreadBadge');
+        if (badge) {
+          const count = shouldMarkRead ? 0 : activeUnreadCount;
+          badge.textContent = String(count);
+          badge.hidden = count <= 0;
+        }
+        list.innerHTML = renderMessageHistoryLoader() + (combinedThreadItems.length === 0 ? `
+          <div class="message-empty-panel">
+            <div class="empty-icon">✉</div>
+            <div class="text-muted" style="font-size: 13px;">还没有消息，发送第一条${selected.type === 'group' ? '群聊消息' : '私信'}。</div>
           </div>
-          <div id="messageConversationItems" data-message-selected-conversation-key="${esc(selected.key)}">
-            ${renderMessageConversationItems(conversations, selected.key)}
+        ` : renderMessageRows(combinedThreadItems, { firstUnreadMessageId: state.messageThreadFirstUnreadId }));
+      } else if (threadPanel) {
+        threadPanel.innerHTML = selected.id && activeConversation ? renderMessageThread(activeConversation, combinedThreadItems, {
+          hasMore: state.messageThreadHasMore,
+          conversationType: selected.type,
+          firstUnreadMessageId: state.messageThreadFirstUnreadId,
+        }) : `
+          <div class="message-empty-panel">
+            <div class="empty-icon">✉</div>
+            <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信/群聊。</div>
           </div>
-          <button
-            class="btn btn-secondary btn-sm message-load-more-conversations"
-            id="messageLoadMoreConversationsBtn"
-            type="button"
-            onclick="loadMoreMessageConversations()"
-            ${state.messageConversationHasMore ? '' : 'hidden'}
-          >加载更多会话</button>
-        </aside>
+        `;
+      }
+    } else {
+      app.innerHTML = `
+        <div class="row flex-between mb-lg" style="flex-wrap: wrap; align-items: center; gap: var(--space-md);">
+          <div>
+            <h3 class="section-title">聊天</h3>
+            <div class="text-muted" style="font-size: 13px;">支持站内私聊和群聊，打开会话后会标记已读；置顶、归档、静音与拉黑会即时生效。</div>
+          </div>
+          <div class="row gap-sm" style="flex-wrap: wrap;">
+            <button class="btn btn-secondary" onclick="showMessagePreferencesModal()">聊天设置</button>
+            <button class="btn btn-secondary" onclick="showMessageFavoritesModal()">收藏</button>
+            <button class="btn btn-secondary" onclick="showJoinGroupInviteModal()">邀请码</button>
+            ${state.user?.role === 'ADMIN' ? '<button class="btn btn-secondary" onclick="showAdminMessageReportsModal()">举报队列</button>' : ''}
+            <button class="btn btn-secondary" onclick="showMessageBlocksModal()">拉黑名单</button>
+            <button class="btn btn-secondary" onclick="showCreateMessageGroupModal()">新建群聊</button>
+            <button class="btn btn-primary" onclick="showNewMessageModal()">写私信</button>
+          </div>
+        </div>
 
-        <div
-          class="message-layout-resizer"
-          data-message-layout-resizer
-          role="separator"
-          aria-label="调整会话列表宽度"
-          aria-orientation="vertical"
-          tabindex="0"
-          title="拖动调整会话列表宽度，双击恢复默认宽度"
-        ></div>
-
-        <section class="message-thread-panel">
-          ${selected.id && activeConversation ? renderMessageThread(activeConversation, combinedThreadItems, {
-            hasMore: !!thread?.has_more,
-            conversationType: selected.type,
-            firstUnreadMessageId: Number(thread?.first_unread_message_id || 0),
-          }) : `
-            <div class="message-empty-panel">
-              <div class="empty-icon">✉</div>
-              <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信/群聊。</div>
+        <div class="messages-layout">
+          <aside class="message-conversation-list">
+            <div class="row gap-sm mb-md" style="align-items: center; flex-wrap: wrap;">
+              <input
+                type="search"
+                value="${esc(state.messageConversationSearch)}"
+                placeholder="搜索会话"
+                style="flex: 1 1 180px;"
+                oninput="setMessageConversationSearch(this.value)"
+              />
+              <button class="btn btn-secondary btn-sm" type="button" onclick="toggleMessageArchivedFilter()">
+                ${state.messageShowArchived ? '隐藏归档' : '显示归档'}
+              </button>
             </div>
-          `}
-        </section>
-      </div>
-    `;
+            <div id="messageConversationItems" data-message-selected-conversation-key="${esc(selected.key)}">
+              ${renderMessageConversationItems(conversations, selected.key)}
+            </div>
+            <button
+              class="btn btn-secondary btn-sm message-load-more-conversations"
+              id="messageLoadMoreConversationsBtn"
+              type="button"
+              onclick="loadMoreMessageConversations()"
+              ${state.messageConversationHasMore ? '' : 'hidden'}
+            >加载更多会话</button>
+          </aside>
 
-    initMessageLayoutInteractions();
+          <div
+            class="message-layout-resizer"
+            data-message-layout-resizer
+            role="separator"
+            aria-label="调整会话列表宽度"
+            aria-orientation="vertical"
+            tabindex="0"
+            title="拖动调整会话列表宽度，双击恢复默认宽度"
+          ></div>
+
+          <section class="message-thread-panel">
+            ${selected.id && activeConversation ? renderMessageThread(activeConversation, combinedThreadItems, {
+              hasMore: state.messageThreadHasMore,
+              conversationType: selected.type,
+              firstUnreadMessageId: state.messageThreadFirstUnreadId,
+            }) : `
+              <div class="message-empty-panel">
+                <div class="empty-icon">✉</div>
+                <div class="text-muted" style="font-size: 13px;">选择一个会话，或新建私信/群聊。</div>
+              </div>
+            `}
+          </section>
+        </div>
+      `;
+      initMessageLayoutInteractions();
+    }
+
     if (selected.id && activeConversation) {
-      initMessageThreadPagination(selected.key, !!thread?.has_more);
-      initMessageComposerInteractions(selected.key);
+      if (!layoutPresent || !isSameConversation) {
+        initMessageThreadPagination(selected.key, state.messageThreadHasMore);
+        initMessageComposerInteractions(selected.key);
+      }
       updateMessageTypingIndicator(state.messageTypingUsers);
-      restoreMessageComposerState(selected.key, composerSnapshot, {
-        preserve: options.preserveComposer !== false,
-        focus: !!options.focusComposer || (
-          !!composerSnapshot?.focused &&
-          parseMessageConversationKey(composerSnapshot.conversationKey || composerSnapshot.peerId).key === selected.key
-        ),
-      });
+      if (!layoutPresent || !isSameConversation) {
+        restoreMessageComposerState(selected.key, composerSnapshot, {
+          preserve: options.preserveComposer !== false,
+          focus: !!options.focusComposer || (
+            !!composerSnapshot?.focused &&
+            parseMessageConversationKey(composerSnapshot.conversationKey || composerSnapshot.peerId).key === selected.key
+          ),
+        });
+      } else if (options.focusComposer) {
+        const comp = $('messageComposer');
+        if (comp) comp.focus();
+      }
     }
     state.messageActiveConversationKey = selected.key;
     state.messageActivePeerId = selected.type === 'direct' ? selected.id : 0;
@@ -7680,6 +7744,7 @@ async function queueTransientMessage(conversationKey, { body = '', files = [], r
       focusComposer,
       scrollToBottom: true,
       preferUnread: false,
+      localOnly: true,
     });
   }
 }
