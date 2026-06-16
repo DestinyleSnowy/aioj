@@ -4463,463 +4463,341 @@ body.chat-only-mode #notificationBtn {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Chat-Only Mode Override Styles (hello.yxyx.space)
-   Premium ChatGPT-Style Aesthetic (Dual-Theme: Light & Dark Modes)
+   hello.yxyx.space — Pure Black Theme
+   Black background, white text, clean and simple.
    ═══════════════════════════════════════════════════════════════════════════ */
+
 body.chat-only-mode {
-  /* ChatGPT Dark Mode (Default / Fallback) */
-  --bg-app: #212121;     /* Warm off-black / main chat area */
-  --bg-sidebar: #171717; /* Slate dark sidebar */
-  --bg-topbar: rgba(33, 33, 33, 0.85);
-  --bg-card: #212121;
-  --bg-card-solid: #2f2f2f; /* Slightly lighter chat bubbles/cards */
-  --bg-card-hover: #353535;
-  --bg-input: #2f2f2f;      /* Rounded message bar */
-  --bg-input-focus: #2f2f2f;
-  --bg-elevated: #373737;
-  
-  /* Typography Text Colors */
-  --text-main: #f9f9fb;       /* Crisp white-gray */
-  --text-secondary: #c5c5d2;  /* Secondary text */
-  --text-muted: #8e8ea0;      /* Muted secondary */
-  --text-inverse: #000000;
-  
-  /* Borders - Minimalist & soft */
-  --border-subtle: 1px solid rgba(255, 255, 255, 0.05);
-  --border-light: 1px solid rgba(255, 255, 255, 0.09);
-  --border-glow: 1px solid rgba(255, 255, 255, 0.15);
-  
-  /* Accent Colors */
-  --color-primary: #ffffff;
-  --color-accent: #c5c5d2;
-  --color-success: #10a37f; /* OpenAI Emerald Green */
-  --color-warning: #f5f5f7;
-  --color-danger: #ef4444;
-  --color-info: #c5c5d2;
-  
-  /* Background blends */
-  --bg-accent-subtle: rgba(255, 255, 255, 0.05);
-  --bg-success-subtle: rgba(16, 163, 127, 0.1);
-  --bg-warning-subtle: rgba(255, 255, 255, 0.02);
-  --bg-danger-subtle: rgba(239, 68, 68, 0.1);
-  --bg-info-subtle: rgba(255, 255, 255, 0.02);
-  
-  /* Shadows & Radius */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
-  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.25);
-  --shadow-accent-glow: 0 0 12px rgba(255, 255, 255, 0.03);
-  
-  /* Sidebar */
-  --border-sidebar: 1px solid rgba(255, 255, 255, 0.08);
+  --bg-app: #000;
+  --bg-sidebar: #111;
+  --bg-topbar: rgba(0, 0, 0, 0.9);
+  --bg-card: #111;
+  --bg-card-solid: #1a1a1a;
+  --bg-card-hover: #222;
+  --bg-input: #1a1a1a;
+  --bg-input-focus: #222;
+  --bg-elevated: #222;
+
+  --text-main: #fff;
+  --text-secondary: #aaa;
+  --text-muted: #666;
+  --text-inverse: #000;
+
+  --border-subtle: 1px solid #1a1a1a;
+  --border-light: 1px solid #2a2a2a;
+  --border-glow: 1px solid #444;
+
+  --color-primary: #fff;
+  --color-accent: #aaa;
+  --color-success: #fff;
+  --color-warning: #fff;
+  --color-danger: #e55;
+  --color-info: #aaa;
+
+  --bg-accent-subtle: rgba(255,255,255,0.04);
+  --bg-success-subtle: rgba(255,255,255,0.04);
+  --bg-warning-subtle: rgba(255,255,255,0.03);
+  --bg-danger-subtle: rgba(238,85,85,0.08);
+  --bg-info-subtle: rgba(255,255,255,0.03);
+
+  --shadow-sm: none;
+  --shadow-md: 0 4px 20px rgba(0,0,0,0.5);
+  --shadow-lg: 0 8px 40px rgba(0,0,0,0.6);
+  --shadow-accent-glow: none;
+
+  --border-sidebar: 1px solid #1a1a1a;
   --shadow-sidebar: none;
-  --text-brand-title: #ffffff;
+  --text-brand-title: #fff;
   --bg-brand-header: transparent;
   --bg-sidebar-footer: transparent;
+
+  --grad-main: none;
+  --grad-surface: none;
 }
 
-/* ChatGPT Light Mode */
-html[data-theme="light"] body.chat-only-mode {
-  --bg-app: #ffffff;     /* Plain white main chat area */
-  --bg-sidebar: #f9f9f9; /* Off-white sidebar */
-  --bg-topbar: rgba(255, 255, 255, 0.85);
-  --bg-card: #ffffff;
-  --bg-card-solid: #f4f4f4; /* Light user chat bubbles */
-  --bg-card-hover: #e9e9e9;
-  --bg-input: #f4f4f4;      /* Rounded message bar */
-  --bg-input-focus: #ffffff;
-  --bg-elevated: #ececec;
-  
-  /* Typography Text Colors */
-  --text-main: #0d0d0d;      /* Off-black text */
-  --text-secondary: #676767; /* Mid grey */
-  --text-muted: #9b9b9b;     /* Light grey */
-  --text-inverse: #ffffff;
-  
-  /* Borders - Soft grey */
-  --border-subtle: 1px solid rgba(0, 0, 0, 0.04);
-  --border-light: 1px solid rgba(0, 0, 0, 0.08);
-  --border-glow: 1px solid rgba(0, 0, 0, 0.12);
-  
-  /* Accent Colors */
-  --color-primary: #000000;
-  --color-accent: #676767;
-  --color-success: #10a37f;
-  --color-warning: #676767;
-  --color-danger: #dc2626;
-  --color-info: #676767;
-  
-  /* Background blends */
-  --bg-accent-subtle: rgba(0, 0, 0, 0.03);
-  --bg-success-subtle: rgba(16, 163, 127, 0.08);
-  --bg-warning-subtle: rgba(0, 0, 0, 0.01);
-  --bg-danger-subtle: rgba(220, 38, 38, 0.08);
-  --bg-info-subtle: rgba(0, 0, 0, 0.01);
-  
-  /* Shadows & Radius */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.12);
-  --shadow-accent-glow: 0 0 12px rgba(0, 0, 0, 0.02);
-  
-  /* Sidebar */
-  --border-sidebar: 1px solid rgba(0, 0, 0, 0.08);
-  --text-brand-title: #0d0d0d;
-}
-
-/* Base Body tweaks */
+/* ── Base ── */
 body.chat-only-mode {
-  background-color: var(--bg-app) !important;
-  color: var(--text-main) !important;
+  background: #000 !important;
+  color: #fff !important;
 }
 
-/* Sidebar & Navigation tweaks */
+/* ── Sidebar ── */
 body.chat-only-mode .sidebar {
-  background: var(--bg-sidebar) !important;
-  border-right: var(--border-sidebar) !important;
+  background: #111 !important;
+  border-right: 1px solid #1a1a1a !important;
   box-shadow: none !important;
 }
-
 body.chat-only-mode .sidebar .brand {
-  border-bottom: var(--border-sidebar) !important;
+  border-bottom: 1px solid #1a1a1a !important;
   background: transparent !important;
 }
-
 body.chat-only-mode .sidebar-user-link {
   background: transparent !important;
-  border: 1px solid transparent !important;
+  border: none !important;
 }
-
 body.chat-only-mode .sidebar-user-link:hover {
-  background: var(--bg-card-solid) !important;
-  border-color: var(--border-light) !important;
-  border-radius: var(--radius-md) !important;
+  background: #1a1a1a !important;
 }
-
 body.chat-only-mode .sidebar .nav-link {
-  color: var(--text-secondary) !important;
-  border: 1px solid transparent !important;
-  border-radius: var(--radius-md) !important;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  color: #aaa !important;
+  border: none !important;
+  border-radius: 8px !important;
+  transition: all 0.15s ease !important;
 }
-
 body.chat-only-mode .sidebar .nav-link:hover {
-  background: var(--bg-card-solid) !important;
-  color: var(--text-main) !important;
+  background: #1a1a1a !important;
+  color: #fff !important;
 }
-
 body.chat-only-mode .sidebar .nav-link.active {
-  background: var(--bg-card-solid) !important;
-  color: var(--text-main) !important;
-  border: 1px solid var(--border-light) !important;
+  background: #1a1a1a !important;
+  color: #fff !important;
+  border: none !important;
   box-shadow: none !important;
 }
 
-/* Topbar Header tweaks */
+/* ── Header ── */
 body.chat-only-mode .header {
-  background: var(--bg-topbar) !important;
-  border-bottom: var(--border-subtle) !important;
-  backdrop-filter: blur(20px) !important;
-  -webkit-backdrop-filter: blur(20px) !important;
+  background: rgba(0,0,0,0.9) !important;
+  border-bottom: 1px solid #1a1a1a !important;
+  backdrop-filter: blur(12px) !important;
+  -webkit-backdrop-filter: blur(12px) !important;
 }
 
-/* User Pill & Dropdown tweaks */
+/* ── User pill / dropdown ── */
 body.chat-only-mode .user-pill {
   background: transparent !important;
-  border: 1px solid var(--border-light) !important;
-  color: var(--text-main) !important;
-  border-radius: 20px !important;
+  border: 1px solid #333 !important;
+  color: #fff !important;
 }
-
 body.chat-only-mode .user-pill:hover {
-  background: var(--bg-card-solid) !important;
+  background: #1a1a1a !important;
 }
-
 body.chat-only-mode .user-dropdown {
-  background: var(--bg-sidebar) !important;
-  border: 1px solid var(--border-light) !important;
-  box-shadow: var(--shadow-lg) !important;
-  border-radius: 12px !important;
+  background: #111 !important;
+  border: 1px solid #2a2a2a !important;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.7) !important;
 }
-
 body.chat-only-mode .dropdown-item {
-  color: var(--text-secondary) !important;
-  border-radius: var(--radius-sm) !important;
+  color: #aaa !important;
 }
-
 body.chat-only-mode .dropdown-item:hover {
-  background: var(--bg-card-solid) !important;
-  color: var(--text-main) !important;
+  background: #1a1a1a !important;
+  color: #fff !important;
 }
 
-/* Buttons tweaks - ChatGPT Style Clean Bordered/Solid */
+/* ── Buttons ── */
 body.chat-only-mode .btn-primary {
-  background: var(--color-success) !important;
-  color: #ffffff !important;
-  border: 1px solid var(--color-success) !important;
-  font-weight: 500 !important;
-  border-radius: 20px !important;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  background: #fff !important;
+  color: #000 !important;
+  border: none !important;
+  font-weight: 600 !important;
+  border-radius: 8px !important;
+  transition: opacity 0.15s ease !important;
 }
-
 body.chat-only-mode .btn-primary:hover {
-  opacity: 0.9 !important;
-  box-shadow: var(--shadow-sm) !important;
+  opacity: 0.85 !important;
 }
-
 body.chat-only-mode .btn-secondary {
-  background: transparent !important;
-  color: var(--text-main) !important;
-  border: 1px solid var(--border-light) !important;
-  border-radius: 20px !important;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  background: #1a1a1a !important;
+  color: #fff !important;
+  border: 1px solid #333 !important;
+  border-radius: 8px !important;
+  transition: all 0.15s ease !important;
 }
-
 body.chat-only-mode .btn-secondary:hover {
-  background: var(--bg-card-solid) !important;
+  background: #222 !important;
+  border-color: #444 !important;
 }
 
-/* Inputs & search boxes */
+/* ── Inputs ── */
 body.chat-only-mode input[type="text"],
 body.chat-only-mode input[type="search"],
 body.chat-only-mode textarea {
-  background: var(--bg-input) !important;
-  border: 1px solid var(--border-light) !important;
-  border-radius: var(--radius-md) !important;
-  color: var(--text-main) !important;
-  transition: all 0.2s ease !important;
+  background: #1a1a1a !important;
+  border: 1px solid #333 !important;
+  border-radius: 8px !important;
+  color: #fff !important;
+  transition: border-color 0.15s ease !important;
 }
-
 body.chat-only-mode input[type="text"]:focus,
 body.chat-only-mode input[type="search"]:focus,
 body.chat-only-mode textarea:focus {
-  border-color: var(--border-glow) !important;
-  box-shadow: none !important;
-  background: var(--bg-input-focus) !important;
+  border-color: #555 !important;
+  background: #1a1a1a !important;
   outline: none !important;
+  box-shadow: none !important;
 }
 
-/* Chat Layout structure - ChatGPT Borderless Unified Workspace */
+/* ── Chat layout panels ── */
 body.chat-only-mode .message-conversation-list {
-  background: var(--bg-sidebar) !important;
+  background: #111 !important;
   border: none !important;
-  border-right: var(--border-sidebar) !important;
+  border-right: 1px solid #1a1a1a !important;
   border-radius: 0 !important;
   box-shadow: none !important;
 }
-
 body.chat-only-mode .message-thread-panel {
-  background: var(--bg-app) !important;
+  background: #000 !important;
   border: none !important;
   border-radius: 0 !important;
   box-shadow: none !important;
 }
-
 body.chat-only-mode .message-layout-resizer::before {
-  background: var(--border-sidebar) !important;
+  background: #1a1a1a !important;
 }
-
 body.chat-only-mode .message-layout-resizer:hover::before {
-  background: var(--text-muted) !important;
+  background: #444 !important;
   box-shadow: none !important;
 }
 
-/* Center-align the conversation rows for ChatGPT look */
-body.chat-only-mode .message-row {
-  max-width: 800px !important;
-  width: 100% !important;
-  margin-left: auto !important;
-  margin-right: auto !important;
-  gap: 16px !important;
-}
-
-/* Conversation list items (sidebar) */
+/* ── Conversation list items ── */
 body.chat-only-mode .message-conversation {
-  border-radius: var(--radius-md) !important;
-  margin-bottom: 4px !important;
-  border: 1px solid transparent !important;
-  transition: all 0.15s ease !important;
+  border-radius: 8px !important;
+  border: none !important;
+  transition: background 0.12s ease !important;
+  margin-bottom: 2px !important;
 }
-
 body.chat-only-mode .message-conversation:hover {
-  background: var(--bg-card-solid) !important;
+  background: #1a1a1a !important;
 }
-
 body.chat-only-mode .message-conversation.active {
-  background: var(--bg-card-solid) !important;
-  border: 1px solid var(--border-light) !important;
-  box-shadow: none !important;
+  background: #1a1a1a !important;
+  border: none !important;
+  box-shadow: inset 3px 0 0 #fff !important;
 }
-
 body.chat-only-mode .message-conversation-top strong {
-  color: var(--text-main) !important;
+  color: #fff !important;
   font-weight: 500 !important;
 }
-
 body.chat-only-mode .message-preview {
-  color: var(--text-muted) !important;
+  color: #666 !important;
 }
-
 body.chat-only-mode .message-unread-dot {
-  background: var(--color-success) !important;
-  color: #ffffff !important;
+  background: #fff !important;
+  color: #000 !important;
   font-weight: 700 !important;
 }
 
-/* ChatGPT Message Bubbles */
+/* ── Chat bubbles ── */
 body.chat-only-mode .message-bubble {
-  background: rgba(142, 142, 160, 0.05) !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: 18px !important;
-  padding: 12px 18px !important;
-  color: var(--text-main) !important;
+  background: #1a1a1a !important;
+  border: none !important;
+  border-radius: 16px !important;
+  padding: 10px 16px !important;
+  color: #fff !important;
   box-shadow: none !important;
 }
-
-html[data-theme="light"] body.chat-only-mode .message-bubble {
-  background: rgba(0, 0, 0, 0.02) !important;
-}
-
-/* User Messages (mine) - Right-aligned and filled */
 body.chat-only-mode .message-row.mine .message-bubble {
-  background: var(--bg-card-solid) !important;
-  border-color: var(--border-light) !important;
-  color: var(--text-main) !important;
-  box-shadow: var(--shadow-sm) !important;
+  background: #fff !important;
+  color: #000 !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+body.chat-only-mode .message-row.mine .message-bubble .md-content,
+body.chat-only-mode .message-row.mine .message-bubble .md-content * {
+  color: #000 !important;
+}
+body.chat-only-mode .message-row.mine .message-bubble a {
+  color: #333 !important;
+  text-decoration: underline !important;
 }
 
 body.chat-only-mode .message-sender-name {
-  color: var(--text-muted) !important;
+  color: #888 !important;
   font-weight: 600 !important;
 }
 
-/* Avatars */
+/* ── Avatars ── */
 body.chat-only-mode .message-avatar {
-  background: var(--bg-card-solid) !important;
-  color: var(--text-main) !important;
+  background: #222 !important;
+  color: #fff !important;
   box-shadow: none !important;
-  border: 1px solid var(--border-light) !important;
+  border: none !important;
   font-weight: 600 !important;
-  border-radius: 50% !important;
 }
-
 body.chat-only-mode .message-avatar.group {
-  background: var(--bg-elevated) !important;
+  background: #2a2a2a !important;
 }
 
-/* Composer Panel - Floating Pill centered at bottom */
+/* ── Composer ── */
 body.chat-only-mode .message-composer {
-  background: var(--bg-app) !important;
-  border-top: none !important;
-  padding: 16px 24px 24px 24px !important;
+  background: #000 !important;
+  border-top: 1px solid #1a1a1a !important;
 }
-
 body.chat-only-mode .message-composer-panel {
-  max-width: 800px !important;
-  margin: 0 auto !important;
-  background: var(--bg-input) !important;
-  border: 1px solid var(--border-light) !important;
-  border-radius: 26px !important;
-  box-shadow: var(--shadow-md) !important;
-  padding: 8px 16px !important;
-  display: flex !important;
-  align-items: center !important;
-  gap: 12px !important;
+  background: #1a1a1a !important;
+  border: 1px solid #2a2a2a !important;
+  border-radius: 16px !important;
 }
-
 body.chat-only-mode .message-composer textarea {
   background: transparent !important;
   border: none !important;
-  border-radius: 0 !important;
-  padding: 6px 4px !important;
+  color: #fff !important;
   box-shadow: none !important;
-  color: var(--text-main) !important;
 }
-
 body.chat-only-mode .message-composer textarea:focus {
   background: transparent !important;
   border: none !important;
   box-shadow: none !important;
 }
-
 body.chat-only-mode .message-emoji-btn,
 body.chat-only-mode .message-gif-btn {
   background: transparent !important;
   border: none !important;
-  color: var(--text-secondary) !important;
-  opacity: 0.75;
-  padding: 6px !important;
-  transition: all 0.2s ease !important;
-  display: flex !important;
-  align-items: center !important;
-  justify-content: center !important;
-  border-radius: 50% !important;
+  color: #666 !important;
+  transition: color 0.12s ease !important;
 }
-
 body.chat-only-mode .message-emoji-btn:hover,
 body.chat-only-mode .message-gif-btn:hover {
-  opacity: 1;
-  background: var(--bg-card-hover) !important;
+  color: #fff !important;
+  background: transparent !important;
 }
 
+/* ── Reply banner ── */
 body.chat-only-mode .message-reply-banner {
-  background: var(--bg-card-solid) !important;
-  border: 1px solid var(--border-light) !important;
-  border-radius: 12px !important;
-  margin-bottom: 8px !important;
-  max-width: 800px !important;
-  margin-left: auto !important;
-  margin-right: auto !important;
+  background: #111 !important;
+  border: 1px solid #2a2a2a !important;
+  border-radius: 8px !important;
 }
-
 body.chat-only-mode .message-reply-banner-body strong {
-  color: var(--text-main) !important;
+  color: #fff !important;
 }
 
-/* Modals */
+/* ── Modals ── */
 body.chat-only-mode .modal {
-  background: var(--bg-card) !important;
-  border: 1px solid var(--border-light) !important;
-  box-shadow: var(--shadow-lg) !important;
-  backdrop-filter: blur(20px) !important;
-  -webkit-backdrop-filter: blur(20px) !important;
-  border-radius: 12px !important;
+  background: #111 !important;
+  border: 1px solid #2a2a2a !important;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.7) !important;
 }
-
 body.chat-only-mode .modal-header {
-  border-bottom: var(--border-sidebar) !important;
+  border-bottom: 1px solid #1a1a1a !important;
 }
-
 body.chat-only-mode .modal-footer {
-  border-top: var(--border-sidebar) !important;
+  border-top: 1px solid #1a1a1a !important;
 }
 
+/* ── Block list items ── */
 body.chat-only-mode .message-block-item {
   background: transparent !important;
-  border: 1px solid var(--border-subtle) !important;
-  border-radius: var(--radius-md) !important;
+  border: 1px solid #1a1a1a !important;
 }
-
 body.chat-only-mode .message-block-item:hover {
-  background: var(--bg-card-solid) !important;
-  border-color: var(--border-light) !important;
+  background: #1a1a1a !important;
 }
 
-/* Scrollbar tweaks */
+/* ── Scrollbar ── */
 body.chat-only-mode ::-webkit-scrollbar {
   width: 6px !important;
   height: 6px !important;
 }
-
 body.chat-only-mode ::-webkit-scrollbar-track {
   background: transparent !important;
 }
-
 body.chat-only-mode ::-webkit-scrollbar-thumb {
-  background: var(--bg-card-solid) !important;
+  background: #2a2a2a !important;
   border-radius: 99px !important;
 }
-
 body.chat-only-mode ::-webkit-scrollbar-thumb:hover {
-  background: var(--bg-card-hover) !important;
+  background: #444 !important;
 }
+
