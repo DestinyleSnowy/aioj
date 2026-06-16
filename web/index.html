@@ -8,8 +8,15 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" />
   <link rel="stylesheet" href="/styles.css" />
+  <script>
+    if (window.location.hostname !== 'hello.yxyx.space') {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
+      document.head.appendChild(link);
+    }
+  </script>
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -318,9 +325,33 @@
       <section class="content animate-fade-in" id="app">
         <div class="loading-overlay">
           <div class="spinner-ring"></div>
-          <span class="loading-text">正在加载智能评测系统...</span>
+          <span class="loading-text" id="mainLoadingText">正在加载智能评测系统...</span>
         </div>
       </section>
+      <script>
+        if (window.location.hostname === 'hello.yxyx.space') {
+          document.body.classList.add('chat-only-mode');
+          document.title = 'Chat — 在线聊天系统';
+          const t = document.getElementById('mainLoadingText');
+          if (t) t.textContent = '正在加载在线聊天...';
+          const logoContainer = document.querySelector('.brand-logo-container');
+          if (logoContainer) {
+            logoContainer.innerHTML = `
+              <svg class="brand-logo-svg" viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path>
+              </svg>
+            `;
+          }
+          const brandTitle = document.querySelector('.brand-title');
+          if (brandTitle) brandTitle.textContent = 'Chat';
+          const brandSubtitle = document.querySelector('.brand-subtitle');
+          if (brandSubtitle) brandSubtitle.textContent = '在线聊天';
+          const brand = document.querySelector('.brand');
+          if (brand) brand.title = 'Chat';
+          const desc = document.querySelector('meta[name="description"]');
+          if (desc) desc.setAttribute('content', '一个简洁、智能、安全的在线聊天系统。');
+        }
+      </script>
     </main>
   </div>
 
@@ -346,8 +377,20 @@
 
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/lib/marked.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script>
+    if (window.location.hostname !== 'hello.yxyx.space') {
+      const scripts = [
+        'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js',
+        'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'
+      ];
+      scripts.forEach(src => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.async = false;
+        document.body.appendChild(s);
+      });
+    }
+  </script>
   <script src="/chat-api.js"></script>
   <script src="/app.js"></script>
 </body>
