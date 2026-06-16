@@ -4440,3 +4440,18 @@ body.message-layout-resizing * {
     grid-template-columns: 1fr !important;
   }
 }
+
+/* Chat Only Mode Styles */
+body.chat-only-mode #mainNav a:not([data-route="/messages"]) {
+  display: none !important;
+}
+body.chat-only-mode #adminNav {
+  display: none !important;
+}
+body.chat-only-mode #userDropdownMenu a:not([href="/messages"]),
+body.chat-only-mode #userDropdownMenu button:not(#logoutBtn) {
+  display: none !important;
+}
+body.chat-only-mode #notificationBtn {
+  display: none !important;
+}

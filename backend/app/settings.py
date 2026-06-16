@@ -4,6 +4,8 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 DEFAULT_CORS_ALLOWED_ORIGINS = [
+    "https://yxyx.space",
+    "https://www.yxyx.space",
     "https://hello.yxyx.space",
     "http://127.0.0.1",
     "http://localhost",

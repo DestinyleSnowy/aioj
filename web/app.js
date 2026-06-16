@@ -10158,6 +10158,14 @@ function route() {
     path = newPath;
   }
 
+  if (window.location.hostname === 'hello.yxyx.space') {
+    const isMessagesPath = path === '/' || path === '/messages' || /^\/messages\/(?:groups\/\d+|\d+)$/.test(path);
+    if (!isMessagesPath) {
+      history.replaceState(null, '', '/');
+      path = '/';
+    }
+  }
+
   state.currentRoute = path;
   updateNav();
   if (state.user) {
@@ -10169,7 +10177,12 @@ function route() {
   app.className = 'content animate-fade-in';
 
   // Route matching
-  if (path === '/') return renderDashboard();
+  if (path === '/') {
+    if (window.location.hostname === 'hello.yxyx.space') {
+      return renderMessages();
+    }
+    return renderDashboard();
+  }
   if (path === '/problems') return renderProblems();
   if (path === '/contests') return renderContests();
   if (path === '/submissions') return renderSubmissions();
@@ -10224,6 +10237,19 @@ function route() {
 
 // ─── Dom Initialize ─────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  if (window.location.hostname === 'hello.yxyx.space') {
+    document.body.classList.add('chat-only-mode');
+    const brandTitle = document.querySelector('.brand-title');
+    if (brandTitle) brandTitle.textContent = 'Chat';
+    const brandSubtitle = document.querySelector('.brand-subtitle');
+    if (brandSubtitle) brandSubtitle.textContent = '在线聊天';
+    const brand = document.querySelector('.brand');
+    if (brand) brand.title = 'Chat';
+    document.title = 'Chat — 在线聊天系统';
+    const desc = document.querySelector('meta[name="description"]');
+    if (desc) desc.setAttribute('content', '一个简洁、智能、安全的在线聊天系统。');
+  }
+
   initSidebarMode();
   document.addEventListener('visibilitychange', () => {
     if (document.hidden || !state.user || !location.pathname.startsWith('/messages') || state.messageRefreshInFlight) return;
