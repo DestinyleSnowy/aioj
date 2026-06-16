@@ -1,4 +1,4 @@
-chat.yxyx.space {
+hello.yxyx.space {
     encode gzip
     header {
         X-Content-Type-Options nosniff
