@@ -5455,6 +5455,8 @@ function renderMessageRow(message) {
   if (message.edited_at && !deleted) metaBits.push('已编辑');
   if (message.send_state === 'pending') metaBits.push('发送中...');
   if (message.send_state === 'failed') metaBits.push('发送失败');
+  const hasBody = String(message.body_md || '').trim().length > 0;
+  const attachmentOnly = message.has_attachment && !hasBody && !Number(message.reply_to_message_id || 0);
   const menuBtn = `
     <button
       class="message-menu-btn"
@@ -5486,10 +5488,10 @@ function renderMessageRow(message) {
       ${renderMessageProfileAvatar(avatarName, avatarUrl, avatarUsername)}
       <div class="message-content">
         ${groupMessage ? `<div class="message-sender-name">${esc(mine ? `${senderLabel}（我）` : senderLabel)}</div>` : ''}
-        <div class="message-bubble">
+        <div class="message-bubble${attachmentOnly ? ' attachment-only' : ''}">
           ${renderMessageReplyPreview(message)}
           ${message.has_attachment ? renderMessageAttachment(message) : ''}
-          ${message.body_md ? renderMd(message.body_md) : ''}
+          ${hasBody ? renderMd(message.body_md) : ''}
           ${renderMessageUploadProgress(message)}
           ${renderMessageReactions(message)}
           <div class="message-meta">

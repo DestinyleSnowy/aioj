@@ -2953,6 +2953,10 @@ tr:last-child td {
   background: hsla(var(--hue-primary), 90%, 60%, 0.13);
 }
 
+.message-bubble.attachment-only {
+  width: fit-content;
+}
+
 .message-bubble .md-content {
   font-size: 14px;
   line-height: 1.6;
@@ -2971,6 +2975,7 @@ tr:last-child td {
 
 .message-image-frame {
   margin-bottom: 8px;
+  width: fit-content;
   max-width: 100%;
 }
 
