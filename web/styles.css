@@ -4442,7 +4442,13 @@ body.message-layout-resizing * {
 }
 
 /* Chat Only Mode Styles */
-body.chat-only-mode #mainNav a:not([data-route="/messages"]) {
+#backToMainLink {
+  display: none !important;
+}
+body.chat-only-mode #backToMainLink {
+  display: flex !important;
+}
+body.chat-only-mode #mainNav a:not([data-route="/messages"]):not(#backToMainLink):not(#cloudDriveLink) {
   display: none !important;
 }
 body.chat-only-mode #adminNav {

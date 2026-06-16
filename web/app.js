@@ -1206,6 +1206,12 @@ function updateNav() {
   const isAdmin = state.user && state.user.role === 'ADMIN';
   $('adminNav').style.display = isAdmin ? '' : 'none';
 
+  const quotaEl = $('cloudDriveQuota');
+  if (quotaEl) {
+    const quota = isAdmin ? '20G' : '5G';
+    quotaEl.textContent = `(${quota})`;
+  }
+
   $('userDropdownContainer').style.display = state.user ? 'block' : 'none';
   $('authBtn').style.display = state.user ? 'none' : '';
   $('notificationBtn').style.display = state.user ? 'inline-flex' : 'none';
