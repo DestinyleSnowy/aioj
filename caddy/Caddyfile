@@ -1,4 +1,4 @@
-yxyx.space, www.yxyx.space, hello.yxyx.space, drive.yxyx.space {
+(security_headers) {
     encode gzip
     header {
         X-Content-Type-Options nosniff
@@ -6,7 +6,9 @@ yxyx.space, www.yxyx.space, hello.yxyx.space, drive.yxyx.space {
         Referrer-Policy strict-origin-when-cross-origin
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
     }
+}
 
+(api_routes) {
     handle /api/internal/* {
         respond "forbidden" 403
     }
@@ -22,10 +24,57 @@ yxyx.space, www.yxyx.space, hello.yxyx.space, drive.yxyx.space {
     handle /health {
         reverse_proxy api:8000
     }
+}
 
+(spa_files) {
     handle {
         root * /srv
         try_files {path} /index.html
         file_server
     }
+}
+
+yxyx.space, www.yxyx.space {
+    import security_headers
+
+    @legacy_messages path /messages /messages/*
+    handle @legacy_messages {
+        uri strip_prefix /messages
+        redir https://hello.yxyx.space{uri} 308
+    }
+
+    @legacy_drive path /drive /drive/*
+    handle @legacy_drive {
+        uri strip_prefix /drive
+        redir https://drive.yxyx.space{uri} 308
+    }
+
+    import api_routes
+    import spa_files
+}
+
+hello.yxyx.space {
+    import security_headers
+
+    @legacy_messages path /messages /messages/*
+    handle @legacy_messages {
+        uri strip_prefix /messages
+        redir https://hello.yxyx.space{uri} 308
+    }
+
+    import api_routes
+    import spa_files
+}
+
+drive.yxyx.space {
+    import security_headers
+
+    @legacy_drive path /drive /drive/*
+    handle @legacy_drive {
+        uri strip_prefix /drive
+        redir https://drive.yxyx.space{uri} 308
+    }
+
+    import api_routes
+    import spa_files
 }

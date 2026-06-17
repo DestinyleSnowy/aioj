@@ -22,6 +22,7 @@ from app.user_profiles import avatar_url_for_user, serialize_user
 
 router = APIRouter()
 
+CHAT_WEB_BASE_URL = "https://hello.yxyx.space"
 MAX_MESSAGE_LENGTH = 4000
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_GROUP_NAME_LENGTH = 80
@@ -62,6 +63,15 @@ DANGEROUS_CONTENT_TYPES = {
     "application/x-sh",
     "text/x-shellscript",
 }
+
+
+def chat_web_url(path: str = "/") -> str:
+    normalized = "/" + str(path or "/").lstrip("/")
+    return f"{CHAT_WEB_BASE_URL}{normalized}"
+
+
+def chat_group_web_url(group_id: int) -> str:
+    return chat_web_url(f"/groups/{int(group_id)}")
 
 
 def normalize_message_body(value) -> str:
@@ -1009,7 +1019,7 @@ def notify_group_mentions(conn, *, group, body: str, sender) -> None:
             "GROUP_MENTION",
             title,
             snippet,
-            f"/messages/groups/{group['id']}",
+            chat_group_web_url(group["id"]),
         )
 
 
@@ -2755,7 +2765,7 @@ def add_message_group_members(group_id: int, payload: dict, user=Depends(require
                     "GROUP_MEMBER_ADDED",
                     f"你已加入群聊「{group['name']}」",
                     f"{user['username']} 将你加入了群聊。",
-                    f"/messages/groups/{group_id}",
+                    chat_group_web_url(group_id),
                 )
 
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
@@ -2917,7 +2927,7 @@ def transfer_message_group_owner(group_id: int, payload: dict, user=Depends(requ
             "GROUP_OWNER_TRANSFERRED",
             f"你已成为群聊「{group['name']}」的群主",
             f"{user['username']} 已将群主转让给你。",
-            f"/messages/groups/{group_id}",
+            chat_group_web_url(group_id),
         )
         group = get_group_membership(conn, group_id=group_id, user_id=user["id"])
         members = list_group_members(conn, group_id)
@@ -2940,7 +2950,7 @@ def leave_message_group(group_id: int, user=Depends(require_user)):
                 "GROUP_OWNER_TRANSFERRED",
                 f"你已成为群聊「{group['name']}」的群主",
                 f"{user['username']} 退出群聊后，群主已自动转让给你。",
-                f"/messages/groups/{group_id}",
+                chat_group_web_url(group_id),
             )
 
         conn.execute(
@@ -3850,7 +3860,7 @@ def admin_update_message_report(report_id: int, payload: dict, user=Depends(requ
                 "MESSAGE_REPORT_WARNING",
                 "你的消息已被管理员提醒",
                 resolution_note or "请遵守平台聊天规则。",
-                "/messages",
+                chat_web_url("/"),
             )
         elif action_taken == "DISABLE_SENDER" and sender_id:
             conn.execute(text("update users set is_disabled = true where id = :user_id"), {"user_id": sender_id})

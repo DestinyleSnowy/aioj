@@ -1,0 +1,271 @@
+/* Dedicated host modes: hello.yxyx.space and drive.yxyx.space */
+
+body.chat-only-mode,
+body.drive-only-mode {
+  --hue-primary: 214;
+  --hue-accent: 166;
+  --bg-app: #090c10;
+  --bg-sidebar: rgba(13, 17, 23, 0.96);
+  --bg-topbar: rgba(10, 14, 19, 0.9);
+  --bg-card: rgba(18, 23, 30, 0.82);
+  --bg-card-solid: #121820;
+  --bg-card-hover: rgba(27, 35, 44, 0.92);
+  --bg-input: rgba(255, 255, 255, 0.055);
+  --bg-input-focus: rgba(255, 255, 255, 0.085);
+  --bg-elevated: #18202a;
+  --border-subtle: 1px solid rgba(255, 255, 255, 0.075);
+  --border-light: 1px solid rgba(255, 255, 255, 0.105);
+  --border-glow: 1px solid rgba(142, 232, 198, 0.24);
+  --text-main: #f4f7f6;
+  --text-secondary: #c6d0d3;
+  --text-muted: #83919a;
+  --text-inverse: #081014;
+  --color-primary: #8bd3ff;
+  --color-accent: #8ee8c6;
+  --color-success: #7ee2aa;
+  --color-warning: #f0c36a;
+  --color-danger: #ff6f83;
+  --color-info: #8bd3ff;
+  --bg-accent-subtle: rgba(142, 232, 198, 0.1);
+  --bg-success-subtle: rgba(126, 226, 170, 0.1);
+  --bg-warning-subtle: rgba(240, 195, 106, 0.11);
+  --bg-danger-subtle: rgba(255, 111, 131, 0.1);
+  --bg-info-subtle: rgba(139, 211, 255, 0.1);
+  --grad-main: linear-gradient(135deg, #8bd3ff, #8ee8c6);
+  --grad-surface: linear-gradient(180deg, rgba(26, 34, 43, 0.9), rgba(14, 18, 24, 0.92));
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.22);
+  --shadow-md: 0 12px 30px rgba(0, 0, 0, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  --shadow-lg: 0 22px 54px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  --shadow-accent-glow: 0 0 20px rgba(142, 232, 198, 0.14);
+  --border-sidebar: 1px solid rgba(255, 255, 255, 0.08);
+  --shadow-sidebar: 5px 0 22px rgba(0, 0, 0, 0.22);
+  --text-brand-title: linear-gradient(135deg, #ffffff 24%, #8ee8c6 100%);
+  --bg-brand-header: linear-gradient(180deg, rgba(142, 232, 198, 0.055), transparent);
+  --bg-sidebar-footer: rgba(255, 255, 255, 0.025);
+  background: linear-gradient(180deg, #0b0f13 0%, #090c10 48%, #0d1116 100%) !important;
+  color: var(--text-main) !important;
+}
+
+body.chat-only-mode .topbar,
+body.drive-only-mode .topbar,
+body.chat-only-mode .sidebar,
+body.drive-only-mode .sidebar {
+  background: var(--bg-sidebar) !important;
+  border-color: rgba(255, 255, 255, 0.085) !important;
+  box-shadow: var(--shadow-sidebar) !important;
+}
+
+body.chat-only-mode .topbar,
+body.drive-only-mode .topbar {
+  background: var(--bg-topbar) !important;
+  backdrop-filter: blur(18px) saturate(150%) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(150%) !important;
+}
+
+body.chat-only-mode .sidebar .brand,
+body.drive-only-mode .sidebar .brand,
+body.chat-only-mode .sidebar-footer,
+body.drive-only-mode .sidebar-footer {
+  background: transparent !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+body.chat-only-mode .sidebar .nav-link,
+body.drive-only-mode .sidebar .nav-link {
+  color: var(--text-secondary) !important;
+  border: 1px solid transparent !important;
+  border-radius: 8px !important;
+}
+
+body.chat-only-mode .sidebar .nav-link:hover,
+body.drive-only-mode .sidebar .nav-link:hover,
+body.chat-only-mode .sidebar .nav-link.active,
+body.drive-only-mode .sidebar .nav-link.active {
+  color: var(--text-main) !important;
+  background: rgba(255, 255, 255, 0.065) !important;
+  border-color: rgba(255, 255, 255, 0.09) !important;
+  box-shadow: none !important;
+}
+
+body.chat-only-mode .btn-primary,
+body.drive-only-mode .btn-primary {
+  color: #081014 !important;
+  background: var(--grad-main) !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 24px rgba(142, 232, 198, 0.14) !important;
+}
+
+body.chat-only-mode .btn-primary:hover,
+body.drive-only-mode .btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 30px rgba(139, 211, 255, 0.16) !important;
+}
+
+body.chat-only-mode .btn-secondary,
+body.drive-only-mode .btn-secondary,
+body.chat-only-mode .drive-icon-btn,
+body.drive-only-mode .drive-icon-btn {
+  color: var(--text-secondary) !important;
+  background: rgba(255, 255, 255, 0.055) !important;
+  border: 1px solid rgba(255, 255, 255, 0.105) !important;
+  border-radius: 8px !important;
+}
+
+body.chat-only-mode .btn-secondary:hover,
+body.drive-only-mode .btn-secondary:hover,
+body.chat-only-mode .drive-icon-btn:hover,
+body.drive-only-mode .drive-icon-btn:hover {
+  color: var(--text-main) !important;
+  background: rgba(255, 255, 255, 0.09) !important;
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+
+body.chat-only-mode input[type="text"],
+body.chat-only-mode input[type="search"],
+body.chat-only-mode textarea,
+body.drive-only-mode input[type="text"],
+body.drive-only-mode input[type="search"],
+body.drive-only-mode textarea {
+  color: var(--text-main) !important;
+  background: var(--bg-input) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+body.chat-only-mode input[type="text"]:focus,
+body.chat-only-mode input[type="search"]:focus,
+body.chat-only-mode textarea:focus,
+body.drive-only-mode input[type="text"]:focus,
+body.drive-only-mode input[type="search"]:focus,
+body.drive-only-mode textarea:focus {
+  background: var(--bg-input-focus) !important;
+  border-color: rgba(142, 232, 198, 0.4) !important;
+  box-shadow: 0 0 0 3px rgba(142, 232, 198, 0.08) !important;
+}
+
+body.chat-only-mode .message-conversation-list,
+body.chat-only-mode .message-thread-panel,
+body.drive-only-mode .drive-toolbar,
+body.drive-only-mode .drive-browser,
+body.drive-only-mode .empty-state {
+  background: var(--bg-card) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  border-radius: 8px !important;
+  box-shadow: var(--shadow-md) !important;
+}
+
+body.chat-only-mode .message-conversation-list,
+body.chat-only-mode .message-thread-panel {
+  border-radius: 0 !important;
+}
+
+body.chat-only-mode .message-thread-header,
+body.chat-only-mode .message-composer,
+body.drive-only-mode .drive-browser-top {
+  background: rgba(255, 255, 255, 0.025) !important;
+  border-color: rgba(255, 255, 255, 0.075) !important;
+}
+
+body.chat-only-mode .message-conversation {
+  border-radius: 8px !important;
+  border: 1px solid transparent !important;
+}
+
+body.chat-only-mode .message-conversation:hover,
+body.chat-only-mode .message-conversation.active {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  box-shadow: inset 3px 0 0 var(--color-accent) !important;
+}
+
+body.chat-only-mode .message-conversation-top strong,
+body.chat-only-mode .message-bubble,
+body.chat-only-mode .message-bubble *,
+body.chat-only-mode .message-row.mine .message-bubble,
+body.chat-only-mode .message-row.mine .message-bubble * {
+  color: var(--text-main) !important;
+}
+
+body.chat-only-mode .message-preview,
+body.chat-only-mode .message-meta,
+body.chat-only-mode .message-meta *,
+body.chat-only-mode .message-row.mine .message-meta,
+body.chat-only-mode .message-row.mine .message-meta * {
+  color: var(--text-muted) !important;
+}
+
+body.chat-only-mode .message-bubble {
+  background: #171d25 !important;
+  border: 1px solid rgba(255, 255, 255, 0.075) !important;
+  border-radius: 18px !important;
+  box-shadow: none !important;
+}
+
+body.chat-only-mode .message-row.mine .message-bubble {
+  background: linear-gradient(135deg, rgba(48, 79, 88, 0.96), rgba(40, 63, 66, 0.96)) !important;
+  border-color: rgba(142, 232, 198, 0.22) !important;
+}
+
+body.chat-only-mode .message-bubble a,
+body.chat-only-mode .message-row.mine .message-bubble a {
+  color: var(--color-primary) !important;
+}
+
+body.chat-only-mode .message-avatar,
+body.chat-only-mode .message-avatar.group,
+body.drive-only-mode .drive-title-icon,
+body.drive-only-mode .drive-empty-icon {
+  color: var(--color-accent) !important;
+  background: rgba(142, 232, 198, 0.11) !important;
+  border: 1px solid rgba(142, 232, 198, 0.2) !important;
+  box-shadow: none !important;
+}
+
+body.chat-only-mode .message-composer-panel {
+  background: #111720 !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  border-radius: 16px !important;
+}
+
+body.chat-only-mode .message-unread-dot,
+body.chat-only-mode .message-thread-unread-badge {
+  color: #081014 !important;
+  background: var(--color-accent) !important;
+}
+
+body.drive-only-mode .drive-row {
+  border-color: rgba(255, 255, 255, 0.065) !important;
+}
+
+body.drive-only-mode .drive-head {
+  background: rgba(255, 255, 255, 0.035) !important;
+  color: var(--text-muted) !important;
+  letter-spacing: 0;
+}
+
+body.drive-only-mode .drive-row.folder:hover,
+body.drive-only-mode .drive-row.file:hover {
+  background: rgba(255, 255, 255, 0.045) !important;
+}
+
+body.drive-only-mode .drive-item-icon.folder {
+  color: var(--color-warning) !important;
+  background: rgba(240, 195, 106, 0.12) !important;
+  border-color: rgba(240, 195, 106, 0.22) !important;
+}
+
+body.drive-only-mode .drive-item-icon.file {
+  color: var(--color-primary) !important;
+  background: rgba(139, 211, 255, 0.1) !important;
+  border-color: rgba(139, 211, 255, 0.2) !important;
+}
+
+body.drive-only-mode .drive-quota-bar {
+  background: rgba(255, 255, 255, 0.075) !important;
+}
+
+body.drive-only-mode .drive-quota-bar span {
+  background: linear-gradient(90deg, var(--color-primary), var(--color-accent)) !important;
+}

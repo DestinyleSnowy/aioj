@@ -22,6 +22,47 @@ initTheme();
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
+const AIOJ_APP_MODES = new Set(['main', 'chat', 'drive']);
+const AIOJ_CHAT_HOST = 'hello.yxyx.space';
+const AIOJ_DRIVE_HOST = 'drive.yxyx.space';
+
+function appMode() {
+  const explicitMode = String(window.AIOJ_APP_MODE || '').trim().toLowerCase();
+  if (AIOJ_APP_MODES.has(explicitMode)) return explicitMode;
+  const host = window.location.hostname;
+  if (host === AIOJ_CHAT_HOST) return 'chat';
+  if (host === AIOJ_DRIVE_HOST) return 'drive';
+  return 'main';
+}
+
+function isChatApp() {
+  return appMode() === 'chat';
+}
+
+function isDriveApp() {
+  return appMode() === 'drive';
+}
+
+function sameYxyxSite() {
+  const host = window.location.hostname;
+  return host === 'yxyx.space' || host.endsWith('.yxyx.space');
+}
+
+function messageHomeHref() {
+  if (isChatApp()) return '/';
+  if (sameYxyxSite()) return `https://${AIOJ_CHAT_HOST}/`;
+  return '/messages';
+}
+
+function messageTargetHref(target = null) {
+  const parsed = parseMessageConversationKey(target);
+  if (!parsed.id) return messageHomeHref();
+  if (isChatApp() || sameYxyxSite()) {
+    const path = parsed.type === 'group' ? `/groups/${parsed.id}` : `/${parsed.id}`;
+    return isChatApp() ? path : `https://${AIOJ_CHAT_HOST}${path}`;
+  }
+  return parsed.type === 'group' ? `/messages/groups/${parsed.id}` : `/messages/${parsed.id}`;
+}
 
 function getCookie(name) {
   const value = `; ${document.cookie}`;
@@ -49,17 +90,16 @@ function eraseCookie(name) {
 }
 
 function isDriveHost() {
-  return window.location.hostname === 'drive.yxyx.space';
+  return isDriveApp();
 }
 
 function driveBasePath() {
-  return isDriveHost() ? '/' : '/drive';
+  return isDriveApp() ? '/' : '/drive';
 }
 
 function cloudDriveHref() {
-  const host = window.location.hostname;
-  if (host === 'drive.yxyx.space') return '/';
-  if (host.endsWith('yxyx.space')) return 'https://drive.yxyx.space';
+  if (isDriveApp()) return '/';
+  if (sameYxyxSite()) return `https://${AIOJ_DRIVE_HOST}/`;
   return '/drive';
 }
 
@@ -689,7 +729,7 @@ function saveGifFavorites(items = []) {
   const sliced = items.slice(0, MESSAGE_GIF_FAVORITE_MAX_ITEMS);
   writeStoredJson(MESSAGE_GIF_FAVORITES_STORAGE_KEY, sliced);
   
-  if (window.location.hostname === 'hello.yxyx.space') {
+  if (isChatApp()) {
     const iframe = document.getElementById('storageSyncIframe');
     if (iframe && iframe.contentWindow) {
       iframe.contentWindow.postMessage({
@@ -708,7 +748,7 @@ window.addEventListener('message', (event) => {
   const { action, key, value } = event.data || {};
   
   if (action === 'ready') {
-    if (window.location.hostname === 'hello.yxyx.space') {
+    if (isChatApp()) {
       const iframe = document.getElementById('storageSyncIframe');
       if (iframe && iframe.contentWindow) {
         iframe.contentWindow.postMessage({
@@ -1291,7 +1331,7 @@ function stopMessageAutoRefresh(options = {}) {
 function updateNav() {
   refreshDocumentTitle();
   const path = location.pathname || '/';
-  const isHello = window.location.hostname === 'hello.yxyx.space';
+  const isHello = isChatApp();
   const isSpace = isDriveHost();
   const cloudLink = $('cloudDriveLink');
   if (cloudLink) {
@@ -3548,6 +3588,10 @@ async function markAllNotificationsRead() {
 async function openNotificationLink(notificationId, link) {
   await markNotificationRead(notificationId, false);
   if (link) {
+    if (/^https?:\/\//i.test(link)) {
+      window.location.href = link;
+      return;
+    }
     navigate(link);
   } else if (state.currentRoute === '/notifications') {
     renderNotifications();
@@ -3859,14 +3903,14 @@ function messageConversationFromState() {
 }
 
 function isMessagesActivePath() {
-  if (window.location.hostname === 'hello.yxyx.space') {
+  if (isChatApp()) {
     return true;
   }
   return location.pathname.startsWith('/messages');
 }
 
 function messageConversationFromPath(path = location.pathname, { fallbackToState = false } = {}) {
-  const isHello = window.location.hostname === 'hello.yxyx.space';
+  const isHello = isChatApp();
   if (isHello) {
     let match = String(path || '').match(/^\/groups\/(\d+)$/);
     if (match) return parseMessageConversationKey(`group:${match[1]}`);
@@ -3904,7 +3948,7 @@ function setDeferredMessageConversationRead(conversationKey = '', shouldDefer = 
 
 function messageConversationPath(target) {
   const parsed = parseMessageConversationKey(target);
-  const isHello = window.location.hostname === 'hello.yxyx.space';
+  const isHello = isChatApp();
   if (!parsed.id) return isHello ? '/' : '/messages';
   if (isHello) {
     return parsed.type === 'group' ? `/groups/${parsed.id}` : `/${parsed.id}`;
@@ -3932,7 +3976,7 @@ function messageConversationListApiPath(limit = 100) {
 }
 
 function currentMessagePeerId() {
-  const isHello = window.location.hostname === 'hello.yxyx.space';
+  const isHello = isChatApp();
   const regex = isHello ? /^\/(\d+)$/ : /^\/messages\/(\d+)$/;
   const match = location.pathname.match(regex);
   return match ? Number(match[1]) : Number(state.messageActivePeerId || 0);
@@ -4776,7 +4820,7 @@ async function renderMessages(target = null, options = {}) {
 
     const requested = target ? parseMessageConversationKey(target) : messageConversationFromPath();
     const hasExplicitSelection = !!target || (
-      window.location.hostname === 'hello.yxyx.space'
+      isChatApp()
         ? /^\/(?:groups\/)?\d+$/.test(location.pathname || '')
         : /^\/messages\/(?:groups\/\d+|\d+)$/.test(location.pathname || '')
     );
@@ -5046,7 +5090,7 @@ async function toggleMessageConversationArchived(conversationKey, nextValue) {
   try {
     await updateMessageConversationPreferences(conversationKey, { is_archived: !!nextValue });
     if (nextValue && !state.messageShowArchived) {
-      const messagesHomePath = window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages';
+      const messagesHomePath = isChatApp() ? '/' : '/messages';
       history.pushState(null, '', messagesHomePath);
       state.currentRoute = messagesHomePath;
       await renderMessages(null, { silent: true, preserveComposer: false, scrollToBottom: false });
@@ -5186,7 +5230,7 @@ async function unblockMessageUser(userId) {
     const conversationKey = messageConversationKey('direct', normalizedUserId);
     if (currentMessageConversationKey() === conversationKey) {
       await refreshMessages(conversationKey, { preserveComposer: true, scrollToBottom: false });
-    } else if (location.pathname === (window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages')) {
+    } else if (location.pathname === (isChatApp() ? '/' : '/messages')) {
       await renderMessages(null, { silent: true, preserveComposer: true, scrollToBottom: false });
     }
   } catch (err) {
@@ -7153,7 +7197,7 @@ async function leaveMessageGroup(groupId) {
     });
     closeModal();
     toast('已退出群聊', 'success');
-    history.pushState(null, '', window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages');
+    history.pushState(null, '', isChatApp() ? '/' : '/messages');
     await renderMessages(null, { silent: true, preserveComposer: false });
   } catch (err) {
     setMessageGroupSettingsError(err.message);
@@ -7169,7 +7213,7 @@ async function deleteMessageGroup(groupId) {
     });
     closeModal();
     toast('群聊已解散', 'success');
-    history.pushState(null, '', window.location.hostname === 'hello.yxyx.space' ? '/' : '/messages');
+    history.pushState(null, '', isChatApp() ? '/' : '/messages');
     await renderMessages(null, { silent: true, preserveComposer: false });
   } catch (err) {
     setMessageGroupSettingsError(err.message);
@@ -8023,7 +8067,7 @@ async function renderUserProfile(username) {
           </div>
           <div class="profile-actions">
             ${isOwnProfile ? `<a class="btn btn-secondary btn-sm" href="/account" data-link>账户设置</a>` : ''}
-            ${state.user && !isOwnProfile ? `<a class="btn btn-primary btn-sm" href="/messages/${Number(profile.id)}" data-link>发送私信</a>` : ''}
+            ${state.user && !isOwnProfile ? `<a class="btn btn-primary btn-sm" href="${esc(messageTargetHref(`direct:${Number(profile.id)}`))}" data-link>发送私信</a>` : ''}
           </div>
         </aside>
 
@@ -10997,7 +11041,7 @@ function route() {
       history.replaceState(null, '', `/${location.search || ''}`);
       path = '/';
     }
-  } else if (window.location.hostname === 'hello.yxyx.space') {
+  } else if (isChatApp()) {
     if (path === '/messages') {
       history.replaceState(null, '', '/');
       path = '/';
@@ -11013,9 +11057,14 @@ function route() {
     }
   } else {
     // If we are on the main site (e.g. yxyx.space), clicking messages should redirect to hello.yxyx.space
-    if (path === '/messages' || path.startsWith('/messages/')) {
+    if (sameYxyxSite() && (path === '/messages' || path.startsWith('/messages/'))) {
       const targetPath = path === '/messages' ? '/' : path.replace(/^\/messages/, '');
-      window.location.href = `https://hello.yxyx.space${targetPath}`;
+      window.location.href = `https://${AIOJ_CHAT_HOST}${targetPath}`;
+      return;
+    }
+    if (sameYxyxSite() && (path === '/drive' || path.startsWith('/drive/'))) {
+      const targetPath = path === '/drive' ? '/' : path.replace(/^\/drive/, '');
+      window.location.href = `https://${AIOJ_DRIVE_HOST}${targetPath}${location.search || ''}`;
       return;
     }
   }
@@ -11035,7 +11084,7 @@ function route() {
     if (isSpace) {
       return renderCloudDrive();
     }
-    if (window.location.hostname === 'hello.yxyx.space') {
+    if (isChatApp()) {
       return renderMessages();
     }
     return renderDashboard();
@@ -11056,7 +11105,7 @@ function route() {
 
   // Parameterized routes
   let match;
-  if (window.location.hostname === 'hello.yxyx.space') {
+  if (isChatApp()) {
     if ((match = path.match(/^\/groups\/(\d+)$/))) {
       return renderMessages(`group:${match[1]}`);
     }
@@ -11106,8 +11155,12 @@ function route() {
 document.addEventListener('DOMContentLoaded', () => {
   const cloudLink = $('cloudDriveLink');
   if (cloudLink) cloudLink.href = cloudDriveHref();
+  const storageSync = $('storageSyncIframe');
+  if (storageSync && isChatApp() && storageSync.dataset.src) {
+    storageSync.src = storageSync.dataset.src;
+  }
 
-  if (window.location.hostname === 'hello.yxyx.space') {
+  if (isChatApp()) {
     document.body.classList.add('chat-only-mode');
     const brandTitle = document.querySelector('.brand-title');
     if (brandTitle) brandTitle.textContent = 'Chat';
@@ -11165,7 +11218,12 @@ document.addEventListener('DOMContentLoaded', () => {
       showAuthModal();
       return;
     }
-    navigate('/messages');
+    const href = messageHomeHref();
+    if (href.startsWith('http')) {
+      window.location.href = href;
+      return;
+    }
+    navigate(href);
   });
 
   // User profile dropdown toggle

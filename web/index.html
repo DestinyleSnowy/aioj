@@ -9,8 +9,17 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/app-modes.css" />
   <script>
-    if (window.location.hostname !== 'hello.yxyx.space' && window.location.hostname !== 'drive.yxyx.space') {
+    window.AIOJ_APP_MODE = (() => {
+      const preset = String(window.AIOJ_APP_MODE || '').trim().toLowerCase();
+      if (['main', 'chat', 'drive'].includes(preset)) return preset;
+      if (window.location.hostname === 'hello.yxyx.space') return 'chat';
+      if (window.location.hostname === 'drive.yxyx.space') return 'drive';
+      return 'main';
+    })();
+
+    if (window.AIOJ_APP_MODE === 'main') {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
@@ -329,7 +338,7 @@
         </div>
       </section>
       <script>
-        if (window.location.hostname === 'hello.yxyx.space') {
+        if (window.AIOJ_APP_MODE === 'chat') {
           document.body.classList.add('chat-only-mode');
           document.title = 'Chat — 在线聊天系统';
           const t = document.getElementById('mainLoadingText');
@@ -350,7 +359,7 @@
           if (brand) brand.title = 'Chat';
           const desc = document.querySelector('meta[name="description"]');
           if (desc) desc.setAttribute('content', '一个简洁、智能、安全的在线聊天系统。');
-        } else if (window.location.hostname === 'drive.yxyx.space') {
+        } else if (window.AIOJ_APP_MODE === 'drive') {
           document.body.classList.add('drive-only-mode');
           document.title = 'Space — 云盘';
           const t = document.getElementById('mainLoadingText');
@@ -400,12 +409,12 @@
   <div class="toast-container" id="toastContainer"></div>
 
   <!-- Hidden iframe for cross-subdomain storage sync -->
-  <iframe id="storageSyncIframe" src="https://yxyx.space/storage-sync.html" style="display:none;"></iframe>
+  <iframe id="storageSyncIframe" data-src="https://yxyx.space/storage-sync.html" style="display:none;"></iframe>
 
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/lib/marked.umd.min.js"></script>
   <script>
-    if (window.location.hostname !== 'hello.yxyx.space' && window.location.hostname !== 'drive.yxyx.space') {
+    if (window.AIOJ_APP_MODE === 'main') {
       const scripts = [
         'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js',
         'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'

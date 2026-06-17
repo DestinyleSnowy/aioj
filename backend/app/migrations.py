@@ -278,6 +278,42 @@ create index if not exists idx_message_attachment_jobs_status
   on message_attachment_jobs(status, updated_at desc);
 """
 
+DRIVE_SCHEMA_COMPATIBILITY_SQL = """
+create table if not exists drive_items (
+  id bigserial primary key,
+  owner_id bigint not null references users(id) on delete cascade,
+  parent_id bigint references drive_items(id) on delete cascade,
+  kind text not null,
+  name text not null,
+  object_key text,
+  content_type text,
+  size_bytes bigint not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint drive_items_kind_check check (kind in ('FOLDER', 'FILE')),
+  constraint drive_items_name_length_check check (length(btrim(name)) between 1 and 180),
+  constraint drive_items_file_payload_check check (
+    (kind = 'FILE' and object_key is not null and size_bytes >= 0)
+    or (kind = 'FOLDER' and object_key is null and size_bytes = 0)
+  ),
+  constraint drive_items_no_self_parent_check check (parent_id is null or parent_id <> id)
+);
+
+create unique index if not exists idx_drive_items_unique_root_name
+  on drive_items(owner_id, lower(name))
+  where parent_id is null;
+
+create unique index if not exists idx_drive_items_unique_child_name
+  on drive_items(owner_id, parent_id, lower(name))
+  where parent_id is not null;
+
+create index if not exists idx_drive_items_owner_parent
+  on drive_items(owner_id, parent_id, kind, lower(name));
+
+create index if not exists idx_drive_items_owner_updated
+  on drive_items(owner_id, updated_at desc, id desc);
+"""
+
 
 def backend_dir() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -315,3 +351,8 @@ def run_migrations(*, database_url: str | None = None, revision: str = "head") -
 def ensure_message_schema_compatibility() -> None:
     with engine.begin() as conn:
         conn.execute(text(MESSAGE_SCHEMA_COMPATIBILITY_SQL))
+
+
+def ensure_drive_schema_compatibility() -> None:
+    with engine.begin() as conn:
+        conn.execute(text(DRIVE_SCHEMA_COMPATIBILITY_SQL))

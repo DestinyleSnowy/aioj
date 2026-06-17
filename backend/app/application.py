@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.bootstrap import ensure_admin, validate_runtime_configuration
-from app.migrations import ensure_message_schema_compatibility, run_migrations
+from app.migrations import ensure_drive_schema_compatibility, ensure_message_schema_compatibility, run_migrations
 from app.routers.admin_users import router as admin_users_router
 from app.routers.audit_admin import router as audit_admin_router
 from app.routers.auth import router as auth_router
@@ -38,6 +38,8 @@ async def lifespan(_: FastAPI):
         run_migrations()
     # Keep chat online even if a deployment skipped the latest Alembic revision.
     ensure_message_schema_compatibility()
+    # Keep drive online for deployments that start before the newest revision lands.
+    ensure_drive_schema_compatibility()
     ensure_default_settings()
     ensure_bucket(S3_BUCKET_PROBLEMS)
     ensure_bucket(S3_BUCKET_SUBMISSIONS)

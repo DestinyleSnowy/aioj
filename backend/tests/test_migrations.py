@@ -1,7 +1,9 @@
 from app.migrations import (
+    DRIVE_SCHEMA_COMPATIBILITY_SQL,
     MESSAGE_SCHEMA_COMPATIBILITY_SQL,
     alembic_ini_path,
     alembic_script_location,
+    ensure_drive_schema_compatibility,
     build_alembic_config,
     ensure_message_schema_compatibility,
     resolve_database_url,
@@ -70,3 +72,12 @@ def test_ensure_message_schema_compatibility_executes_idempotent_sql(monkeypatch
     ensure_message_schema_compatibility()
 
     assert conn.calls == [MESSAGE_SCHEMA_COMPATIBILITY_SQL]
+
+
+def test_ensure_drive_schema_compatibility_executes_idempotent_sql(monkeypatch):
+    conn = _FakeConn()
+    monkeypatch.setattr("app.migrations.engine", _FakeEngine(conn))
+
+    ensure_drive_schema_compatibility()
+
+    assert conn.calls == [DRIVE_SCHEMA_COMPATIBILITY_SQL]
