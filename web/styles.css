@@ -4742,7 +4742,9 @@ body.chat-only-mode .message-sender-name {
 }
 
 body.chat-only-mode .message-meta,
-body.chat-only-mode .message-meta * {
+body.chat-only-mode .message-meta *,
+body.chat-only-mode .message-row.mine .message-meta,
+body.chat-only-mode .message-row.mine .message-meta * {
   color: #666 !important;
 }
 
