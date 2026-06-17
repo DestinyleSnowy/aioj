@@ -7,7 +7,7 @@ DEFAULT_CORS_ALLOWED_ORIGINS = [
     "https://yxyx.space",
     "https://www.yxyx.space",
     "https://hello.yxyx.space",
-    "https://space.yxyx.space",
+    "https://drive.yxyx.space",
     "http://127.0.0.1",
     "http://localhost",
     "http://127.0.0.1:8000",

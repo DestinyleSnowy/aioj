@@ -49,7 +49,7 @@ function eraseCookie(name) {
 }
 
 function isDriveHost() {
-  return window.location.hostname === 'space.yxyx.space';
+  return window.location.hostname === 'drive.yxyx.space';
 }
 
 function driveBasePath() {
@@ -58,8 +58,8 @@ function driveBasePath() {
 
 function cloudDriveHref() {
   const host = window.location.hostname;
-  if (host === 'space.yxyx.space') return '/';
-  if (host.endsWith('yxyx.space')) return 'https://space.yxyx.space';
+  if (host === 'drive.yxyx.space') return '/';
+  if (host.endsWith('yxyx.space')) return 'https://drive.yxyx.space';
   return '/drive';
 }
 
