@@ -7,6 +7,7 @@ DEFAULT_CORS_ALLOWED_ORIGINS = [
     "https://yxyx.space",
     "https://www.yxyx.space",
     "https://hello.yxyx.space",
+    "https://space.yxyx.space",
     "http://127.0.0.1",
     "http://localhost",
     "http://127.0.0.1:8000",
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
     s3_bucket_logs: str = "aioj-logs"
     s3_bucket_messages: str = "aioj-messages"
     s3_bucket_avatars: str = "aioj-avatars"
+    s3_bucket_drive: str = "aioj-drive"
 
     internal_api_token: str = ""
     jwt_secret: str = ""
@@ -55,6 +57,9 @@ class Settings(BaseSettings):
     max_problem_zip_mb: int = 512
     max_problem_files: int = 2000
     max_problem_uncompressed_mb: int = 2048
+    max_drive_file_mb: int = 100
+    drive_user_quota_gb: int = 5
+    drive_admin_quota_gb: int = 20
 
     stale_job_minutes: int = 15
     max_job_attempts: int = 3
@@ -98,6 +103,18 @@ class Settings(BaseSettings):
     @property
     def max_problem_uncompressed_bytes(self) -> int:
         return self.max_problem_uncompressed_mb * 1024 * 1024
+
+    @property
+    def max_drive_file_bytes(self) -> int:
+        return self.max_drive_file_mb * 1024 * 1024
+
+    @property
+    def drive_user_quota_bytes(self) -> int:
+        return self.drive_user_quota_gb * 1024 * 1024 * 1024
+
+    @property
+    def drive_admin_quota_bytes(self) -> int:
+        return self.drive_admin_quota_gb * 1024 * 1024 * 1024
 
 
 settings = Settings()

@@ -1,4 +1,4 @@
-yxyx.space, www.yxyx.space, hello.yxyx.space {
+yxyx.space, www.yxyx.space, hello.yxyx.space, space.yxyx.space {
     encode gzip
     header {
         X-Content-Type-Options nosniff

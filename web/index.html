@@ -10,7 +10,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
   <script>
-    if (window.location.hostname !== 'hello.yxyx.space') {
+    if (window.location.hostname !== 'hello.yxyx.space' && window.location.hostname !== 'space.yxyx.space') {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
       link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css';
@@ -124,7 +124,7 @@
           <span class="nav-text">聊天</span>
         </a>
 
-        <a class="nav-link" id="cloudDriveLink" href="https://drive.yxyx.space">
+        <a class="nav-link" id="cloudDriveLink" data-route="/drive" href="https://space.yxyx.space">
           <span class="nav-icon">
             <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
@@ -350,6 +350,30 @@
           if (brand) brand.title = 'Chat';
           const desc = document.querySelector('meta[name="description"]');
           if (desc) desc.setAttribute('content', '一个简洁、智能、安全的在线聊天系统。');
+        } else if (window.location.hostname === 'space.yxyx.space') {
+          document.body.classList.add('drive-only-mode');
+          document.title = 'Space — 云盘';
+          const t = document.getElementById('mainLoadingText');
+          if (t) t.textContent = '正在加载云盘...';
+          const logoContainer = document.querySelector('.brand-logo-container');
+          if (logoContainer) {
+            logoContainer.innerHTML = `
+              <svg class="brand-logo-svg" viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+              </svg>
+            `;
+          }
+          const brandTitle = document.querySelector('.brand-title');
+          if (brandTitle) brandTitle.textContent = 'Space';
+          const brandSubtitle = document.querySelector('.brand-subtitle');
+          if (brandSubtitle) brandSubtitle.textContent = '云盘';
+          const brand = document.querySelector('.brand');
+          if (brand) {
+            brand.title = 'Space';
+            brand.href = '/';
+          }
+          const desc = document.querySelector('meta[name="description"]');
+          if (desc) desc.setAttribute('content', 'Space 云盘用于安全保存、整理和下载个人文件。');
         }
       </script>
     </main>
@@ -381,7 +405,7 @@
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/lib/marked.umd.min.js"></script>
   <script>
-    if (window.location.hostname !== 'hello.yxyx.space') {
+    if (window.location.hostname !== 'hello.yxyx.space' && window.location.hostname !== 'space.yxyx.space') {
       const scripts = [
         'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js',
         'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'

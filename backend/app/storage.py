@@ -10,6 +10,7 @@ S3_BUCKET_SUBMISSIONS = settings.s3_bucket_submissions
 S3_BUCKET_LOGS = settings.s3_bucket_logs
 S3_BUCKET_MESSAGES = settings.s3_bucket_messages
 S3_BUCKET_AVATARS = settings.s3_bucket_avatars
+S3_BUCKET_DRIVE = settings.s3_bucket_drive
 
 
 def s3_client():

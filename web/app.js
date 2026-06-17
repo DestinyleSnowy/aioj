@@ -48,6 +48,21 @@ function eraseCookie(name) {
   document.cookie = name + '=; Path=/; Expires=Thu, 01 Jan 1970 00:00:01 GMT;' + domain + "; SameSite=Lax; Secure";
 }
 
+function isDriveHost() {
+  return window.location.hostname === 'space.yxyx.space';
+}
+
+function driveBasePath() {
+  return isDriveHost() ? '/' : '/drive';
+}
+
+function cloudDriveHref() {
+  const host = window.location.hostname;
+  if (host === 'space.yxyx.space') return '/';
+  if (host.endsWith('yxyx.space')) return 'https://space.yxyx.space';
+  return '/drive';
+}
+
 const originalSetItem = localStorage.setItem.bind(localStorage);
 const originalRemoveItem = localStorage.removeItem.bind(localStorage);
 
@@ -117,6 +132,12 @@ const state = {
   messageActiveGroup: null,
   groupSettingsGroup: null,
   groupSettingsPendingMembers: [],
+  driveCurrentFolderId: null,
+  driveItems: [],
+  driveBreadcrumbs: [],
+  driveUsage: null,
+  driveSearch: '',
+  driveUploadInFlight: false,
   currentProblem: null,
   activeProblemStatementId: '',
   problemStatementPdfPreviewRequestId: 0,
@@ -149,6 +170,7 @@ const MESSAGE_IMAGE_PREVIEW_MAX_SCALE = 12;
 const MESSAGE_IMAGE_PREVIEW_ZOOM_STEP = 1.18;
 const AVATAR_FILE_SIZE_LIMIT_BYTES = 5 * 1024 * 1024;
 const AVATAR_ACCEPT_ATTRIBUTE = 'image/png,image/jpeg,image/gif,image/webp';
+const DRIVE_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const DEFAULT_SIGNATURE = '这只咪很懒，什么也没有留下';
 const SIDEBAR_MODE_STORAGE_KEY = 'aioj_sidebar_mode';
 const SIDEBAR_MODE_COLLAPSED = 'collapsed';
@@ -177,6 +199,7 @@ function refreshDocumentTitle() {
 
 function setPage(title) {
   $('app')?.classList.remove('messages-page');
+  $('app')?.classList.remove('drive-page');
   document.body.classList.remove('messages-page-active');
   $('pageTitle').textContent = title || 'AIOJ';
   if ($('pageSubtitle')) {
@@ -746,6 +769,20 @@ function formatDate(v) {
   return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
 
+function formatBytes(value) {
+  const bytes = Math.max(0, Number(value || 0));
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let size = bytes / 1024;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+  const decimals = size >= 100 || unitIndex === 0 ? 0 : size >= 10 ? 1 : 2;
+  return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
 function configureMarkdownRenderer() {
   if (state.markdownConfigured || !window.marked || typeof window.marked.setOptions !== 'function') return;
   window.marked.setOptions({
@@ -1255,11 +1292,18 @@ function updateNav() {
   refreshDocumentTitle();
   const path = location.pathname || '/';
   const isHello = window.location.hostname === 'hello.yxyx.space';
+  const isSpace = isDriveHost();
+  const cloudLink = $('cloudDriveLink');
+  if (cloudLink) {
+    cloudLink.href = cloudDriveHref();
+  }
   document.querySelectorAll('.nav-link').forEach((a) => {
     const route = a.dataset.route || '/';
     let active;
     if (isHello) {
       active = (route === '/messages');
+    } else if (isSpace) {
+      active = a.id === 'cloudDriveLink' || route === '/drive';
     } else {
       active = route === '/' ? path === '/' : path.startsWith(route);
     }
@@ -1267,11 +1311,13 @@ function updateNav() {
   });
   
   const isAdmin = state.user && state.user.role === 'ADMIN';
-  $('adminNav').style.display = isAdmin ? '' : 'none';
+  $('adminNav').style.display = isAdmin && !isSpace ? '' : 'none';
 
   const quotaEl = $('cloudDriveQuota');
   if (quotaEl) {
-    const quota = isAdmin ? '20G' : '5G';
+    const quota = state.driveUsage?.quota_bytes
+      ? formatBytes(state.driveUsage.quota_bytes).replace(' ', '')
+      : (isAdmin ? '20G' : '5G');
     quotaEl.textContent = `(${quota})`;
   }
 
@@ -10475,10 +10521,466 @@ async function publishAnnouncement(slug) {
   }
 }
 
+// ─── Cloud Drive ───────────────────────────────────────────────────────────
+function driveFolderUrl(folderId = null) {
+  const id = Number(folderId || 0);
+  return `${driveBasePath()}${id ? `?folder=${id}` : ''}`;
+}
+
+function currentDriveFolderIdFromLocation() {
+  const raw = new URLSearchParams(location.search || '').get('folder');
+  const id = Number(raw || 0);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function driveUsagePercent(usage = {}) {
+  const used = Number(usage.used_bytes || 0);
+  const quota = Number(usage.quota_bytes || 0);
+  if (!quota) return 0;
+  return Math.max(0, Math.min(100, (used / quota) * 100));
+}
+
+function driveIconSvg(name) {
+  const icons = {
+    folder: '<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>',
+    file: '<svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>',
+    upload: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>',
+    plusFolder: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><line x1="12" y1="10" x2="12" y2="16"></line><line x1="9" y1="13" x2="15" y2="13"></line></svg>',
+    refresh: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.5 9a9 9 0 0 1 14.8-3.4L23 10"></path><path d="M20.5 15a9 9 0 0 1-14.8 3.4L1 14"></path></svg>',
+    download: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>',
+    edit: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
+    trash: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>',
+    search: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+  };
+  return icons[name] || icons.file;
+}
+
+function driveItemIcon(item) {
+  if (item.kind === 'FOLDER') {
+    return `<span class="drive-item-icon folder">${driveIconSvg('folder')}</span>`;
+  }
+  const ext = String(item.name || '').split('.').pop();
+  const label = ext && ext !== item.name ? ext.slice(0, 4).toUpperCase() : 'FILE';
+  return `<span class="drive-item-icon file">${driveIconSvg('file')}<span>${esc(label)}</span></span>`;
+}
+
+function driveFilteredItems() {
+  const query = String(state.driveSearch || '').trim().toLowerCase();
+  if (!query) return state.driveItems || [];
+  return (state.driveItems || []).filter((item) => String(item.name || '').toLowerCase().includes(query));
+}
+
+function renderDriveBreadcrumbs() {
+  const crumbs = state.driveBreadcrumbs?.length ? state.driveBreadcrumbs : [{ id: null, name: 'My Drive' }];
+  return crumbs.map((crumb, idx) => `
+    <button
+      class="drive-crumb ${idx === crumbs.length - 1 ? 'active' : ''}"
+      type="button"
+      onclick="openDriveFolder(${crumb.id ? Number(crumb.id) : 'null'})"
+      title="${esc(crumb.name)}"
+    >${esc(idx === 0 ? '我的云盘' : crumb.name)}</button>
+  `).join('<span class="drive-crumb-separator">/</span>');
+}
+
+function renderDriveItemsList() {
+  const items = driveFilteredItems();
+  if (!items.length) {
+    const emptyText = state.driveSearch ? '没有匹配的文件' : '此文件夹为空';
+    return `
+      <div class="drive-empty">
+        <div class="drive-empty-icon">${driveIconSvg('folder')}</div>
+        <strong>${emptyText}</strong>
+        <span>${state.driveSearch ? '当前关键词没有结果' : '当前目录还没有内容'}</span>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="drive-table" role="table" aria-label="云盘文件列表">
+      <div class="drive-row drive-head" role="row">
+        <div>名称</div>
+        <div>大小</div>
+        <div>更新时间</div>
+        <div>操作</div>
+      </div>
+      ${items.map((item) => {
+        const isFolder = item.kind === 'FOLDER';
+        const rowAction = isFolder ? `onclick="openDriveFolder(${Number(item.id)})"` : '';
+        const rowClass = isFolder ? 'drive-row folder' : 'drive-row file';
+        return `
+          <div class="${rowClass}" role="row" ${rowAction} title="${esc(item.name)}">
+            <div class="drive-name-cell">
+              ${driveItemIcon(item)}
+              <div class="drive-name-text">
+                <strong>${esc(item.name)}</strong>
+                <span>${isFolder ? '文件夹' : esc(item.content_type || 'application/octet-stream')}</span>
+              </div>
+            </div>
+            <div class="drive-meta-cell">${isFolder ? '-' : formatBytes(item.size_bytes)}</div>
+            <div class="drive-meta-cell">${formatDate(item.updated_at || item.created_at) || '-'}</div>
+            <div class="drive-actions-cell">
+              ${isFolder ? '' : `<button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); downloadDriveFile(${Number(item.id)})" title="下载" aria-label="下载 ${esc(item.name)}">${driveIconSvg('download')}</button>`}
+              <button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); showDriveRenameModal(${Number(item.id)})" title="重命名" aria-label="重命名 ${esc(item.name)}">${driveIconSvg('edit')}</button>
+              <button class="drive-icon-btn danger" type="button" onclick="event.stopPropagation(); deleteDriveItem(${Number(item.id)})" title="删除" aria-label="删除 ${esc(item.name)}">${driveIconSvg('trash')}</button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function filterDriveItems(value) {
+  state.driveSearch = String(value || '');
+  const list = $('driveItemsList');
+  if (list) list.innerHTML = renderDriveItemsList();
+  const count = $('driveVisibleCount');
+  if (count) count.textContent = `${driveFilteredItems().length} 项`;
+}
+
+function renderDriveBrowser(data) {
+  const app = $('app');
+  state.driveItems = Array.isArray(data.items) ? data.items : [];
+  state.driveBreadcrumbs = Array.isArray(data.breadcrumbs) ? data.breadcrumbs : [];
+  state.driveUsage = data.usage || null;
+  state.driveCurrentFolderId = data.parent?.id || currentDriveFolderIdFromLocation();
+  updateNav();
+
+  const usage = state.driveUsage || {};
+  const used = Number(usage.used_bytes || 0);
+  const quota = Number(usage.quota_bytes || 0);
+  const percent = driveUsagePercent(usage);
+
+  app.innerHTML = `
+    <div class="drive-shell" id="driveShell">
+      <section class="drive-toolbar" id="driveDropZone" ondragover="handleDriveDragOver(event)" ondragleave="handleDriveDragLeave(event)" ondrop="handleDriveDrop(event)">
+        <div class="drive-toolbar-main">
+          <div class="drive-title-block">
+            <span class="drive-title-icon">${driveIconSvg('folder')}</span>
+            <div>
+              <h2>我的云盘</h2>
+              <span>${formatBytes(used)} / ${quota ? formatBytes(quota) : '-'}</span>
+            </div>
+          </div>
+          <div class="drive-actions">
+            <div class="drive-search">
+              ${driveIconSvg('search')}
+              <input id="driveSearchInput" type="search" placeholder="搜索当前文件夹" value="${esc(state.driveSearch)}" oninput="filterDriveItems(this.value)" />
+            </div>
+            <label class="btn btn-primary btn-sm drive-upload-btn" for="driveUploadInput">
+              ${driveIconSvg('upload')}
+              上传
+              <input id="driveUploadInput" type="file" multiple onchange="uploadDriveFiles(this.files)" />
+            </label>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="showDriveFolderModal()">${driveIconSvg('plusFolder')}新建文件夹</button>
+            <button class="btn btn-secondary btn-sm" type="button" onclick="renderCloudDrive()">${driveIconSvg('refresh')}刷新</button>
+          </div>
+        </div>
+        <div class="drive-quota">
+          <div class="drive-quota-bar"><span style="width:${percent.toFixed(2)}%"></span></div>
+          <span>${percent.toFixed(percent >= 10 ? 0 : 1)}%</span>
+        </div>
+      </section>
+
+      <section class="drive-browser" id="driveBrowser">
+        <div class="drive-browser-top">
+          <div class="drive-breadcrumbs">${renderDriveBreadcrumbs()}</div>
+          <span id="driveVisibleCount" class="text-muted">${driveFilteredItems().length} 项</span>
+        </div>
+        <div id="driveItemsList">${renderDriveItemsList()}</div>
+      </section>
+    </div>
+  `;
+}
+
+async function renderCloudDrive() {
+  setPage('云盘');
+  const app = $('app');
+  app.className = 'content animate-fade-in drive-page';
+
+  if (!state.user) {
+    app.innerHTML = `
+      <div class="empty-state drive-login-state">
+        <div class="empty-icon">${driveIconSvg('folder')}</div>
+        <h2 style="font-family: var(--font-display); font-size: 20px; font-weight:700; margin-bottom: 6px;">登录后访问云盘</h2>
+        <p class="text-muted" style="margin-bottom: 16px;">文件会保存在你的个人空间中，并与主站账号同步。</p>
+        <button class="btn btn-primary" onclick="showAuthModal('login')">登录 / 注册</button>
+      </div>
+    `;
+    return;
+  }
+
+  const parentId = currentDriveFolderIdFromLocation();
+  state.driveCurrentFolderId = parentId;
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在加载云盘...</span>
+    </div>
+  `;
+
+  try {
+    const params = new URLSearchParams();
+    if (parentId) params.set('parent_id', String(parentId));
+    const data = await api(`/api/drive/items${params.toString() ? `?${params.toString()}` : ''}`, {
+      headers: authHeaders(),
+    });
+    renderDriveBrowser(data);
+  } catch (err) {
+    if (err.status === 404 && parentId) {
+      history.replaceState(null, '', driveFolderUrl(null));
+      toast('文件夹不存在，已返回云盘根目录。', 'warning');
+      return renderCloudDrive();
+    }
+    app.innerHTML = `
+      <div class="notice error">${esc(err.message || '云盘加载失败')}</div>
+      <button class="btn btn-secondary mt-md" onclick="renderCloudDrive()">重试</button>
+    `;
+  }
+}
+
+function openDriveFolder(folderId = null) {
+  state.driveSearch = '';
+  navigate(driveFolderUrl(folderId));
+}
+
+function showDriveFolderModal() {
+  if (!state.user) {
+    showAuthModal('login');
+    return;
+  }
+  openModal({
+    title: '新建文件夹',
+    body: `
+      <div class="form-group">
+        <label for="driveFolderName">文件夹名称</label>
+        <input id="driveFolderName" type="text" maxlength="180" placeholder="例如：资料" />
+      </div>
+      <div id="driveFolderError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="driveFolderSubmit" onclick="createDriveFolder()">创建</button>
+    `,
+  });
+  setTimeout(() => $('driveFolderName')?.focus(), 50);
+}
+
+async function createDriveFolder() {
+  const name = $('driveFolderName')?.value?.trim();
+  if (!name) {
+    toast('请输入文件夹名称', 'warning');
+    return;
+  }
+  const btn = $('driveFolderSubmit');
+  if (btn) btn.disabled = true;
+  try {
+    await api('/api/drive/folders', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, parent_id: state.driveCurrentFolderId || null }),
+    });
+    closeModal();
+    toast('文件夹已创建', 'success');
+    await renderCloudDrive();
+  } catch (err) {
+    const el = $('driveFolderError');
+    if (el) {
+      el.style.display = '';
+      el.textContent = err.message;
+    } else {
+      toast(err.message, 'danger');
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function driveItemById(itemId) {
+  const id = Number(itemId || 0);
+  return (state.driveItems || []).find((item) => Number(item.id) === id) || null;
+}
+
+function showDriveRenameModal(itemId) {
+  const item = driveItemById(itemId);
+  if (!item) return;
+  openModal({
+    title: '重命名',
+    body: `
+      <div class="form-group">
+        <label for="driveRenameInput">名称</label>
+        <input id="driveRenameInput" type="text" maxlength="180" value="${esc(item.name)}" />
+      </div>
+      <div id="driveRenameError" class="notice error" style="display:none"></div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn btn-primary" id="driveRenameSubmit" onclick="saveDriveRename(${Number(item.id)})">保存</button>
+    `,
+  });
+  setTimeout(() => {
+    const input = $('driveRenameInput');
+    input?.focus();
+    input?.select();
+  }, 50);
+}
+
+async function saveDriveRename(itemId) {
+  const name = $('driveRenameInput')?.value?.trim();
+  if (!name) {
+    toast('请输入名称', 'warning');
+    return;
+  }
+  const btn = $('driveRenameSubmit');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/drive/items/${Number(itemId)}`, {
+      method: 'PATCH',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    closeModal();
+    toast('名称已更新', 'success');
+    await renderCloudDrive();
+  } catch (err) {
+    const el = $('driveRenameError');
+    if (el) {
+      el.style.display = '';
+      el.textContent = err.message;
+    } else {
+      toast(err.message, 'danger');
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function deleteDriveItem(itemId) {
+  const item = driveItemById(itemId);
+  if (!item) return;
+  const message = item.kind === 'FOLDER'
+    ? `删除文件夹“${item.name}”及其中所有内容？`
+    : `删除文件“${item.name}”？`;
+  if (!confirm(message)) return;
+  try {
+    await api(`/api/drive/items/${Number(itemId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    toast('已删除', 'success');
+    await renderCloudDrive();
+  } catch (err) {
+    toast(err.message, 'danger');
+  }
+}
+
+function filenameFromContentDisposition(disposition, fallback) {
+  const value = String(disposition || '');
+  const utf8Match = value.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1].trim());
+    } catch {
+      return fallback;
+    }
+  }
+  const asciiMatch = value.match(/filename="([^"]+)"/i);
+  return asciiMatch ? asciiMatch[1] : fallback;
+}
+
+async function downloadDriveFile(itemId) {
+  const item = driveItemById(itemId);
+  if (!item) return;
+  try {
+    const res = await fetch(`/api/drive/items/${Number(itemId)}/download`, { headers: authHeaders() });
+    if (!res.ok) {
+      let message = `${res.status} ${res.statusText}`;
+      try {
+        const payload = await res.json();
+        message = payload.detail || payload.message || message;
+      } catch {
+        message = await res.text() || message;
+      }
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filenameFromContentDisposition(res.headers.get('content-disposition'), item.name || 'download');
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (err) {
+    toast(err.message || '下载失败', 'danger');
+  }
+}
+
+async function uploadDriveFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  if (!state.user) {
+    showAuthModal('login');
+    return;
+  }
+  const tooLarge = files.find((file) => Number(file.size || 0) > DRIVE_MAX_UPLOAD_BYTES);
+  if (tooLarge) {
+    toast(`${tooLarge.name} 超过 100 MB 单文件限制`, 'warning');
+    return;
+  }
+  if (state.driveUploadInFlight) return;
+  state.driveUploadInFlight = true;
+  const input = $('driveUploadInput');
+  if (input) input.disabled = true;
+  let uploaded = 0;
+  try {
+    for (const file of files) {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (state.driveCurrentFolderId) fd.append('parent_id', String(state.driveCurrentFolderId));
+      await api('/api/drive/files', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: fd,
+      });
+      uploaded++;
+      toast(`已上传 ${uploaded}/${files.length}: ${file.name}`, 'success');
+    }
+    await renderCloudDrive();
+  } catch (err) {
+    toast(err.message || '上传失败', 'danger');
+    await renderCloudDrive();
+  } finally {
+    state.driveUploadInFlight = false;
+    if (input) {
+      input.disabled = false;
+      input.value = '';
+    }
+  }
+}
+
+function handleDriveDragOver(event) {
+  event.preventDefault();
+  $('driveDropZone')?.classList.add('dragover');
+}
+
+function handleDriveDragLeave(event) {
+  event.preventDefault();
+  $('driveDropZone')?.classList.remove('dragover');
+}
+
+function handleDriveDrop(event) {
+  event.preventDefault();
+  $('driveDropZone')?.classList.remove('dragover');
+  uploadDriveFiles(event.dataTransfer?.files);
+}
+
 // ─── SPA Router ─────────────────────────────────────────────────────────────
 function route() {
   clearPageState();
   let path = location.pathname || '/';
+  const isSpace = isDriveHost();
 
   // Support legacy hash routers redirects
   if (location.hash.startsWith('#/')) {
@@ -10487,7 +10989,15 @@ function route() {
     path = newPath;
   }
 
-  if (window.location.hostname === 'hello.yxyx.space') {
+  if (isSpace) {
+    if (path === '/drive') {
+      history.replaceState(null, '', `/${location.search || ''}`);
+      path = '/';
+    } else if (path !== '/') {
+      history.replaceState(null, '', `/${location.search || ''}`);
+      path = '/';
+    }
+  } else if (window.location.hostname === 'hello.yxyx.space') {
     if (path === '/messages') {
       history.replaceState(null, '', '/');
       path = '/';
@@ -10522,11 +11032,15 @@ function route() {
 
   // Route matching
   if (path === '/') {
+    if (isSpace) {
+      return renderCloudDrive();
+    }
     if (window.location.hostname === 'hello.yxyx.space') {
       return renderMessages();
     }
     return renderDashboard();
   }
+  if (path === '/drive') return renderCloudDrive();
   if (path === '/problems') return renderProblems();
   if (path === '/contests') return renderContests();
   if (path === '/submissions') return renderSubmissions();
@@ -10590,6 +11104,9 @@ function route() {
 
 // ─── Dom Initialize ─────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  const cloudLink = $('cloudDriveLink');
+  if (cloudLink) cloudLink.href = cloudDriveHref();
+
   if (window.location.hostname === 'hello.yxyx.space') {
     document.body.classList.add('chat-only-mode');
     const brandTitle = document.querySelector('.brand-title');
@@ -10601,6 +11118,28 @@ document.addEventListener('DOMContentLoaded', () => {
     document.title = 'Chat — 在线聊天系统';
     const desc = document.querySelector('meta[name="description"]');
     if (desc) desc.setAttribute('content', '一个简洁、智能、安全的在线聊天系统。');
+  } else if (isDriveHost()) {
+    document.body.classList.add('drive-only-mode');
+    const logoContainer = document.querySelector('.brand-logo-container');
+    if (logoContainer) {
+      logoContainer.innerHTML = `
+        <svg class="brand-logo-svg" viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path>
+        </svg>
+      `;
+    }
+    const brandTitle = document.querySelector('.brand-title');
+    if (brandTitle) brandTitle.textContent = 'Space';
+    const brandSubtitle = document.querySelector('.brand-subtitle');
+    if (brandSubtitle) brandSubtitle.textContent = '云盘';
+    const brand = document.querySelector('.brand');
+    if (brand) {
+      brand.title = 'Space';
+      brand.href = '/';
+    }
+    document.title = 'Space — 云盘';
+    const desc = document.querySelector('meta[name="description"]');
+    if (desc) desc.setAttribute('content', 'Space 云盘用于安全保存、整理和下载个人文件。');
   }
 
   initSidebarMode();

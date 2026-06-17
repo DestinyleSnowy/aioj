@@ -32,6 +32,12 @@ def test_create_app_registers_core_routes():
     assert "/api/contests/{slug}/scoreboard-advanced" in paths
     assert "/api/notifications" in paths
     assert "/api/admin/notifications/broadcast" in paths
+    assert "/api/drive/summary" in paths
+    assert "/api/drive/items" in paths
+    assert "/api/drive/folders" in paths
+    assert "/api/drive/files" in paths
+    assert "/api/drive/items/{item_id}" in paths
+    assert "/api/drive/items/{item_id}/download" in paths
     assert "/api/messages/conversations" in paths
     assert "/api/messages/unread-count" in paths
     assert "/api/messages/events" in paths

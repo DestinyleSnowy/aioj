@@ -10,6 +10,7 @@ from app.routers.audit_admin import router as audit_admin_router
 from app.routers.auth import router as auth_router
 from app.routers.contest_admin import router as contest_admin_router
 from app.routers.contests import router as contests_router
+from app.routers.drive import router as drive_router
 from app.routers.internal import router as internal_router
 from app.routers.judge_admin import router as judge_admin_router
 from app.routers.messages import router as messages_router
@@ -21,6 +22,7 @@ from app.services.system_settings import ensure_default_settings
 from app.settings import settings
 from app.storage import (
     S3_BUCKET_AVATARS,
+    S3_BUCKET_DRIVE,
     S3_BUCKET_LOGS,
     S3_BUCKET_MESSAGES,
     S3_BUCKET_PROBLEMS,
@@ -42,6 +44,7 @@ async def lifespan(_: FastAPI):
     ensure_bucket(S3_BUCKET_LOGS)
     ensure_bucket(S3_BUCKET_MESSAGES)
     ensure_bucket(S3_BUCKET_AVATARS)
+    ensure_bucket(S3_BUCKET_DRIVE)
     if settings.bootstrap_admin_on_startup:
         ensure_admin()
     yield
@@ -64,6 +67,7 @@ def create_app() -> FastAPI:
         audit_admin_router,
         judge_admin_router,
         notifications_router,
+        drive_router,
         messages_router,
         problems_router,
         submissions_router,

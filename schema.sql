@@ -480,6 +480,26 @@ create table if not exists message_attachment_jobs (
   )
 );
 
+create table if not exists drive_items (
+  id bigserial primary key,
+  owner_id bigint not null references users(id) on delete cascade,
+  parent_id bigint references drive_items(id) on delete cascade,
+  kind text not null,
+  name text not null,
+  object_key text,
+  content_type text,
+  size_bytes bigint not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint drive_items_kind_check check (kind in ('FOLDER', 'FILE')),
+  constraint drive_items_name_length_check check (length(btrim(name)) between 1 and 180),
+  constraint drive_items_file_payload_check check (
+    (kind = 'FILE' and object_key is not null and size_bytes >= 0)
+    or (kind = 'FOLDER' and object_key is null and size_bytes = 0)
+  ),
+  constraint drive_items_no_self_parent_check check (parent_id is null or parent_id <> id)
+);
+
 create table if not exists audit_logs (
   id bigserial primary key,
   user_id bigint references users(id) on delete set null,
@@ -541,6 +561,10 @@ create index if not exists idx_message_group_announcements_group on message_grou
 create index if not exists idx_message_group_invites_group on message_group_invites(group_id, created_at desc);
 create index if not exists idx_message_group_moderation_logs_group on message_group_moderation_logs(group_id, created_at desc);
 create index if not exists idx_message_attachment_jobs_status on message_attachment_jobs(status, updated_at desc);
+create unique index if not exists idx_drive_items_unique_root_name on drive_items(owner_id, lower(name)) where parent_id is null;
+create unique index if not exists idx_drive_items_unique_child_name on drive_items(owner_id, parent_id, lower(name)) where parent_id is not null;
+create index if not exists idx_drive_items_owner_parent on drive_items(owner_id, parent_id, kind, lower(name));
+create index if not exists idx_drive_items_owner_updated on drive_items(owner_id, updated_at desc, id desc);
 create index if not exists idx_audit_logs_created_desc on audit_logs(created_at desc, id desc);
 create index if not exists idx_audit_logs_user_created on audit_logs(user_id, created_at desc, id desc);
 create index if not exists idx_audit_logs_resource on audit_logs(resource_type, resource_id, created_at desc);
