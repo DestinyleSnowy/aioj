@@ -103,6 +103,12 @@ function cloudDriveHref() {
   return '/drive';
 }
 
+function chatHref() {
+  if (isChatApp()) return '/';
+  if (sameYxyxSite() || isDriveApp()) return `https://${AIOJ_CHAT_HOST}/`;
+  return '/messages';
+}
+
 const originalSetItem = localStorage.setItem.bind(localStorage);
 const originalRemoveItem = localStorage.removeItem.bind(localStorage);
 
@@ -11155,6 +11161,8 @@ function route() {
 document.addEventListener('DOMContentLoaded', () => {
   const cloudLink = $('cloudDriveLink');
   if (cloudLink) cloudLink.href = cloudDriveHref();
+  const chatLink = $('chatLink');
+  if (chatLink) chatLink.href = chatHref();
   const storageSync = $('storageSyncIframe');
   if (storageSync && isChatApp() && storageSync.dataset.src) {
     storageSync.src = storageSync.dataset.src;

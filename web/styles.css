@@ -4453,7 +4453,7 @@ body.drive-only-mode #backToMainLink {
   display: flex !important;
 }
 
-body.drive-only-mode #mainNav a:not(#backToMainLink):not(#cloudDriveLink),
+body.drive-only-mode #mainNav a:not(#backToMainLink):not(#cloudDriveLink):not(#chatLink),
 body.drive-only-mode #adminNav,
 body.drive-only-mode #notificationBtn,
 body.drive-only-mode #messageBtn {

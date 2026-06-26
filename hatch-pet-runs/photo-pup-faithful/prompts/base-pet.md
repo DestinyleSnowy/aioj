@@ -1,0 +1,7 @@
+Create one clean full-body reference sprite for Codex pet Photo Pup.
+
+Pet identity: Must resemble the provided photo closely: extremely fluffy white plush dog/toy, close rounded cloud-like head, ears mostly hidden in fur not tall pointed ears, small glossy black bead eyes, small low black triangular nose, no visible mouth, large front paws/paw pads facing viewer near bottom, soft overgrown fur obscuring body, cozy tilted plush expression. Avoid generic puppy, avoid upright terrier ears, avoid Westie/Pomeranian/anime style, avoid clean sculpted dog anatomy, avoid doodles/text/music notes from the photo..
+Style: Pet-safe sprite: compact full-body mascot, readable in a 192x208 cell, clear silhouette, simple face, stable palette/materials, and crisp edges for chroma-key extraction. Style `plush`: Soft plush toy mascot with rounded stitched forms, fuzzy fabric feel, simple sewn details, and readable toy-like proportions. User style notes: Photo-faithful soft plush toy sprite, slightly photoreal fuzzy fur, compact front-facing body, readable at 192x208, flat chroma-key background, no shadows..
+
+
+Place a single centered pose on a perfectly flat pure green #00FF00 chroma-key background. Keep the full pet visible, compact, readable at 192x208, and easy to animate. Preserve approved reference identity cues. No scenery, text, borders, checkerboard transparency, shadows, glows, detached effects, or extra props. Keep #00FF00 and close colors out of the pet, props, highlights, and effects.

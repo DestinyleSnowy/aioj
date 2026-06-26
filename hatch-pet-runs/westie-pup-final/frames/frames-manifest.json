@@ -1,0 +1,125 @@
+{
+  "ok": true,
+  "chroma_key": {
+    "hex": "#0000FF",
+    "rgb": [
+      0,
+      0,
+      255
+    ],
+    "threshold": 96.0
+  },
+  "rows": [
+    {
+      "state": "idle",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\idle\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\idle\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\idle\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\idle\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\idle\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\idle\\05.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "running-right",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\05.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\06.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-right\\07.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "running-left",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\05.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\06.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running-left\\07.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "waving",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waving\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waving\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waving\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waving\\03.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "jumping",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\jumping\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\jumping\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\jumping\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\jumping\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\jumping\\04.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "failed",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\05.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\06.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\failed\\07.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "waiting",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waiting\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waiting\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waiting\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waiting\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waiting\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\waiting\\05.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "running",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\running\\05.png"
+      ],
+      "method": "stable-slots"
+    },
+    {
+      "state": "review",
+      "frames": [
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\review\\00.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\review\\01.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\review\\02.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\review\\03.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\review\\04.png",
+        "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\frames\\review\\05.png"
+      ],
+      "method": "stable-slots"
+    }
+  ]
+}

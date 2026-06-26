@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "run_dir": "E:\\aioj\\hatch-pet-runs\\westie-pup-final",
+  "spritesheet": "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\final\\spritesheet.webp",
+  "validation": "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\final\\validation.json",
+  "contact_sheet": "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\qa\\contact-sheet.png",
+  "review": "E:\\aioj\\hatch-pet-runs\\westie-pup-final\\qa\\review.json",
+  "package": "C:\\Users\\Administrator\\.codex\\pets\\westie-pup",
+  "visual_qa": "pass_with_note",
+  "note": "Used user-provided Westie base; preserved grey-white fur tones; stable-slots extraction plus chroma-green cleanup was used to remove generated green bands."
+}

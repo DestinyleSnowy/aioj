@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "run_dir": "E:\\aioj\\hatch-pet-runs\\cloud-pup",
+  "spritesheet": "E:\\aioj\\hatch-pet-runs\\cloud-pup\\final\\spritesheet.webp",
+  "validation": "E:\\aioj\\hatch-pet-runs\\cloud-pup\\final\\validation.json",
+  "contact_sheet": "E:\\aioj\\hatch-pet-runs\\cloud-pup\\qa\\contact-sheet.png",
+  "review": "E:\\aioj\\hatch-pet-runs\\cloud-pup\\qa\\review.json",
+  "package": "C:\\Users\\Administrator\\.codex\\pets\\cloud-pup",
+  "visual_qa": "pass",
+  "repair_note": "running-left regenerated to fix mirror clipping"
+}

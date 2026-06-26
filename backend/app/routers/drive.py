@@ -1,4 +1,5 @@
 import mimetypes
+from threading import Lock
 from pathlib import Path
 from urllib.parse import quote
 from uuid import uuid4
@@ -11,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import engine
 from app.dependencies import require_user
+from app.migrations import ensure_drive_schema_compatibility
 from app.rate_limit import check_rate_limit, client_key
 from app.services.audit import audit_log
 from app.settings import settings
@@ -21,6 +23,19 @@ router = APIRouter()
 DRIVE_FOLDER_KIND = "FOLDER"
 DRIVE_FILE_KIND = "FILE"
 DRIVE_NAME_MAX_LENGTH = 180
+_drive_schema_ready = False
+_drive_schema_lock = Lock()
+
+
+def ensure_drive_schema_ready() -> None:
+    global _drive_schema_ready
+    if _drive_schema_ready:
+        return
+    with _drive_schema_lock:
+        if _drive_schema_ready:
+            return
+        ensure_drive_schema_compatibility()
+        _drive_schema_ready = True
 
 
 def normalize_drive_name(value: str | None, *, fallback: str = "Untitled") -> str:
@@ -204,12 +219,14 @@ def parse_item_id(item_id: int) -> int:
 
 @router.get("/api/drive/summary")
 def drive_summary(user=Depends(require_user)):
+    ensure_drive_schema_ready()
     with engine.connect() as conn:
         return {"usage": usage_payload(conn, user)}
 
 
 @router.get("/api/drive/items")
 def list_drive_items(parent_id: str | None = Query(None), user=Depends(require_user)):
+    ensure_drive_schema_ready()
     user_id = int(user["id"])
     normalized_parent_id = normalize_optional_drive_id(parent_id)
 
@@ -262,6 +279,7 @@ def list_drive_items(parent_id: str | None = Query(None), user=Depends(require_u
 
 @router.post("/api/drive/folders")
 def create_drive_folder(payload: dict, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
     user_id = int(user["id"])
     check_rate_limit(client_key(request, "drive-folder", str(user_id)), max_calls=120, window_seconds=3600)
     parent_id = normalize_optional_drive_id(payload.get("parent_id"))
@@ -301,6 +319,7 @@ async def upload_drive_file(
     file: UploadFile = File(...),
     user=Depends(require_user),
 ):
+    ensure_drive_schema_ready()
     user_id = int(user["id"])
     check_rate_limit(client_key(request, "drive-upload", str(user_id)), max_calls=120, window_seconds=3600)
     normalized_parent_id = normalize_optional_drive_id(parent_id)
@@ -364,6 +383,7 @@ async def upload_drive_file(
 
 @router.patch("/api/drive/items/{item_id}")
 def update_drive_item(item_id: int, payload: dict, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
     user_id = int(user["id"])
     item_id = parse_item_id(item_id)
     check_rate_limit(client_key(request, "drive-update", str(user_id)), max_calls=240, window_seconds=3600)
@@ -408,6 +428,7 @@ def update_drive_item(item_id: int, payload: dict, request: Request, user=Depend
 
 @router.delete("/api/drive/items/{item_id}")
 def delete_drive_item(item_id: int, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
     user_id = int(user["id"])
     item_id = parse_item_id(item_id)
     check_rate_limit(client_key(request, "drive-delete", str(user_id)), max_calls=120, window_seconds=3600)
@@ -457,6 +478,7 @@ def delete_drive_item(item_id: int, request: Request, user=Depends(require_user)
 
 @router.get("/api/drive/items/{item_id}/download")
 def download_drive_item(item_id: int, user=Depends(require_user)):
+    ensure_drive_schema_ready()
     user_id = int(user["id"])
     item_id = parse_item_id(item_id)
     with engine.connect() as conn:

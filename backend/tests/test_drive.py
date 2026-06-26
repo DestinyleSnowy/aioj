@@ -3,6 +3,7 @@ from fastapi import HTTPException
 
 from app.routers.drive import (
     drive_quota_bytes,
+    ensure_drive_schema_ready,
     normalize_content_type,
     normalize_drive_name,
     normalize_optional_drive_id,
@@ -46,3 +47,17 @@ def test_content_type_suffix_and_quota_helpers():
     assert object_suffix("archive", "application/zip") == ".zip"
     assert drive_quota_bytes({"role": "USER"}) == settings.drive_user_quota_bytes
     assert drive_quota_bytes({"role": "ADMIN"}) == settings.drive_admin_quota_bytes
+
+
+def test_ensure_drive_schema_ready_runs_once(monkeypatch):
+    import app.routers.drive as drive
+
+    calls: list[str] = []
+    monkeypatch.setattr(drive, "_drive_schema_ready", False)
+    monkeypatch.setattr(drive, "ensure_drive_schema_compatibility", lambda: calls.append("ok"))
+
+    ensure_drive_schema_ready()
+    ensure_drive_schema_ready()
+
+    assert calls == ["ok"]
+    assert drive._drive_schema_ready is True
