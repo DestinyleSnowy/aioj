@@ -3,6 +3,8 @@ from fastapi import HTTPException
 
 from app.routers.drive import (
     drive_quota_bytes,
+    drive_parent_filter,
+    ensure_name_available,
     ensure_drive_schema_ready,
     normalize_content_type,
     normalize_drive_name,
@@ -38,6 +40,43 @@ def test_normalize_optional_drive_id_accepts_empty_and_positive_ids_only():
 
     with pytest.raises(HTTPException):
         normalize_optional_drive_id(0)
+
+
+def test_drive_parent_filter_avoids_untyped_null_parameters():
+    assert drive_parent_filter(None) == "parent_id is null"
+    assert drive_parent_filter(42) == "parent_id = :parent_id"
+
+
+class _NoDuplicateResult:
+    def first(self):
+        return None
+
+
+class _CaptureConn:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, statement, params):
+        self.calls.append((str(statement), params))
+        return _NoDuplicateResult()
+
+
+def test_ensure_name_available_generates_typed_parent_conditions():
+    conn = _CaptureConn()
+
+    ensure_name_available(conn, 1, None, "Root")
+    root_sql, root_params = conn.calls[-1]
+    assert "parent_id is null" in root_sql
+    assert ":parent_id is null" not in root_sql
+    assert ":exclude_id is null" not in root_sql
+    assert root_params["parent_id"] is None
+
+    ensure_name_available(conn, 1, 42, "Child", exclude_id=7)
+    child_sql, child_params = conn.calls[-1]
+    assert "parent_id = :parent_id" in child_sql
+    assert "id <> :exclude_id" in child_sql
+    assert child_params["parent_id"] == 42
+    assert child_params["exclude_id"] == 7
 
 
 def test_content_type_suffix_and_quota_helpers():

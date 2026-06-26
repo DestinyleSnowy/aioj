@@ -62,6 +62,10 @@ def normalize_optional_drive_id(value) -> int | None:
     return item_id
 
 
+def drive_parent_filter(parent_id: int | None) -> str:
+    return "parent_id is null" if parent_id is None else "parent_id = :parent_id"
+
+
 def normalize_content_type(filename: str | None, content_type: str | None) -> str:
     normalized = str(content_type or "").split(";", 1)[0].strip().lower()
     if normalized and normalized != "application/octet-stream":
@@ -153,15 +157,17 @@ def require_drive_item(conn, user_id: int, item_id: int):
 
 
 def ensure_name_available(conn, user_id: int, parent_id: int | None, name: str, *, exclude_id: int | None = None) -> None:
+    parent_filter = drive_parent_filter(parent_id)
+    exclude_filter = "and id <> :exclude_id" if exclude_id is not None else ""
     row = conn.execute(
         text(
-            """
+            f"""
             select id
             from drive_items
             where owner_id = :owner_id
               and lower(name) = lower(:name)
-              and ((parent_id is null and :parent_id is null) or parent_id = :parent_id)
-              and (:exclude_id is null or id <> :exclude_id)
+              and {parent_filter}
+              {exclude_filter}
             limit 1
             """
         ),
@@ -232,13 +238,14 @@ def list_drive_items(parent_id: str | None = Query(None), user=Depends(require_u
 
     with engine.connect() as conn:
         parent = require_parent_folder(conn, user_id, normalized_parent_id)
+        parent_filter = drive_parent_filter(normalized_parent_id)
         rows = conn.execute(
             text(
-                """
+                f"""
                 select id, owner_id, parent_id, kind, name, object_key, content_type, size_bytes, created_at, updated_at
                 from drive_items
                 where owner_id = :owner_id
-                  and ((parent_id is null and :parent_id is null) or parent_id = :parent_id)
+                  and {parent_filter}
                 order by case when kind = 'FOLDER' then 0 else 1 end, lower(name), id
                 """
             ),
