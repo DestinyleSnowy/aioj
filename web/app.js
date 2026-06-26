@@ -109,6 +109,17 @@ function chatHref() {
   return '/messages';
 }
 
+function adminDashboardHref() {
+  if (isDriveApp() || isChatApp()) return `${window.location.origin}/admin/dashboard`;
+  return '/admin/dashboard';
+}
+
+function syncAdminDashboardLinks() {
+  document.querySelectorAll('[data-admin-dashboard]').forEach((link) => {
+    link.href = adminDashboardHref();
+  });
+}
+
 const originalSetItem = localStorage.setItem.bind(localStorage);
 const originalRemoveItem = localStorage.removeItem.bind(localStorage);
 
@@ -1348,6 +1359,7 @@ function updateNav() {
   if (cloudLink) {
     cloudLink.href = cloudDriveHref();
   }
+  syncAdminDashboardLinks();
   document.querySelectorAll('.nav-link').forEach((a) => {
     const route = a.dataset.route || '/';
     let active;
@@ -1436,6 +1448,11 @@ function navigate(path) {
 function handleSpaLinkClick(e) {
   const link = e.target.closest('a[href]');
   if (!link) return;
+  if (link.matches('[data-admin-dashboard]')) {
+    e.preventDefault();
+    window.location.assign(adminDashboardHref());
+    return;
+  }
   const href = link.getAttribute('href');
   if (!href || href.startsWith('http') || href.startsWith('mailto:') || href.startsWith('tel:') ||
       link.target === '_blank' || link.hasAttribute('download') ||
@@ -11719,7 +11736,7 @@ function route() {
     if (path === '/drive') {
       history.replaceState(null, '', `/${location.search || ''}`);
       path = '/';
-    } else if (path !== '/') {
+    } else if (path !== '/' && path !== '/admin/dashboard') {
       history.replaceState(null, '', `/${location.search || ''}`);
       path = '/';
     }
@@ -11732,7 +11749,7 @@ function route() {
       history.replaceState(null, '', newPath);
       path = newPath;
     }
-    const isMessagesPath = path === '/' || /^\/(?:groups\/)?\d+$/.test(path);
+    const isMessagesPath = path === '/' || path === '/admin/dashboard' || /^\/(?:groups\/)?\d+$/.test(path);
     if (!isMessagesPath) {
       history.replaceState(null, '', '/');
       path = '/';
@@ -11840,6 +11857,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (cloudLink) cloudLink.href = cloudDriveHref();
   const chatLink = $('chatLink');
   if (chatLink) chatLink.href = chatHref();
+  syncAdminDashboardLinks();
   const storageSync = $('storageSyncIframe');
   if (storageSync && isChatApp() && storageSync.dataset.src) {
     storageSync.src = storageSync.dataset.src;
