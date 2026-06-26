@@ -3826,6 +3826,172 @@ def admin_list_message_reports(status: str = "OPEN", limit: int = 50, user=Depen
     return {"items": [dict(row) for row in rows]}
 
 
+@router.get("/api/admin/hello/overview")
+def admin_hello_overview(user=Depends(require_admin)):
+    with engine.connect() as conn:
+        summary = conn.execute(
+            text(
+                """
+                with message_counts as (
+                  select
+                    (select count(*) from direct_messages where deleted_at is null)::int as direct_message_count,
+                    (select count(*) from group_messages where deleted_at is null)::int as group_message_count,
+                    (select count(distinct sender_id) from (
+                      select sender_id, created_at from direct_messages where deleted_at is null
+                      union all
+                      select sender_id, created_at from group_messages where deleted_at is null
+                    ) m where m.created_at >= now() - interval '7 days')::int as active_senders_7d,
+                    (select count(*) from (
+                      select id from direct_messages where deleted_at is null and created_at::date = current_date
+                      union all
+                      select id from group_messages where deleted_at is null and created_at::date = current_date
+                    ) today_messages)::int as today_message_count,
+                    (select count(*) from (
+                      select id from direct_messages where deleted_at is null and created_at >= now() - interval '7 days'
+                      union all
+                      select id from group_messages where deleted_at is null and created_at >= now() - interval '7 days'
+                    ) recent_messages)::int as message_count_7d,
+                    (select count(*) from message_groups)::int as group_count,
+                    (select count(*) from message_group_members)::int as group_member_count
+                ),
+                attachment_counts as (
+                  select
+                    count(*)::int as attachment_count,
+                    coalesce(sum(attachment_size_bytes), 0)::bigint as attachment_bytes
+                  from (
+                    select attachment_size_bytes from direct_messages
+                    where deleted_at is null and attachment_object_key is not null
+                    union all
+                    select attachment_size_bytes from group_messages
+                    where deleted_at is null and attachment_object_key is not null
+                  ) attachments
+                ),
+                report_counts as (
+                  select
+                    count(*)::int as report_count,
+                    count(*) filter (where status = 'OPEN')::int as open_report_count
+                  from message_reports
+                )
+                select *
+                from message_counts, attachment_counts, report_counts
+                """
+            )
+        ).mappings().first()
+
+        daily_messages = conn.execute(
+            text(
+                """
+                select day::date as day,
+                       count(*) filter (where kind = 'direct')::int as direct_count,
+                       count(*) filter (where kind = 'group')::int as group_count,
+                       count(*)::int as total_count
+                from (
+                  select created_at::date as day, 'direct' as kind
+                  from direct_messages
+                  where deleted_at is null and created_at >= current_date - interval '6 days'
+                  union all
+                  select created_at::date as day, 'group' as kind
+                  from group_messages
+                  where deleted_at is null and created_at >= current_date - interval '6 days'
+                ) messages
+                group by day
+                order by day
+                """
+            )
+        ).mappings().all()
+
+        report_status_counts = conn.execute(
+            text(
+                """
+                select status, count(*)::int as count
+                from message_reports
+                group by status
+                order by status
+                """
+            )
+        ).mappings().all()
+
+        top_report_reasons = conn.execute(
+            text(
+                """
+                select reason, count(*)::int as count
+                from message_reports
+                where created_at >= now() - interval '30 days'
+                group by reason
+                order by count desc, reason asc
+                limit 8
+                """
+            )
+        ).mappings().all()
+
+        top_senders = conn.execute(
+            text(
+                """
+                select u.id, u.username, count(*)::int as message_count
+                from (
+                  select sender_id from direct_messages
+                  where deleted_at is null and created_at >= now() - interval '7 days'
+                  union all
+                  select sender_id from group_messages
+                  where deleted_at is null and created_at >= now() - interval '7 days'
+                ) messages
+                join users u on u.id = messages.sender_id
+                group by u.id, u.username
+                order by message_count desc, u.id asc
+                limit 8
+                """
+            )
+        ).mappings().all()
+
+        recent_reports = conn.execute(
+            text(
+                """
+                select
+                  mr.id,
+                  mr.status,
+                  mr.reason,
+                  mr.created_at,
+                  reporter.username as reporter_username,
+                  sender.username as message_sender_username,
+                  case when mr.direct_message_id is not null then 'direct' else 'group' end as conversation_type
+                from message_reports mr
+                join users reporter on reporter.id = mr.reporter_id
+                left join direct_messages dm on dm.id = mr.direct_message_id
+                left join group_messages gm on gm.id = mr.group_message_id
+                left join users sender on sender.id = coalesce(dm.sender_id, gm.sender_id)
+                order by
+                  case when mr.status = 'OPEN' then 0 else 1 end,
+                  mr.created_at desc,
+                  mr.id desc
+                limit 8
+                """
+            )
+        ).mappings().all()
+
+        recent_audit = conn.execute(
+            text(
+                """
+                select a.id, a.created_at, a.action, a.resource_type, a.resource_id, u.username
+                from audit_logs a
+                left join users u on u.id = a.user_id
+                where a.action like 'message.%' or a.action like 'admin.message%'
+                order by a.created_at desc, a.id desc
+                limit 8
+                """
+            )
+        ).mappings().all()
+
+    return {
+        "summary": dict(summary or {}),
+        "daily_messages": [dict(row) for row in daily_messages],
+        "report_status_counts": [dict(row) for row in report_status_counts],
+        "top_report_reasons": [dict(row) for row in top_report_reasons],
+        "top_senders": [dict(row) for row in top_senders],
+        "recent_reports": [dict(row) for row in recent_reports],
+        "recent_audit": [dict(row) for row in recent_audit],
+    }
+
+
 @router.patch("/api/admin/messages/reports/{report_id}")
 def admin_update_message_report(report_id: int, payload: dict, user=Depends(require_admin)):
     status = str(payload.get("status") or "").strip().upper()

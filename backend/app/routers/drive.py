@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.db import engine
-from app.dependencies import require_user
+from app.dependencies import require_admin, require_user
 from app.migrations import ensure_drive_schema_compatibility
 from app.rate_limit import check_rate_limit, client_key
 from app.security import hash_password, verify_password
@@ -490,6 +490,187 @@ def drive_summary(user=Depends(require_user)):
     ensure_drive_schema_ready()
     with engine.connect() as conn:
         return {"usage": usage_payload(conn, user)}
+
+
+@router.get("/api/admin/drive/overview")
+def admin_drive_overview(user=Depends(require_admin)):
+    ensure_drive_schema_ready()
+    user_quota = settings.drive_user_quota_bytes
+    admin_quota = settings.drive_admin_quota_bytes
+
+    with engine.connect() as conn:
+        summary = conn.execute(
+            text(
+                """
+                with item_counts as (
+                  select
+                    coalesce(sum(size_bytes) filter (where kind = 'FILE'), 0)::bigint as used_bytes,
+                    count(*) filter (where kind = 'FILE')::int as file_count,
+                    count(*) filter (where kind = 'FOLDER')::int as folder_count,
+                    count(distinct owner_id)::int as user_count,
+                    count(*) filter (where kind = 'FILE' and created_at::date = current_date)::int as today_file_count,
+                    coalesce(sum(size_bytes) filter (where kind = 'FILE' and created_at::date = current_date), 0)::bigint as today_uploaded_bytes
+                  from drive_items
+                ),
+                share_counts as (
+                  select
+                    count(*)::int as share_count,
+                    count(*) filter (
+                      where revoked_at is null
+                        and (expires_at is null or expires_at > now())
+                        and (max_downloads is null or download_count < max_downloads)
+                    )::int as active_share_count,
+                    count(*) filter (where revoked_at is not null)::int as revoked_share_count,
+                    count(*) filter (where revoked_at is null and expires_at is not null and expires_at <= now())::int as expired_share_count,
+                    coalesce(sum(download_count), 0)::int as share_download_count
+                  from drive_shares
+                ),
+                quota_risk as (
+                  select count(*)::int as near_quota_user_count
+                  from (
+                    select
+                      u.id,
+                      coalesce(sum(di.size_bytes) filter (where di.kind = 'FILE'), 0)::bigint as used_bytes,
+                      (case when u.role = 'ADMIN' then :admin_quota else :user_quota end)::bigint as quota_bytes
+                    from users u
+                    left join drive_items di on di.owner_id = u.id
+                    group by u.id, u.role
+                  ) usage
+                  where quota_bytes > 0 and used_bytes::numeric / quota_bytes::numeric >= 0.8
+                )
+                select *
+                from item_counts, share_counts, quota_risk
+                """
+            ),
+            {"user_quota": user_quota, "admin_quota": admin_quota},
+        ).mappings().first()
+
+        daily_uploads = conn.execute(
+            text(
+                """
+                select created_at::date as day,
+                       count(*)::int as file_count,
+                       coalesce(sum(size_bytes), 0)::bigint as uploaded_bytes
+                from drive_items
+                where kind = 'FILE' and created_at >= current_date - interval '6 days'
+                group by created_at::date
+                order by day
+                """
+            )
+        ).mappings().all()
+
+        file_type_counts = conn.execute(
+            text(
+                """
+                select
+                  case
+                    when content_type is null or content_type = '' then 'other'
+                    when split_part(content_type, '/', 1) in ('image', 'video', 'audio', 'text') then split_part(content_type, '/', 1)
+                    when content_type = 'application/pdf' then 'pdf'
+                    when content_type like 'application/zip%' then 'archive'
+                    else 'other'
+                  end as type,
+                  count(*)::int as count,
+                  coalesce(sum(size_bytes), 0)::bigint as bytes
+                from drive_items
+                where kind = 'FILE'
+                group by type
+                order by bytes desc, count desc, type asc
+                """
+            )
+        ).mappings().all()
+
+        share_status_counts = conn.execute(
+            text(
+                """
+                select status, count(*)::int as count
+                from (
+                  select
+                    case
+                      when revoked_at is not null then 'REVOKED'
+                      when expires_at is not null and expires_at <= now() then 'EXPIRED'
+                      when max_downloads is not null and download_count >= max_downloads then 'LIMITED'
+                      else 'ACTIVE'
+                    end as status
+                  from drive_shares
+                ) statuses
+                group by status
+                order by status
+                """
+            )
+        ).mappings().all()
+
+        top_users = conn.execute(
+            text(
+                """
+                select
+                  u.id,
+                  u.username,
+                  u.role,
+                  coalesce(sum(di.size_bytes) filter (where di.kind = 'FILE'), 0)::bigint as used_bytes,
+                  count(di.id) filter (where di.kind = 'FILE')::int as file_count,
+                  (case when u.role = 'ADMIN' then :admin_quota else :user_quota end)::bigint as quota_bytes
+                from users u
+                left join drive_items di on di.owner_id = u.id
+                group by u.id, u.username, u.role
+                having coalesce(sum(di.size_bytes) filter (where di.kind = 'FILE'), 0) > 0
+                order by used_bytes desc, u.id asc
+                limit 8
+                """
+            ),
+            {"user_quota": user_quota, "admin_quota": admin_quota},
+        ).mappings().all()
+
+        heavy_shares = conn.execute(
+            text(
+                """
+                select
+                  s.id,
+                  s.created_at,
+                  s.download_count,
+                  s.max_downloads,
+                  s.expires_at,
+                  i.name,
+                  i.kind,
+                  i.size_bytes,
+                  u.username as owner_username,
+                  case
+                    when s.revoked_at is not null then 'REVOKED'
+                    when s.expires_at is not null and s.expires_at <= now() then 'EXPIRED'
+                    when s.max_downloads is not null and s.download_count >= s.max_downloads then 'LIMITED'
+                    else 'ACTIVE'
+                  end as status
+                from drive_shares s
+                join drive_items i on i.id = s.item_id and i.owner_id = s.owner_id
+                join users u on u.id = s.owner_id
+                order by s.download_count desc, s.created_at desc, s.id desc
+                limit 8
+                """
+            )
+        ).mappings().all()
+
+        recent_audit = conn.execute(
+            text(
+                """
+                select a.id, a.created_at, a.action, a.resource_type, a.resource_id, u.username
+                from audit_logs a
+                left join users u on u.id = a.user_id
+                where a.action like 'drive.%'
+                order by a.created_at desc, a.id desc
+                limit 8
+                """
+            )
+        ).mappings().all()
+
+    return {
+        "summary": dict(summary or {}),
+        "daily_uploads": [dict(row) for row in daily_uploads],
+        "file_type_counts": [dict(row) for row in file_type_counts],
+        "share_status_counts": [dict(row) for row in share_status_counts],
+        "top_users": [dict(row) for row in top_users],
+        "heavy_shares": [dict(row) for row in heavy_shares],
+        "recent_audit": [dict(row) for row in recent_audit],
+    }
 
 
 @router.get("/api/drive/items")

@@ -8591,6 +8591,392 @@ function requireAdmin() {
 }
 
 async function renderAdminDashboard() {
+  if (isChatApp()) return renderHelloAdminDashboard();
+  if (isDriveHost()) return renderSpaceAdminDashboard();
+  return renderCoreAdminDashboard();
+}
+
+function adminIconSvg(name) {
+  const icons = {
+    message: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path></svg>',
+    group: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="8.5" cy="7" r="4"></circle><path d="M20 8v6"></path><path d="M23 11h-6"></path></svg>',
+    shield: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><path d="M9 12l2 2 4-5"></path></svg>',
+    paperclip: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12 20.49a6 6 0 0 1-8.49-8.49l9.44-9.44a4 4 0 0 1 5.66 5.66L9.17 17.66a2 2 0 0 1-2.83-2.83l8.49-8.49"></path></svg>',
+    cloud: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>',
+    file: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><path d="M14 2v6h6"></path></svg>',
+    share: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="M8.6 13.5l6.8 4"></path><path d="M15.4 6.5l-6.8 4"></path></svg>',
+    alert: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>',
+    activity: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"></path></svg>',
+    database: '<svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"></path><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"></path></svg>',
+  };
+  return icons[name] || icons.activity;
+}
+
+function adminNumber(value) {
+  return Math.max(0, Number(value || 0));
+}
+
+function adminPercent(part, total) {
+  const denominator = Number(total || 0);
+  if (!denominator) return 0;
+  return Math.max(0, Math.min(100, (Number(part || 0) / denominator) * 100));
+}
+
+function adminDayLabel(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value).slice(5, 10);
+  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' });
+}
+
+function adminKpiCard({ icon, label, value, meta = '', tone = 'primary' }) {
+  return `
+    <div class="admin-kpi-card ${esc(tone)}">
+      <div class="admin-kpi-icon">${adminIconSvg(icon)}</div>
+      <div class="admin-kpi-copy">
+        <div class="admin-kpi-value">${esc(value)}</div>
+        <div class="admin-kpi-label">${esc(label)}</div>
+        ${meta ? `<div class="admin-kpi-meta">${esc(meta)}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function adminBarList(items, { label, value, formatValue = (v) => v, empty = '暂无数据' }) {
+  const rows = (items || []).map((item) => {
+    const count = adminNumber(value(item));
+    return { item, count };
+  }).filter(row => row.count > 0);
+  if (!rows.length) return `<div class="admin-empty-slim">${esc(empty)}</div>`;
+  const max = Math.max(...rows.map(row => row.count), 1);
+  return `
+    <div class="admin-bar-list">
+      ${rows.map(({ item, count }) => `
+        <div class="admin-bar-row">
+          <div class="admin-bar-top">
+            <span>${esc(label(item))}</span>
+            <strong>${esc(formatValue(count, item))}</strong>
+          </div>
+          <div class="admin-bar-track"><span style="width:${adminPercent(count, max).toFixed(2)}%"></span></div>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function adminTrendBars(items, { value, label, formatValue = (v) => v, empty = '暂无趋势数据' }) {
+  const rows = (items || []).map((item) => ({ item, count: adminNumber(value(item)) }));
+  if (!rows.length) return `<div class="admin-empty-slim">${esc(empty)}</div>`;
+  const max = Math.max(...rows.map(row => row.count), 1);
+  return `
+    <div class="admin-trend-bars">
+      ${rows.map(({ item, count }) => `
+        <div class="admin-trend-item" title="${esc(`${label(item)}: ${formatValue(count, item)}`)}">
+          <div class="admin-trend-bar"><span style="height:${Math.max(8, adminPercent(count, max)).toFixed(2)}%"></span></div>
+          <small>${esc(label(item))}</small>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+function adminAuditTable(items) {
+  const rows = items || [];
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>时间</th>
+            <th>操作者</th>
+            <th>动作</th>
+            <th>资源</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.length === 0 ? `<tr><td colspan="4">${emptyBox('暂无审计记录')}</td></tr>` : rows.map(item => `
+            <tr>
+              <td style="font-size: 12px; color: var(--text-muted);">${formatDate(item.created_at)}</td>
+              <td><strong>${esc(item.username || 'system')}</strong></td>
+              <td><span class="pill blue" style="font-family: var(--font-mono); text-transform: none;">${esc(item.action)}</span></td>
+              <td style="font-family: var(--font-mono); font-size: 12px;">${esc(item.resource_type || '-')}${item.resource_id ? `#${esc(item.resource_id)}` : ''}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function adminDashboardShell(title, subtitle) {
+  return `
+    <div class="admin-dashboard-head">
+      <div>
+        <h3 class="section-title" style="margin-bottom: 4px;">${esc(title)}</h3>
+        <div class="text-muted" style="font-size: 12px;">${esc(subtitle)}</div>
+      </div>
+      <button class="btn btn-secondary" onclick="renderAdminDashboard()">${adminIconSvg('activity')}刷新面板</button>
+    </div>
+  `;
+}
+
+async function renderHelloAdminDashboard() {
+  const hostTitle = 'Hello 管理员看板';
+  setPage(hostTitle);
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `
+    ${adminDashboardShell(hostTitle, '正在读取聊天活跃度、内容安全和最近操作...')}
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在打开 Hello 看板...</span>
+    </div>
+  `;
+  try {
+    const [usersData, overview] = await Promise.all([
+      api('/api/admin/users', { headers: authHeaders() }).catch(() => ({ items: [] })),
+      api('/api/admin/hello/overview', { headers: authHeaders() }),
+    ]);
+    const users = usersData.items || [];
+    const activeUsers = users.filter(u => !u.is_disabled).length;
+    const summary = overview.summary || {};
+    const directMessages = adminNumber(summary.direct_message_count);
+    const groupMessages = adminNumber(summary.group_message_count);
+    const totalMessages = directMessages + groupMessages;
+    const openReports = adminNumber(summary.open_report_count);
+    const attachmentBytes = adminNumber(summary.attachment_bytes);
+    const reportStatus = ['OPEN', 'REVIEWED', 'DISMISSED'].map(status => {
+      const found = (overview.report_status_counts || []).find(item => item.status === status);
+      return { status, count: adminNumber(found?.count) };
+    });
+
+    app.innerHTML = `
+      ${adminDashboardShell(hostTitle, '聊天运行、举报处理和群组活跃度集中视图。')}
+
+      <div class="admin-kpi-grid">
+        ${adminKpiCard({ icon: 'message', label: '消息总量', value: totalMessages, meta: `今日 ${adminNumber(summary.today_message_count)} / 近 7 日 ${adminNumber(summary.message_count_7d)}` })}
+        ${adminKpiCard({ icon: 'group', label: '群组与成员', value: adminNumber(summary.group_count), meta: `${adminNumber(summary.group_member_count)} 个群成员关系`, tone: 'success' })}
+        ${adminKpiCard({ icon: 'shield', label: '待处理举报', value: openReports, meta: `累计 ${adminNumber(summary.report_count)} 条举报`, tone: openReports ? 'warning' : 'success' })}
+        ${adminKpiCard({ icon: 'paperclip', label: '附件流量', value: formatBytes(attachmentBytes), meta: `${adminNumber(summary.attachment_count)} 个附件`, tone: 'info' })}
+      </div>
+
+      <div class="admin-dashboard-grid">
+        <div class="card admin-panel-large">
+          <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+            <h3 class="card-title">近 7 日消息趋势</h3>
+            <a class="btn btn-secondary btn-sm" href="${esc(chatHref())}" data-link>${adminIconSvg('message')}打开聊天</a>
+          </div>
+          ${adminTrendBars(overview.daily_messages, {
+            value: item => item.total_count,
+            label: item => adminDayLabel(item.day),
+            formatValue: value => `${value} 条`
+          })}
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">消息构成</h3></div>
+          ${adminBarList([
+            { label: '私聊消息', count: directMessages },
+            { label: '群聊消息', count: groupMessages },
+            { label: '附件消息', count: adminNumber(summary.attachment_count) },
+          ], { label: item => item.label, value: item => item.count, formatValue: value => `${value} 条` })}
+        </div>
+
+        <div class="card">
+          <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+            <h3 class="card-title">举报队列</h3>
+            <button class="btn btn-secondary btn-sm" onclick="showAdminMessageReportsModal()">${adminIconSvg('shield')}处理</button>
+          </div>
+          ${adminBarList(reportStatus, {
+            label: item => ({ OPEN: '待处理', REVIEWED: '已处理', DISMISSED: '已驳回' }[item.status] || item.status),
+            value: item => item.count,
+            formatValue: value => `${value} 条`,
+            empty: '暂无举报'
+          })}
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">举报原因 Top</h3></div>
+          ${adminBarList(overview.top_report_reasons, {
+            label: item => item.reason || '未分类',
+            value: item => item.count,
+            formatValue: value => `${value} 次`,
+            empty: '近 30 日没有举报'
+          })}
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">近 7 日活跃发送者</h3></div>
+          <div class="admin-list">
+            ${(overview.top_senders || []).length ? overview.top_senders.map(item => `
+              <div class="admin-list-row">
+                <span>${esc(item.username || `用户 #${item.id}`)}</span>
+                <strong>${adminNumber(item.message_count)} 条</strong>
+              </div>
+            `).join('') : `<div class="admin-empty-slim">暂无活跃发送者</div>`}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+            <h3 class="card-title">最近举报</h3>
+            <span class="pill ${openReports ? 'yellow' : 'green'}">${openReports ? `${openReports} 待处理` : '清爽'}</span>
+          </div>
+          <div class="admin-list">
+            ${(overview.recent_reports || []).length ? overview.recent_reports.map(item => `
+              <div class="admin-list-row stacked">
+                <div>
+                  <strong>${esc(item.reason || '举报')}</strong>
+                  <span>${esc(item.reporter_username || '用户')} 举报 ${esc(item.message_sender_username || '未知发送者')}</span>
+                </div>
+                <small>${formatDate(item.created_at)}</small>
+              </div>
+            `).join('') : `<div class="admin-empty-slim">暂无举报记录</div>`}
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-lg">
+        <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+          <h3 class="card-title">Hello 最近审计</h3>
+          <a class="btn btn-secondary btn-sm" href="/admin/audit" data-link>查看全部</a>
+        </div>
+        ${adminAuditTable(overview.recent_audit || [])}
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function renderSpaceAdminDashboard() {
+  const hostTitle = 'Space 管理员看板';
+  setPage(hostTitle);
+  if (!requireAdmin()) return;
+  const app = $('app');
+  app.innerHTML = `
+    ${adminDashboardShell(hostTitle, '正在读取全站空间、分享链接和上传活动...')}
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在打开 Space 看板...</span>
+    </div>
+  `;
+  try {
+    const [usersData, overview] = await Promise.all([
+      api('/api/admin/users', { headers: authHeaders() }).catch(() => ({ items: [] })),
+      api('/api/admin/drive/overview', { headers: authHeaders() }),
+    ]);
+    const users = usersData.items || [];
+    const activeUsers = users.filter(u => !u.is_disabled).length;
+    const summary = overview.summary || {};
+    const usedBytes = adminNumber(summary.used_bytes);
+    const fileCount = adminNumber(summary.file_count);
+    const folderCount = adminNumber(summary.folder_count);
+    const activeShares = adminNumber(summary.active_share_count);
+    const totalShares = adminNumber(summary.share_count);
+    const nearQuotaUsers = adminNumber(summary.near_quota_user_count);
+
+    app.innerHTML = `
+      ${adminDashboardShell(hostTitle, '云盘容量、上传趋势、分享健康度和风险账号集中视图。')}
+
+      <div class="admin-kpi-grid">
+        ${adminKpiCard({ icon: 'database', label: '全站已用空间', value: formatBytes(usedBytes), meta: `${adminNumber(summary.user_count)} 个账号使用云盘` })}
+        ${adminKpiCard({ icon: 'file', label: '文件 / 文件夹', value: `${fileCount} / ${folderCount}`, meta: `今日上传 ${adminNumber(summary.today_file_count)} 个文件`, tone: 'info' })}
+        ${adminKpiCard({ icon: 'share', label: '有效分享', value: activeShares, meta: `总分享 ${totalShares} / 下载 ${adminNumber(summary.share_download_count)} 次`, tone: 'success' })}
+        ${adminKpiCard({ icon: 'alert', label: '容量风险账号', value: nearQuotaUsers, meta: `${activeUsers} 个正常账号`, tone: nearQuotaUsers ? 'warning' : 'success' })}
+      </div>
+
+      <div class="admin-dashboard-grid">
+        <div class="card admin-panel-large">
+          <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+            <h3 class="card-title">近 7 日上传趋势</h3>
+            <a class="btn btn-secondary btn-sm" href="/drive" data-link>${adminIconSvg('cloud')}打开云盘</a>
+          </div>
+          ${adminTrendBars(overview.daily_uploads, {
+            value: item => item.uploaded_bytes,
+            label: item => adminDayLabel(item.day),
+            formatValue: value => formatBytes(value)
+          })}
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">文件类型占用</h3></div>
+          ${adminBarList(overview.file_type_counts, {
+            label: item => ({ image: '图片', video: '视频', audio: '音频', text: '文本', pdf: 'PDF', archive: '压缩包', other: '其他' }[item.type] || item.type),
+            value: item => item.bytes,
+            formatValue: value => formatBytes(value),
+            empty: '暂无文件'
+          })}
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">分享链接状态</h3></div>
+          ${adminBarList(overview.share_status_counts, {
+            label: item => ({ ACTIVE: '可访问', EXPIRED: '已过期', LIMITED: '到达上限', REVOKED: '已撤销' }[item.status] || item.status),
+            value: item => item.count,
+            formatValue: value => `${value} 条`,
+            empty: '暂无分享链接'
+          })}
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">空间占用 Top</h3></div>
+          <div class="admin-list">
+            ${(overview.top_users || []).length ? overview.top_users.map(item => {
+              const quota = adminNumber(item.quota_bytes);
+              const percent = quota ? adminPercent(item.used_bytes, quota) : 0;
+              return `
+                <div class="admin-list-row stacked">
+                  <div>
+                    <strong>${esc(item.username || `用户 #${item.id}`)}</strong>
+                    <span>${formatBytes(item.used_bytes)} / ${quota ? formatBytes(quota) : '-'}</span>
+                  </div>
+                  <div class="admin-inline-meter"><span style="width:${percent.toFixed(2)}%"></span></div>
+                </div>
+              `;
+            }).join('') : `<div class="admin-empty-slim">暂无空间占用</div>`}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">高下载分享</h3></div>
+          <div class="admin-list">
+            ${(overview.heavy_shares || []).length ? overview.heavy_shares.map(item => `
+              <div class="admin-list-row stacked">
+                <div>
+                  <strong>${esc(item.name || '分享项目')}</strong>
+                  <span>${esc(item.owner_username || '用户')} · ${esc(item.status || 'ACTIVE')}</span>
+                </div>
+                <small>${adminNumber(item.download_count)} 次下载</small>
+              </div>
+            `).join('') : `<div class="admin-empty-slim">暂无分享下载</div>`}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3 class="card-title">今日上传概况</h3></div>
+          <div class="admin-spotlight">
+            <div>${formatBytes(summary.today_uploaded_bytes || 0)}</div>
+            <span>${adminNumber(summary.today_file_count)} 个文件进入 Space</span>
+          </div>
+          <div class="admin-note-line">全站共 ${fileCount} 个文件，${folderCount} 个文件夹。</div>
+        </div>
+      </div>
+
+      <div class="card mt-lg">
+        <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+          <h3 class="card-title">Space 最近审计</h3>
+          <a class="btn btn-secondary btn-sm" href="/admin/audit" data-link>查看全部</a>
+        </div>
+        ${adminAuditTable(overview.recent_audit || [])}
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = errorBox(err);
+  }
+}
+
+async function renderCoreAdminDashboard() {
   const hostTitle = isDriveHost() ? 'Space 管理员看板' : isChatApp() ? 'Hello 管理员看板' : '管理员看板';
   setPage(hostTitle);
   if (!requireAdmin()) return;

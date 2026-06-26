@@ -1540,6 +1540,270 @@ tr:last-child td {
   letter-spacing: 0.08em;
 }
 
+/* Admin product dashboards */
+.admin-dashboard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-lg);
+}
+
+.admin-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.admin-kpi-card {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 112px;
+  padding: 18px;
+  background: var(--bg-card);
+  border: var(--border-light);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.admin-kpi-card.primary { border-color: hsla(var(--hue-primary), 90%, 60%, 0.18); }
+.admin-kpi-card.success { border-color: hsla(var(--hue-success), 84%, 45%, 0.22); }
+.admin-kpi-card.warning { border-color: hsla(var(--hue-warning), 92%, 52%, 0.26); }
+.admin-kpi-card.info { border-color: hsla(200, 90%, 55%, 0.22); }
+
+.admin-kpi-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-primary);
+  background: var(--bg-info-subtle);
+}
+
+.admin-kpi-card.success .admin-kpi-icon {
+  color: var(--color-success);
+  background: var(--bg-success-subtle);
+}
+
+.admin-kpi-card.warning .admin-kpi-icon {
+  color: var(--color-warning);
+  background: var(--bg-warning-subtle);
+}
+
+.admin-kpi-card.info .admin-kpi-icon {
+  color: var(--color-info);
+  background: var(--bg-info-subtle);
+}
+
+.admin-kpi-copy {
+  min-width: 0;
+}
+
+.admin-kpi-value {
+  font-family: var(--font-display);
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: 0;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.admin-kpi-label {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.admin-kpi-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.admin-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-lg);
+  align-items: stretch;
+}
+
+.admin-panel-large {
+  grid-column: span 2;
+}
+
+.admin-bar-list {
+  display: grid;
+  gap: 14px;
+}
+
+.admin-bar-row {
+  display: grid;
+  gap: 7px;
+}
+
+.admin-bar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.admin-bar-top strong {
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.admin-bar-track,
+.admin-inline-meter {
+  height: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: hsla(0, 0%, 100%, 0.06);
+}
+
+.admin-bar-track span,
+.admin-inline-meter span {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--color-primary), var(--color-info));
+}
+
+.admin-trend-bars {
+  height: 220px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(34px, 1fr));
+  align-items: end;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.admin-trend-item {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  height: 100%;
+}
+
+.admin-trend-bar {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  min-height: 150px;
+  border-radius: 8px;
+  background: hsla(0, 0%, 100%, 0.035);
+  overflow: hidden;
+}
+
+.admin-trend-bar span {
+  display: block;
+  width: 100%;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, var(--color-accent), var(--color-primary));
+}
+
+.admin-trend-item small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.admin-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 42px;
+  padding: 10px 0;
+  border-bottom: var(--border-subtle);
+}
+
+.admin-list-row:last-child {
+  border-bottom: 0;
+}
+
+.admin-list-row.stacked {
+  align-items: flex-start;
+}
+
+.admin-list-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.admin-list-row strong {
+  color: var(--text-main);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.admin-list-row span,
+.admin-list-row small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.admin-inline-meter {
+  width: 120px;
+  max-width: 100%;
+}
+
+.admin-empty-slim {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  border: 1px dashed hsla(0, 0%, 100%, 0.08);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.admin-spotlight {
+  display: grid;
+  gap: 6px;
+  min-height: 96px;
+  align-content: center;
+}
+
+.admin-spotlight div {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: 0;
+  color: var(--text-main);
+}
+
+.admin-spotlight span,
+.admin-note-line {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 /* ─── 11. Problem Set & Details Workspace ────────────────────────────────── */
 .problem-layout {
   display: grid;
@@ -3978,6 +4242,14 @@ body.message-layout-resizing * {
   .stats-row {
     grid-template-columns: repeat(2, 1fr);
   }
+
+  .admin-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   
   .problem-layout {
     grid-template-columns: 1fr;
@@ -4011,6 +4283,28 @@ body.message-layout-resizing * {
 @media (max-width: 768px) {
   .stats-row {
     grid-template-columns: 1fr;
+  }
+
+  .admin-kpi-grid,
+  .admin-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-panel-large {
+    grid-column: auto;
+  }
+
+  .admin-kpi-card {
+    min-height: 96px;
+  }
+
+  .admin-trend-bars {
+    height: 180px;
+    gap: 8px;
+  }
+
+  .admin-trend-bar {
+    min-height: 120px;
   }
   
   .topbar {
