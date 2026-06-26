@@ -36,8 +36,18 @@ def test_create_app_registers_core_routes():
     assert "/api/drive/items" in paths
     assert "/api/drive/folders" in paths
     assert "/api/drive/files" in paths
+    assert "/api/drive/search" in paths
+    assert "/api/drive/batch/move" in paths
+    assert "/api/drive/batch/delete" in paths
+    assert "/api/drive/batch/download" in paths
     assert "/api/drive/items/{item_id}" in paths
+    assert "/api/drive/items/{item_id}/preview" in paths
+    assert "/api/drive/items/{item_id}/shares" in paths
     assert "/api/drive/items/{item_id}/download" in paths
+    assert "/api/drive/shares/{share_id}" in paths
+    assert "/api/drive/shares/{token}" in paths
+    assert "/api/drive/shares/{token}/preview" in paths
+    assert "/api/drive/shares/{token}/download" in paths
     assert "/api/messages/conversations" in paths
     assert "/api/messages/unread-count" in paths
     assert "/api/messages/events" in paths

@@ -6,10 +6,15 @@ from app.routers.drive import (
     drive_parent_filter,
     ensure_name_available,
     ensure_drive_schema_ready,
+    is_share_active,
     normalize_content_type,
+    normalize_batch_item_ids,
     normalize_drive_name,
+    normalize_max_downloads,
     normalize_optional_drive_id,
+    normalize_share_days,
     object_suffix,
+    previewable_content_type,
 )
 from app.settings import settings
 
@@ -86,6 +91,30 @@ def test_content_type_suffix_and_quota_helpers():
     assert object_suffix("archive", "application/zip") == ".zip"
     assert drive_quota_bytes({"role": "USER"}) == settings.drive_user_quota_bytes
     assert drive_quota_bytes({"role": "ADMIN"}) == settings.drive_admin_quota_bytes
+
+
+def test_drive_share_and_batch_helpers():
+    assert normalize_share_days("") is None
+    assert normalize_share_days(7) == 7
+    assert normalize_max_downloads("") is None
+    assert normalize_max_downloads("3") == 3
+    assert normalize_batch_item_ids([1, "2", 2]) == [1, 2]
+
+    assert previewable_content_type("image/png")
+    assert previewable_content_type("text/plain; charset=utf-8")
+    assert previewable_content_type("application/pdf")
+    assert not previewable_content_type("application/zip")
+
+    assert is_share_active({"download_count": 0, "max_downloads": 1, "expires_at": None, "revoked_at": None})
+    assert not is_share_active({"download_count": 1, "max_downloads": 1, "expires_at": None, "revoked_at": None})
+    assert not is_share_active({"download_count": 0, "max_downloads": None, "expires_at": None, "revoked_at": "now"})
+
+    with pytest.raises(HTTPException):
+        normalize_share_days(366)
+    with pytest.raises(HTTPException):
+        normalize_max_downloads(-1)
+    with pytest.raises(HTTPException):
+        normalize_batch_item_ids([])
 
 
 def test_ensure_drive_schema_ready_runs_once(monkeypatch):

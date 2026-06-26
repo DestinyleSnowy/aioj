@@ -500,6 +500,23 @@ create table if not exists drive_items (
   constraint drive_items_no_self_parent_check check (parent_id is null or parent_id <> id)
 );
 
+create table if not exists drive_shares (
+  id bigserial primary key,
+  owner_id bigint not null references users(id) on delete cascade,
+  item_id bigint not null references drive_items(id) on delete cascade,
+  token text not null unique,
+  password_hash text,
+  expires_at timestamptz,
+  max_downloads integer,
+  download_count integer not null default 0,
+  created_at timestamptz not null default now(),
+  revoked_at timestamptz,
+  constraint drive_shares_token_length_check check (length(token) between 24 and 160),
+  constraint drive_shares_downloads_check check (
+    download_count >= 0 and (max_downloads is null or max_downloads > 0)
+  )
+);
+
 create table if not exists audit_logs (
   id bigserial primary key,
   user_id bigint references users(id) on delete set null,
@@ -565,6 +582,8 @@ create unique index if not exists idx_drive_items_unique_root_name on drive_item
 create unique index if not exists idx_drive_items_unique_child_name on drive_items(owner_id, parent_id, lower(name)) where parent_id is not null;
 create index if not exists idx_drive_items_owner_parent on drive_items(owner_id, parent_id, kind, lower(name));
 create index if not exists idx_drive_items_owner_updated on drive_items(owner_id, updated_at desc, id desc);
+create index if not exists idx_drive_shares_owner_item on drive_shares(owner_id, item_id, created_at desc);
+create index if not exists idx_drive_shares_token_active on drive_shares(token) where revoked_at is null;
 create index if not exists idx_audit_logs_created_desc on audit_logs(created_at desc, id desc);
 create index if not exists idx_audit_logs_user_created on audit_logs(user_id, created_at desc, id desc);
 create index if not exists idx_audit_logs_resource on audit_logs(resource_type, resource_id, created_at desc);

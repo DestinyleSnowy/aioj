@@ -184,6 +184,11 @@ const state = {
   driveUsage: null,
   driveSearch: '',
   driveUploadInFlight: false,
+  driveUploadProgress: null,
+  driveSelectedIds: new Set(),
+  driveMoveTargetSearchResults: [],
+  driveMoveItemIds: [],
+  driveShareActiveItemId: null,
   currentProblem: null,
   activeProblemStatementId: '',
   problemStatementPdfPreviewRequestId: 0,
@@ -10601,6 +10606,10 @@ function driveIconSvg(name) {
     edit: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>',
     trash: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>',
     search: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>',
+    share: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="M8.6 13.5l6.8 4"></path><path d="M15.4 6.5l-6.8 4"></path></svg>',
+    move: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M5 9l-3 3 3 3"></path><path d="M9 5l3-3 3 3"></path><path d="M15 19l-3 3-3-3"></path><path d="M19 9l3 3-3 3"></path><path d="M2 12h20"></path><path d="M12 2v20"></path></svg>',
+    eye: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg>',
+    check: '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"></path></svg>',
   };
   return icons[name] || icons.file;
 }
@@ -10618,6 +10627,37 @@ function driveFilteredItems() {
   const query = String(state.driveSearch || '').trim().toLowerCase();
   if (!query) return state.driveItems || [];
   return (state.driveItems || []).filter((item) => String(item.name || '').toLowerCase().includes(query));
+}
+
+function driveCanPreview(item) {
+  if (!item || item.kind !== 'FILE') return false;
+  const type = String(item.content_type || '').split(';', 1)[0].toLowerCase();
+  return type.startsWith('image/')
+    || type.startsWith('text/')
+    || ['application/pdf', 'application/json', 'application/javascript', 'application/xml', 'application/x-javascript', 'image/svg+xml'].includes(type);
+}
+
+function driveSelectedIds() {
+  return Array.from(state.driveSelectedIds || []).map(Number).filter((id) => Number.isFinite(id) && id > 0);
+}
+
+function pruneDriveSelection() {
+  const ids = new Set((state.driveItems || []).map((item) => Number(item.id)));
+  state.driveSelectedIds = new Set(driveSelectedIds().filter((id) => ids.has(id)));
+}
+
+function renderDriveBatchBar() {
+  const selected = driveSelectedIds();
+  if (!selected.length) return '';
+  return `
+    <div class="drive-batch-bar" id="driveBatchBar">
+      <span>${selected.length} 项已选择</span>
+      <button class="btn btn-secondary btn-sm" type="button" onclick="downloadSelectedDriveItems()">${driveIconSvg('download')}打包下载</button>
+      <button class="btn btn-secondary btn-sm" type="button" onclick="showDriveMoveModal()">${driveIconSvg('move')}移动到</button>
+      <button class="btn btn-secondary btn-sm" type="button" onclick="clearDriveSelection()">取消选择</button>
+      <button class="btn btn-danger btn-sm" type="button" onclick="deleteSelectedDriveItems()">${driveIconSvg('trash')}删除</button>
+    </div>
+  `;
 }
 
 function renderDriveBreadcrumbs() {
@@ -10648,6 +10688,7 @@ function renderDriveItemsList() {
   return `
     <div class="drive-table" role="table" aria-label="云盘文件列表">
       <div class="drive-row drive-head" role="row">
+        <div><input type="checkbox" aria-label="全选" ${items.length && items.every((item) => state.driveSelectedIds.has(Number(item.id))) ? 'checked' : ''} onchange="toggleAllDriveItems(this.checked)" /></div>
         <div>名称</div>
         <div>大小</div>
         <div>更新时间</div>
@@ -10657,8 +10698,12 @@ function renderDriveItemsList() {
         const isFolder = item.kind === 'FOLDER';
         const rowAction = isFolder ? `onclick="openDriveFolder(${Number(item.id)})"` : '';
         const rowClass = isFolder ? 'drive-row folder' : 'drive-row file';
+        const selected = state.driveSelectedIds.has(Number(item.id));
         return `
-          <div class="${rowClass}" role="row" ${rowAction} title="${esc(item.name)}">
+          <div class="${rowClass} ${selected ? 'selected' : ''}" role="row" ${rowAction} title="${esc(item.name)}">
+            <div class="drive-select-cell">
+              <input type="checkbox" ${selected ? 'checked' : ''} onclick="event.stopPropagation()" onchange="toggleDriveItemSelection(${Number(item.id)}, this.checked)" aria-label="选择 ${esc(item.name)}" />
+            </div>
             <div class="drive-name-cell">
               ${driveItemIcon(item)}
               <div class="drive-name-text">
@@ -10669,7 +10714,10 @@ function renderDriveItemsList() {
             <div class="drive-meta-cell">${isFolder ? '-' : formatBytes(item.size_bytes)}</div>
             <div class="drive-meta-cell">${formatDate(item.updated_at || item.created_at) || '-'}</div>
             <div class="drive-actions-cell">
-              ${isFolder ? '' : `<button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); downloadDriveFile(${Number(item.id)})" title="下载" aria-label="下载 ${esc(item.name)}">${driveIconSvg('download')}</button>`}
+              ${driveCanPreview(item) ? `<button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); previewDriveFile(${Number(item.id)})" title="预览" aria-label="预览 ${esc(item.name)}">${driveIconSvg('eye')}</button>` : ''}
+              <button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); downloadDriveFile(${Number(item.id)})" title="${isFolder ? '打包下载' : '下载'}" aria-label="下载 ${esc(item.name)}">${driveIconSvg('download')}</button>
+              <button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); showDriveShareModal(${Number(item.id)})" title="分享" aria-label="分享 ${esc(item.name)}">${driveIconSvg('share')}</button>
+              <button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); showDriveMoveModal(${Number(item.id)})" title="移动" aria-label="移动 ${esc(item.name)}">${driveIconSvg('move')}</button>
               <button class="drive-icon-btn" type="button" onclick="event.stopPropagation(); showDriveRenameModal(${Number(item.id)})" title="重命名" aria-label="重命名 ${esc(item.name)}">${driveIconSvg('edit')}</button>
               <button class="drive-icon-btn danger" type="button" onclick="event.stopPropagation(); deleteDriveItem(${Number(item.id)})" title="删除" aria-label="删除 ${esc(item.name)}">${driveIconSvg('trash')}</button>
             </div>
@@ -10686,6 +10734,98 @@ function filterDriveItems(value) {
   if (list) list.innerHTML = renderDriveItemsList();
   const count = $('driveVisibleCount');
   if (count) count.textContent = `${driveFilteredItems().length} 项`;
+  const batch = $('driveBatchMount');
+  if (batch) batch.innerHTML = renderDriveBatchBar();
+}
+
+function refreshDriveListChrome() {
+  const list = $('driveItemsList');
+  if (list) list.innerHTML = renderDriveItemsList();
+  const batch = $('driveBatchMount');
+  if (batch) batch.innerHTML = renderDriveBatchBar();
+  const count = $('driveVisibleCount');
+  if (count) count.textContent = `${driveFilteredItems().length} 项`;
+}
+
+function toggleDriveItemSelection(itemId, checked) {
+  const id = Number(itemId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (!state.driveSelectedIds) state.driveSelectedIds = new Set();
+  if (checked) state.driveSelectedIds.add(id);
+  else state.driveSelectedIds.delete(id);
+  refreshDriveListChrome();
+}
+
+function toggleAllDriveItems(checked) {
+  if (!state.driveSelectedIds) state.driveSelectedIds = new Set();
+  for (const item of driveFilteredItems()) {
+    const id = Number(item.id);
+    if (checked) state.driveSelectedIds.add(id);
+    else state.driveSelectedIds.delete(id);
+  }
+  refreshDriveListChrome();
+}
+
+function clearDriveSelection() {
+  state.driveSelectedIds = new Set();
+  refreshDriveListChrome();
+}
+
+function renderDriveUploadProgress() {
+  const progress = state.driveUploadProgress;
+  if (!progress) return '';
+  const percent = Math.max(0, Math.min(100, Number(progress.percent || 0)));
+  return `
+    <div class="drive-upload-progress">
+      <div class="drive-upload-progress-top">
+        <strong>${esc(progress.fileName || '正在上传')}</strong>
+        <span>${Number(progress.index || 0)} / ${Number(progress.total || 0)} · ${percent.toFixed(percent >= 10 ? 0 : 1)}%</span>
+      </div>
+      <div class="drive-quota-bar"><span style="width:${percent.toFixed(2)}%"></span></div>
+    </div>
+  `;
+}
+
+function updateDriveUploadProgress(progress) {
+  state.driveUploadProgress = progress;
+  const mount = $('driveUploadProgressMount');
+  if (mount) mount.innerHTML = renderDriveUploadProgress();
+}
+
+function xhrUploadDriveFile(file, parentId, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const fd = new FormData();
+    fd.append('file', file);
+    if (parentId) fd.append('parent_id', String(parentId));
+    xhr.open('POST', '/api/drive/files');
+    const headers = authHeaders();
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      onProgress(Math.max(0, Math.min(100, (event.loaded / event.total) * 100)));
+    };
+    xhr.onload = () => {
+      let payload = null;
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        payload = xhr.responseText;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(payload);
+      } else {
+        const message = payload && typeof payload === 'object'
+          ? (payload.detail || payload.message || JSON.stringify(payload))
+          : (payload || `${xhr.status} ${xhr.statusText}`);
+        const err = new Error(message);
+        err.status = xhr.status;
+        reject(err);
+      }
+    };
+    xhr.onerror = () => reject(new Error('上传连接失败'));
+    xhr.send(fd);
+  });
 }
 
 function renderDriveBrowser(data) {
@@ -10694,6 +10834,7 @@ function renderDriveBrowser(data) {
   state.driveBreadcrumbs = Array.isArray(data.breadcrumbs) ? data.breadcrumbs : [];
   state.driveUsage = data.usage || null;
   state.driveCurrentFolderId = data.parent?.id || currentDriveFolderIdFromLocation();
+  pruneDriveSelection();
   updateNav();
 
   const usage = state.driveUsage || {};
@@ -10730,6 +10871,7 @@ function renderDriveBrowser(data) {
           <div class="drive-quota-bar"><span style="width:${percent.toFixed(2)}%"></span></div>
           <span>${percent.toFixed(percent >= 10 ? 0 : 1)}%</span>
         </div>
+        <div id="driveUploadProgressMount">${renderDriveUploadProgress()}</div>
       </section>
 
       <section class="drive-browser" id="driveBrowser">
@@ -10737,6 +10879,7 @@ function renderDriveBrowser(data) {
           <div class="drive-breadcrumbs">${renderDriveBreadcrumbs()}</div>
           <span id="driveVisibleCount" class="text-muted">${driveFilteredItems().length} 项</span>
         </div>
+        <div id="driveBatchMount">${renderDriveBatchBar()}</div>
         <div id="driveItemsList">${renderDriveItemsList()}</div>
       </section>
     </div>
@@ -10943,27 +11086,325 @@ async function downloadDriveFile(itemId) {
   if (!item) return;
   try {
     const res = await fetch(`/api/drive/items/${Number(itemId)}/download`, { headers: authHeaders() });
-    if (!res.ok) {
-      let message = `${res.status} ${res.statusText}`;
-      try {
-        const payload = await res.json();
-        message = payload.detail || payload.message || message;
-      } catch {
-        message = await res.text() || message;
-      }
-      throw new Error(message);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filenameFromContentDisposition(res.headers.get('content-disposition'), item.name || 'download');
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    await saveDriveDownloadResponse(res, item.kind === 'FOLDER' ? `${item.name || 'folder'}.zip` : (item.name || 'download'));
   } catch (err) {
     toast(err.message || '下载失败', 'danger');
+  }
+}
+
+async function saveDriveDownloadResponse(res, fallbackName) {
+  if (!res.ok) {
+    let message = `${res.status} ${res.statusText}`;
+    try {
+      const payload = await res.json();
+      message = payload.detail || payload.message || message;
+    } catch {
+      message = await res.text() || message;
+    }
+    throw new Error(message);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName || 'download');
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+async function downloadSelectedDriveItems() {
+  const ids = driveSelectedIds();
+  if (!ids.length) return;
+  try {
+    const res = await fetch('/api/drive/batch/download', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_ids: ids }),
+    });
+    await saveDriveDownloadResponse(res, 'drive-selection.zip');
+  } catch (err) {
+    toast(err.message || '打包下载失败', 'danger');
+  }
+}
+
+async function deleteSelectedDriveItems() {
+  const ids = driveSelectedIds();
+  if (!ids.length) return;
+  if (!confirm(`删除选中的 ${ids.length} 项及其中所有内容？`)) return;
+  try {
+    await api('/api/drive/batch/delete', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_ids: ids }),
+    });
+    clearDriveSelection();
+    toast('已删除选中项目', 'success');
+    await renderCloudDrive();
+  } catch (err) {
+    toast(err.message || '批量删除失败', 'danger');
+  }
+}
+
+async function previewDriveFile(itemId) {
+  const item = driveItemById(itemId);
+  if (!item || !driveCanPreview(item)) return;
+  const type = String(item.content_type || '').split(';', 1)[0].toLowerCase();
+  openModal({
+    title: item.name,
+    wide: true,
+    body: `<div id="drivePreviewMount" class="drive-preview-loading">正在加载预览...</div>`,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+      <button class="btn btn-primary" onclick="downloadDriveFile(${Number(itemId)})">${driveIconSvg('download')}下载</button>
+    `,
+  });
+  try {
+    const res = await fetch(`/api/drive/items/${Number(itemId)}/preview`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(await res.text() || '预览失败');
+    const mount = $('drivePreviewMount');
+    if (!mount) return;
+    if (type.startsWith('image/') || type === 'application/pdf') {
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      mount.innerHTML = type.startsWith('image/')
+        ? `<img class="drive-preview-media" alt="${esc(item.name)}" src="${objectUrl}" />`
+        : `<iframe class="drive-preview-frame" src="${objectUrl}" title="${esc(item.name)}"></iframe>`;
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 10 * 60 * 1000);
+    } else {
+      const text = await res.text();
+      mount.innerHTML = `<pre class="drive-preview-text"></pre>`;
+      const pre = mount.querySelector('pre');
+      if (pre) pre.textContent = text.slice(0, 200000);
+    }
+  } catch (err) {
+    const mount = $('drivePreviewMount');
+    if (mount) mount.textContent = err.message || '预览失败';
+  }
+}
+
+function renderDriveSharesList(shares = []) {
+  if (!shares.length) {
+    return '<div class="drive-share-empty">还没有分享链接</div>';
+  }
+  return shares.map((share) => `
+    <div class="drive-share-row">
+      <div>
+        <strong>${esc(share.active ? '可访问' : '已失效')}</strong>
+        <span>${esc(share.page_url || '')}</span>
+        <small>${share.requires_password ? '需要密码 · ' : ''}${share.expires_at ? `到期 ${formatDate(share.expires_at)} · ` : '永久有效 · '}下载 ${Number(share.download_count || 0)}${share.max_downloads ? `/${Number(share.max_downloads)}` : ''}</small>
+      </div>
+      <button class="drive-icon-btn" type="button" onclick="copyDriveShareLink('${esc(share.page_url || '')}')" title="复制">${driveIconSvg('share')}</button>
+      <button class="drive-icon-btn danger" type="button" onclick="revokeDriveShare(${Number(share.id)})" title="撤销">${driveIconSvg('trash')}</button>
+    </div>
+  `).join('');
+}
+
+async function copyDriveShareLink(url) {
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast('分享链接已复制', 'success');
+  } catch {
+    prompt('复制分享链接', url);
+  }
+}
+
+async function showDriveShareModal(itemId) {
+  const item = driveItemById(itemId);
+  if (!item) return;
+  state.driveShareActiveItemId = Number(item.id);
+  openModal({
+    title: `分享：${item.name}`,
+    wide: true,
+    body: `
+      <div class="drive-share-panel">
+        <div class="drive-share-form">
+          <div class="form-group">
+            <label for="driveShareDays">有效期</label>
+            <select id="driveShareDays">
+              <option value="">永久有效</option>
+              <option value="1">1 天</option>
+              <option value="7" selected>7 天</option>
+              <option value="30">30 天</option>
+              <option value="365">365 天</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="driveShareMaxDownloads">下载次数上限</label>
+            <input id="driveShareMaxDownloads" type="number" min="1" max="100000" placeholder="不限" />
+          </div>
+          <div class="form-group">
+            <label for="driveSharePassword">访问密码</label>
+            <input id="driveSharePassword" type="text" maxlength="80" placeholder="可选" />
+          </div>
+        </div>
+        <div id="driveShareError" class="notice error" style="display:none"></div>
+        <div id="driveShareList" class="drive-share-list">正在加载...</div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">关闭</button>
+      <button class="btn btn-primary" id="driveShareCreateBtn" onclick="createDriveShare(${Number(item.id)})">${driveIconSvg('share')}生成链接</button>
+    `,
+  });
+  await refreshDriveShares(item.id);
+}
+
+async function refreshDriveShares(itemId) {
+  const list = $('driveShareList');
+  if (list) list.textContent = '正在加载...';
+  try {
+    const data = await api(`/api/drive/items/${Number(itemId)}/shares`, { headers: authHeaders() });
+    if (list) list.innerHTML = renderDriveSharesList(data.shares || []);
+  } catch (err) {
+    if (list) list.innerHTML = `<div class="notice error">${esc(err.message || '加载分享失败')}</div>`;
+  }
+}
+
+async function createDriveShare(itemId) {
+  const btn = $('driveShareCreateBtn');
+  if (btn) btn.disabled = true;
+  const error = $('driveShareError');
+  if (error) {
+    error.style.display = 'none';
+    error.textContent = '';
+  }
+  try {
+    const days = $('driveShareDays')?.value || null;
+    const maxDownloads = $('driveShareMaxDownloads')?.value || null;
+    const password = $('driveSharePassword')?.value || '';
+    const data = await api(`/api/drive/items/${Number(itemId)}/shares`, {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        expires_in_days: days,
+        max_downloads: maxDownloads,
+        password,
+      }),
+    });
+    await refreshDriveShares(itemId);
+    await copyDriveShareLink(data.share?.page_url || '');
+  } catch (err) {
+    if (error) {
+      error.style.display = '';
+      error.textContent = err.message || '生成分享失败';
+    } else {
+      toast(err.message || '生成分享失败', 'danger');
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function revokeDriveShare(shareId) {
+  if (!confirm('撤销这个分享链接？')) return;
+  try {
+    await api(`/api/drive/shares/${Number(shareId)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    toast('分享链接已撤销', 'success');
+    const itemId = state.driveShareActiveItemId;
+    if (itemId) await refreshDriveShares(itemId);
+  } catch (err) {
+    toast(err.message || '撤销失败', 'danger');
+  }
+}
+
+function showDriveMoveModal(itemId = null) {
+  const ids = itemId ? [Number(itemId)] : driveSelectedIds();
+  if (!ids.length) {
+    toast('请先选择要移动的项目', 'warning');
+    return;
+  }
+  state.driveMoveItemIds = ids;
+  state.driveMoveTargetSearchResults = [];
+  openModal({
+    title: `移动 ${ids.length} 项`,
+    wide: true,
+    body: `
+      <div class="drive-move-panel">
+        <div class="drive-move-quick">
+          <button class="btn btn-secondary btn-sm" onclick="moveDriveItemsTo(null)">移动到根目录</button>
+          <button class="btn btn-secondary btn-sm" onclick="moveDriveItemsTo(${state.driveCurrentFolderId ? Number(state.driveCurrentFolderId) : 'null'})">移动到当前目录</button>
+        </div>
+        <div class="form-group">
+          <label for="driveMoveSearch">搜索目标文件夹</label>
+          <input id="driveMoveSearch" type="search" placeholder="输入文件夹名称" oninput="searchDriveMoveTargets(this.value)" />
+        </div>
+        <div id="driveMoveError" class="notice error" style="display:none"></div>
+        <div id="driveMoveTargets" class="drive-move-targets">
+          <div class="drive-share-empty">搜索后选择目标文件夹</div>
+        </div>
+      </div>
+    `,
+    footer: `
+      <button class="btn btn-secondary" onclick="closeModal()">取消</button>
+    `,
+  });
+  setTimeout(() => $('driveMoveSearch')?.focus(), 50);
+}
+
+let driveMoveSearchTimer = null;
+function searchDriveMoveTargets(value) {
+  clearTimeout(driveMoveSearchTimer);
+  const query = String(value || '').trim();
+  const mount = $('driveMoveTargets');
+  if (!query) {
+    if (mount) mount.innerHTML = '<div class="drive-share-empty">搜索后选择目标文件夹</div>';
+    return;
+  }
+  driveMoveSearchTimer = setTimeout(async () => {
+    if (mount) mount.textContent = '正在搜索...';
+    try {
+      const data = await api(`/api/drive/search?q=${encodeURIComponent(query)}`, { headers: authHeaders() });
+      const moving = new Set((state.driveMoveItemIds || []).map(Number));
+      const folders = (data.items || []).filter((item) => item.kind === 'FOLDER' && !moving.has(Number(item.id)));
+      state.driveMoveTargetSearchResults = folders;
+      if (!mount) return;
+      if (!folders.length) {
+        mount.innerHTML = '<div class="drive-share-empty">没有匹配的文件夹</div>';
+        return;
+      }
+      mount.innerHTML = folders.map((folder) => `
+        <button class="drive-move-target" type="button" onclick="moveDriveItemsTo(${Number(folder.id)})">
+          ${driveIconSvg('folder')}
+          <span>${esc(folder.name)}</span>
+        </button>
+      `).join('');
+    } catch (err) {
+      if (mount) mount.innerHTML = `<div class="notice error">${esc(err.message || '搜索失败')}</div>`;
+    }
+  }, 250);
+}
+
+async function moveDriveItemsTo(parentId) {
+  const ids = (state.driveMoveItemIds || []).map(Number).filter(Boolean);
+  if (!ids.length) return;
+  const error = $('driveMoveError');
+  if (error) {
+    error.style.display = 'none';
+    error.textContent = '';
+  }
+  try {
+    await api('/api/drive/batch/move', {
+      method: 'POST',
+      headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item_ids: ids, parent_id: parentId || null }),
+    });
+    closeModal();
+    clearDriveSelection();
+    toast('已移动', 'success');
+    await renderCloudDrive();
+  } catch (err) {
+    if (error) {
+      error.style.display = '';
+      error.textContent = err.message || '移动失败';
+    } else {
+      toast(err.message || '移动失败', 'danger');
+    }
   }
 }
 
@@ -10986,14 +11427,18 @@ async function uploadDriveFiles(fileList) {
   let uploaded = 0;
   try {
     for (const file of files) {
-      const fd = new FormData();
-      fd.append('file', file);
-      if (state.driveCurrentFolderId) fd.append('parent_id', String(state.driveCurrentFolderId));
-      await api('/api/drive/files', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: fd,
+      updateDriveUploadProgress({
+        fileName: file.name,
+        index: uploaded + 1,
+        total: files.length,
+        percent: 0,
       });
+      await xhrUploadDriveFile(file, state.driveCurrentFolderId, (percent) => updateDriveUploadProgress({
+        fileName: file.name,
+        index: uploaded + 1,
+        total: files.length,
+        percent,
+      }));
       uploaded++;
       toast(`已上传 ${uploaded}/${files.length}: ${file.name}`, 'success');
     }
@@ -11003,6 +11448,7 @@ async function uploadDriveFiles(fileList) {
     await renderCloudDrive();
   } finally {
     state.driveUploadInFlight = false;
+    updateDriveUploadProgress(null);
     if (input) {
       input.disabled = false;
       input.value = '';
@@ -11026,6 +11472,104 @@ function handleDriveDrop(event) {
   uploadDriveFiles(event.dataTransfer?.files);
 }
 
+async function renderPublicDriveShare(token) {
+  setPage('文件分享');
+  const app = $('app');
+  app.className = 'content animate-fade-in drive-page';
+  app.innerHTML = `
+    <div class="loading-overlay">
+      <div class="spinner-ring"></div>
+      <span class="loading-text">正在加载分享...</span>
+    </div>
+  `;
+  try {
+    const data = await api(`/api/drive/shares/${encodeURIComponent(token)}`);
+    const share = data.share || {};
+    const isFolder = share.kind === 'FOLDER';
+    app.innerHTML = `
+      <div class="drive-public-share">
+        <section class="drive-toolbar">
+          <div class="drive-toolbar-main">
+            <div class="drive-title-block">
+              <span class="drive-title-icon">${driveIconSvg(isFolder ? 'folder' : 'file')}</span>
+              <div>
+                <h2>${esc(share.name || '分享文件')}</h2>
+                <span>${esc(share.owner_username || '用户')} 分享 · ${isFolder ? '文件夹' : formatBytes(share.size_bytes || 0)}</span>
+              </div>
+            </div>
+            <div class="drive-actions">
+              ${share.requires_password ? '<input id="publicSharePassword" type="text" placeholder="访问密码" style="max-width:160px" />' : ''}
+              ${share.previewable ? `<button class="btn btn-secondary btn-sm" onclick="previewPublicDriveShare('${esc(token)}')">${driveIconSvg('eye')}预览</button>` : ''}
+              <button class="btn btn-primary btn-sm" onclick="downloadPublicDriveShare('${esc(token)}')">${driveIconSvg('download')}${isFolder ? '下载 ZIP' : '下载'}</button>
+            </div>
+          </div>
+          <div class="drive-public-meta">
+            <span>${share.expires_at ? `有效期至 ${formatDate(share.expires_at)}` : '永久有效'}</span>
+            <span>下载 ${Number(share.download_count || 0)}${share.max_downloads ? `/${Number(share.max_downloads)}` : ''}</span>
+          </div>
+        </section>
+        <section class="drive-browser">
+          <div id="publicSharePreview" class="drive-empty">
+            <div class="drive-empty-icon">${driveIconSvg(isFolder ? 'folder' : 'file')}</div>
+            <strong>${isFolder ? '文件夹分享' : '文件分享'}</strong>
+            <span>${share.requires_password ? '输入访问密码后下载或预览。' : '可以直接下载。'}</span>
+          </div>
+        </section>
+      </div>
+    `;
+  } catch (err) {
+    app.innerHTML = `
+      <div class="empty-state drive-login-state">
+        <div class="empty-icon">${driveIconSvg('share')}</div>
+        <h2 style="font-family: var(--font-display); font-size: 20px; font-weight:700; margin-bottom: 6px;">分享不可访问</h2>
+        <p class="text-muted" style="margin-bottom: 16px;">${esc(err.message || '链接不存在或已失效')}</p>
+      </div>
+    `;
+  }
+}
+
+function publicSharePasswordQuery() {
+  const password = $('publicSharePassword')?.value || '';
+  return password ? `?password=${encodeURIComponent(password)}` : '';
+}
+
+async function downloadPublicDriveShare(token) {
+  try {
+    const res = await fetch(`/api/drive/shares/${encodeURIComponent(token)}/download${publicSharePasswordQuery()}`);
+    await saveDriveDownloadResponse(res, 'shared-file');
+  } catch (err) {
+    toast(err.message || '下载失败', 'danger');
+  }
+}
+
+async function previewPublicDriveShare(token) {
+  const mount = $('publicSharePreview');
+  if (!mount) return;
+  mount.textContent = '正在加载预览...';
+  try {
+    const meta = await api(`/api/drive/shares/${encodeURIComponent(token)}`);
+    const share = meta.share || {};
+    const type = String(share.content_type || '').split(';', 1)[0].toLowerCase();
+    const res = await fetch(`/api/drive/shares/${encodeURIComponent(token)}/preview${publicSharePasswordQuery()}`);
+    if (!res.ok) throw new Error(await res.text() || '预览失败');
+    if (type.startsWith('image/') || type === 'application/pdf') {
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      mount.innerHTML = type.startsWith('image/')
+        ? `<img class="drive-preview-media" alt="${esc(share.name || 'preview')}" src="${objectUrl}" />`
+        : `<iframe class="drive-preview-frame" src="${objectUrl}" title="${esc(share.name || 'preview')}"></iframe>`;
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 10 * 60 * 1000);
+    } else {
+      const text = await res.text();
+      mount.innerHTML = '<pre class="drive-preview-text"></pre>';
+      const pre = mount.querySelector('pre');
+      if (pre) pre.textContent = text.slice(0, 200000);
+    }
+  } catch (err) {
+    mount.innerHTML = `<div class="notice error">${esc(err.message || '预览失败')}</div>`;
+  }
+}
+
 // ─── SPA Router ─────────────────────────────────────────────────────────────
 function route() {
   clearPageState();
@@ -11037,6 +11581,11 @@ function route() {
     const newPath = location.hash.slice(1);
     history.replaceState(null, '', newPath);
     path = newPath;
+  }
+
+  const shareMatch = path.match(/^\/share\/([^/]+)$/);
+  if (shareMatch) {
+    return renderPublicDriveShare(decodeURIComponent(shareMatch[1]));
   }
 
   if (isSpace) {
@@ -11899,6 +12448,13 @@ Object.assign(window, {
   createGroupInviteFromSettings, updateMessageGroupMemberRoleFromSettings,
   openChatUserProfile, handleChatAvatarProfileKeydown, openMessageActionMenu, closeMessageActionMenu, copyMessageText, recallMessageAction,
   showMessageEditModal, submitMessageEdit, deleteMessageAction, showMessageReportModal, submitMessageReport,
+  renderCloudDrive, openDriveFolder, filterDriveItems, showDriveFolderModal, createDriveFolder,
+  showDriveRenameModal, saveDriveRename, deleteDriveItem, downloadDriveFile, uploadDriveFiles,
+  handleDriveDragOver, handleDriveDragLeave, handleDriveDrop, toggleDriveItemSelection, toggleAllDriveItems,
+  clearDriveSelection, downloadSelectedDriveItems, deleteSelectedDriveItems, previewDriveFile,
+  showDriveShareModal, createDriveShare, revokeDriveShare, copyDriveShareLink,
+  showDriveMoveModal, searchDriveMoveTargets, moveDriveItemsTo,
+  renderPublicDriveShare, downloadPublicDriveShare, previewPublicDriveShare,
   closeModal, copyTerminalText, toggleTheme,
   resetEditorCode, runSandboxTest, submitEditorCode, toggleFullscreenEditor, switchEditorMode, moveNbCell, toggleNbCellType, removeNbCell, addNbCell, updateNbCellContent
 });

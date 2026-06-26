@@ -1,4 +1,8 @@
+import io
 import mimetypes
+import secrets
+import zipfile
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from pathlib import Path
 from urllib.parse import quote
@@ -14,15 +18,19 @@ from app.db import engine
 from app.dependencies import require_user
 from app.migrations import ensure_drive_schema_compatibility
 from app.rate_limit import check_rate_limit, client_key
+from app.security import hash_password, verify_password
 from app.services.audit import audit_log
 from app.settings import settings
-from app.storage import S3_BUCKET_DRIVE, delete_object, get_object, put_bytes
+from app.storage import S3_BUCKET_DRIVE, delete_object, get_bytes, get_object, put_bytes
 
 router = APIRouter()
 
 DRIVE_FOLDER_KIND = "FOLDER"
 DRIVE_FILE_KIND = "FILE"
 DRIVE_NAME_MAX_LENGTH = 180
+DRIVE_SHARE_TOKEN_BYTES = 24
+DRIVE_SHARE_MAX_DAYS = 365
+DRIVE_BATCH_MAX_ITEMS = 100
 _drive_schema_ready = False
 _drive_schema_lock = Lock()
 
@@ -122,6 +130,199 @@ def row_to_item(row) -> dict:
     return item
 
 
+def share_row_to_payload(row, request: Request | None = None) -> dict:
+    share = dict(row)
+    share["id"] = int(share["id"])
+    share["owner_id"] = int(share["owner_id"])
+    share["item_id"] = int(share["item_id"])
+    share["download_count"] = int(share.get("download_count") or 0)
+    share["max_downloads"] = int(share["max_downloads"]) if share.get("max_downloads") is not None else None
+    share["requires_password"] = bool(share.get("password_hash"))
+    share.pop("password_hash", None)
+    share["active"] = is_share_active(share)
+    token = share.get("token")
+    if token:
+        share["page_url"] = public_share_page_url(request, token) if request else f"/share/{token}"
+        share["download_url"] = f"/api/drive/shares/{token}/download"
+    return share
+
+
+def public_share_page_url(request: Request | None, token: str) -> str:
+    if request is None:
+        return f"/share/{token}"
+    return f"{request.url.scheme}://{request.url.netloc}/share/{token}"
+
+
+def parse_datetime(value) -> datetime | None:
+    if value is None or isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def is_share_expired(expires_at) -> bool:
+    expires = parse_datetime(expires_at)
+    if expires is None:
+        return False
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return expires <= datetime.now(timezone.utc)
+
+
+def is_share_active(row) -> bool:
+    if row.get("revoked_at") is not None:
+        return False
+    if is_share_expired(row.get("expires_at")):
+        return False
+    max_downloads = row.get("max_downloads")
+    if max_downloads is not None and int(row.get("download_count") or 0) >= int(max_downloads):
+        return False
+    return True
+
+
+def normalize_share_days(value) -> int | None:
+    if value in (None, "", "never", "none"):
+        return None
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid share expiry")
+    if days <= 0 or days > DRIVE_SHARE_MAX_DAYS:
+        raise HTTPException(status_code=400, detail=f"Share expiry must be between 1 and {DRIVE_SHARE_MAX_DAYS} days")
+    return days
+
+
+def normalize_max_downloads(value) -> int | None:
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        max_downloads = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid download limit")
+    if max_downloads <= 0 or max_downloads > 100000:
+        raise HTTPException(status_code=400, detail="Download limit must be between 1 and 100000")
+    return max_downloads
+
+
+def normalize_batch_item_ids(value) -> list[int]:
+    if not isinstance(value, list):
+        raise HTTPException(status_code=400, detail="item_ids must be a list")
+    item_ids: list[int] = []
+    seen: set[int] = set()
+    for raw in value:
+        item_id = parse_item_id(raw)
+        if item_id not in seen:
+            item_ids.append(item_id)
+            seen.add(item_id)
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="No drive items selected")
+    if len(item_ids) > DRIVE_BATCH_MAX_ITEMS:
+        raise HTTPException(status_code=400, detail=f"At most {DRIVE_BATCH_MAX_ITEMS} items can be selected")
+    return item_ids
+
+
+def previewable_content_type(content_type: str | None) -> bool:
+    value = str(content_type or "").split(";", 1)[0].lower()
+    if value.startswith("image/") or value.startswith("text/"):
+        return True
+    return value in {
+        "application/pdf",
+        "application/json",
+        "application/javascript",
+        "application/xml",
+        "application/x-javascript",
+        "image/svg+xml",
+    }
+
+
+def safe_zip_part(name: str | None, fallback: str = "item") -> str:
+    raw = normalize_drive_name(name, fallback=fallback)
+    return raw.replace("/", "_").replace("\\", "_")
+
+
+def unique_zip_name(used: set[str], name: str) -> str:
+    candidate = name
+    stem = Path(name).stem or name
+    suffix = Path(name).suffix
+    index = 2
+    while candidate.lower() in used:
+        candidate = f"{stem} ({index}){suffix}"
+        index += 1
+    used.add(candidate.lower())
+    return candidate
+
+
+def folder_zip_name(name: str | None) -> str:
+    base = Path(safe_zip_part(name, fallback="folder")).stem or "folder"
+    return f"{base}.zip"
+
+
+def drive_tree_rows(conn, user_id: int, item_id: int) -> list[dict]:
+    rows = conn.execute(
+        text(
+            """
+            with recursive tree as (
+              select id, parent_id, kind, name, object_key, content_type, size_bytes, name::text as rel_path
+              from drive_items
+              where owner_id = :owner_id and id = :item_id
+              union all
+              select child.id, child.parent_id, child.kind, child.name, child.object_key, child.content_type,
+                     child.size_bytes, tree.rel_path || '/' || child.name
+              from drive_items child
+              join tree on child.parent_id = tree.id
+              where child.owner_id = :owner_id
+            )
+            select id, parent_id, kind, name, object_key, content_type, size_bytes, rel_path
+            from tree
+            order by rel_path
+            """
+        ),
+        {"owner_id": user_id, "item_id": item_id},
+    ).mappings().all()
+    return [dict(row) for row in rows]
+
+
+def drive_zip_response(rows: list[dict], filename: str) -> StreamingResponse:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for row in rows:
+            rel_path = str(row.get("rel_path") or row.get("name") or "item").strip("/")
+            if not rel_path:
+                continue
+            if row.get("kind") == DRIVE_FOLDER_KIND:
+                archive.writestr(rel_path.rstrip("/") + "/", b"")
+                continue
+            archive.writestr(rel_path, get_bytes(S3_BUCKET_DRIVE, row["object_key"]))
+    buf.seek(0)
+    headers = {
+        "Content-Disposition": content_disposition(filename),
+        "Content-Length": str(buf.getbuffer().nbytes),
+        "X-Content-Type-Options": "nosniff",
+    }
+    return StreamingResponse(iter([buf.getvalue()]), media_type="application/zip", headers=headers)
+
+
+def selected_items_zip_response(conn, user_id: int, items: list[dict], filename: str = "drive-selection.zip") -> StreamingResponse:
+    used_roots: set[str] = set()
+    rows: list[dict] = []
+    for item in items:
+        tree_rows = drive_tree_rows(conn, user_id, int(item["id"]))
+        if not tree_rows:
+            continue
+        old_root = str(tree_rows[0].get("name") or "item")
+        new_root = unique_zip_name(used_roots, safe_zip_part(old_root, fallback="item"))
+        for row in tree_rows:
+            rel_path = str(row.get("rel_path") or row.get("name") or "item")
+            if rel_path == old_root:
+                row["rel_path"] = new_root
+            elif rel_path.startswith(old_root + "/"):
+                row["rel_path"] = new_root + rel_path[len(old_root):]
+            rows.append(row)
+    return drive_zip_response(rows, filename)
+
+
 def require_parent_folder(conn, user_id: int, parent_id: int | None) -> dict | None:
     if parent_id is None:
         return None
@@ -154,6 +355,67 @@ def require_drive_item(conn, user_id: int, item_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Drive item not found")
     return row
+
+
+def require_drive_items(conn, user_id: int, item_ids: list[int]) -> list[dict]:
+    rows = []
+    for item_id in item_ids:
+        rows.append(row_to_item(require_drive_item(conn, user_id, item_id)))
+    return rows
+
+
+def require_share_for_owner(conn, user_id: int, share_id: int):
+    row = conn.execute(
+        text(
+            """
+            select s.id, s.owner_id, s.item_id, s.token, s.password_hash, s.expires_at, s.max_downloads,
+                   s.download_count, s.created_at, s.revoked_at,
+                   i.kind, i.name, i.content_type, i.size_bytes
+            from drive_shares s
+            join drive_items i on i.id = s.item_id and i.owner_id = s.owner_id
+            where s.owner_id = :owner_id and s.id = :share_id
+            """
+        ),
+        {"owner_id": user_id, "share_id": share_id},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Share not found")
+    return row
+
+
+def require_share_by_token(conn, token: str):
+    row = conn.execute(
+        text(
+            """
+            select s.id, s.owner_id, s.item_id, s.token, s.password_hash, s.expires_at, s.max_downloads,
+                   s.download_count, s.created_at, s.revoked_at,
+                   i.parent_id, i.kind, i.name, i.object_key, i.content_type, i.size_bytes,
+                   u.username as owner_username
+            from drive_shares s
+            join drive_items i on i.id = s.item_id and i.owner_id = s.owner_id
+            join users u on u.id = s.owner_id
+            where s.token = :token
+            """
+        ),
+        {"token": token},
+    ).mappings().first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Share not found")
+    if row["revoked_at"] is not None:
+        raise HTTPException(status_code=404, detail="Share not found")
+    if is_share_expired(row["expires_at"]):
+        raise HTTPException(status_code=410, detail="Share has expired")
+    if row["max_downloads"] is not None and int(row["download_count"] or 0) >= int(row["max_downloads"]):
+        raise HTTPException(status_code=410, detail="Share download limit reached")
+    return row
+
+
+def ensure_share_password(row, password: str | None) -> None:
+    stored = row.get("password_hash")
+    if not stored:
+        return
+    if not password or not verify_password(password, stored):
+        raise HTTPException(status_code=403, detail="Invalid share password")
 
 
 def ensure_name_available(conn, user_id: int, parent_id: int | None, name: str, *, exclude_id: int | None = None) -> None:
@@ -284,6 +546,120 @@ def list_drive_items(parent_id: str | None = Query(None), user=Depends(require_u
         }
 
 
+@router.get("/api/drive/search")
+def search_drive_items(q: str = Query(..., min_length=1), user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="Search query is required")
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                select id, owner_id, parent_id, kind, name, object_key, content_type, size_bytes, created_at, updated_at
+                from drive_items
+                where owner_id = :owner_id
+                  and lower(name) like lower(:pattern)
+                order by updated_at desc, lower(name), id
+                limit 100
+                """
+            ),
+            {"owner_id": user_id, "pattern": f"%{query}%"},
+        ).mappings().all()
+        return {"items": [row_to_item(row) for row in rows]}
+
+
+@router.post("/api/drive/batch/move")
+def move_drive_items(payload: dict, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    check_rate_limit(client_key(request, "drive-batch-move", str(user_id)), max_calls=120, window_seconds=3600)
+    item_ids = normalize_batch_item_ids(payload.get("item_ids"))
+    parent_id = normalize_optional_drive_id(payload.get("parent_id"))
+
+    with engine.begin() as conn:
+        require_parent_folder(conn, user_id, parent_id)
+        items = require_drive_items(conn, user_id, item_ids)
+        selected_names: set[str] = set()
+        for item in items:
+            name_key = str(item["name"]).lower()
+            if name_key in selected_names:
+                raise HTTPException(status_code=409, detail="Selected items contain duplicate names")
+            selected_names.add(name_key)
+            if item["kind"] == DRIVE_FOLDER_KIND:
+                ensure_not_descendant(conn, user_id, int(item["id"]), parent_id)
+            ensure_name_available(conn, user_id, parent_id, item["name"], exclude_id=int(item["id"]))
+        rows = []
+        for item in items:
+            row = conn.execute(
+                text(
+                    """
+                    update drive_items
+                    set parent_id = :parent_id, updated_at = now()
+                    where owner_id = :owner_id and id = :item_id
+                    returning id, owner_id, parent_id, kind, name, object_key, content_type, size_bytes, created_at, updated_at
+                    """
+                ),
+                {"owner_id": user_id, "item_id": int(item["id"]), "parent_id": parent_id},
+            ).mappings().first()
+            rows.append(row_to_item(row))
+        audit_log(
+            conn,
+            user_id=user_id,
+            action="drive.items.move",
+            resource_type="drive_item",
+            metadata={"item_ids": item_ids, "parent_id": parent_id},
+        )
+        return {"items": rows, "usage": usage_payload(conn, user)}
+
+
+@router.post("/api/drive/batch/delete")
+def delete_drive_items(payload: dict, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    check_rate_limit(client_key(request, "drive-batch-delete", str(user_id)), max_calls=120, window_seconds=3600)
+    item_ids = normalize_batch_item_ids(payload.get("item_ids"))
+
+    with engine.begin() as conn:
+        items = require_drive_items(conn, user_id, item_ids)
+        object_keys: set[str] = set()
+        for item in items:
+            for row in drive_tree_rows(conn, user_id, int(item["id"])):
+                if row["kind"] == DRIVE_FILE_KIND and row.get("object_key"):
+                    object_keys.add(row["object_key"])
+        for item in items:
+            conn.execute(
+                text("delete from drive_items where owner_id = :owner_id and id = :item_id"),
+                {"owner_id": user_id, "item_id": int(item["id"])},
+            )
+        audit_log(
+            conn,
+            user_id=user_id,
+            action="drive.items.delete",
+            resource_type="drive_item",
+            metadata={"item_ids": item_ids, "object_count": len(object_keys)},
+        )
+        usage = usage_payload(conn, user)
+
+    for object_key in object_keys:
+        try:
+            delete_object(S3_BUCKET_DRIVE, object_key)
+        except Exception:
+            pass
+    return {"ok": True, "deleted_item_count": len(items), "deleted_object_count": len(object_keys), "usage": usage}
+
+
+@router.post("/api/drive/batch/download")
+def download_drive_items_zip(payload: dict, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    item_ids = normalize_batch_item_ids(payload.get("item_ids"))
+    with engine.connect() as conn:
+        items = require_drive_items(conn, user_id, item_ids)
+        return selected_items_zip_response(conn, user_id, items)
+
+
 @router.post("/api/drive/folders")
 def create_drive_folder(payload: dict, request: Request, user=Depends(require_user)):
     ensure_drive_schema_ready()
@@ -388,6 +764,222 @@ async def upload_drive_file(
         raise HTTPException(status_code=409, detail="An item with this name already exists in the folder") from exc
 
 
+@router.get("/api/drive/items/{item_id}/preview")
+def preview_drive_item(item_id: int, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    item_id = parse_item_id(item_id)
+    with engine.connect() as conn:
+        item = require_drive_item(conn, user_id, item_id)
+        if item["kind"] != DRIVE_FILE_KIND:
+            raise HTTPException(status_code=400, detail="Folders cannot be previewed")
+        if not previewable_content_type(item["content_type"]):
+            raise HTTPException(status_code=400, detail="This file type cannot be previewed")
+
+    try:
+        obj = get_object(S3_BUCKET_DRIVE, item["object_key"])
+    except ClientError as exc:
+        raise HTTPException(status_code=404, detail="Stored file not found") from exc
+
+    headers = {
+        "Content-Disposition": f"inline; {content_disposition(item['name']).split('; ', 1)[1]}",
+        "Content-Length": str(int(item["size_bytes"] if item["size_bytes"] is not None else obj.get("ContentLength") or 0)),
+    }
+    return StreamingResponse(
+        obj["Body"].iter_chunks(chunk_size=1024 * 256),
+        media_type=item["content_type"] or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@router.get("/api/drive/items/{item_id}/shares")
+def list_drive_shares(item_id: int, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    item_id = parse_item_id(item_id)
+    with engine.connect() as conn:
+        require_drive_item(conn, user_id, item_id)
+        rows = conn.execute(
+            text(
+                """
+                select id, owner_id, item_id, token, password_hash, expires_at, max_downloads,
+                       download_count, created_at, revoked_at
+                from drive_shares
+                where owner_id = :owner_id and item_id = :item_id and revoked_at is null
+                order by created_at desc, id desc
+                """
+            ),
+            {"owner_id": user_id, "item_id": item_id},
+        ).mappings().all()
+        return {"shares": [share_row_to_payload(row, request) for row in rows]}
+
+
+@router.post("/api/drive/items/{item_id}/shares")
+def create_drive_share(item_id: int, payload: dict, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    item_id = parse_item_id(item_id)
+    check_rate_limit(client_key(request, "drive-share", str(user_id)), max_calls=120, window_seconds=3600)
+    expires_in_days = normalize_share_days(payload.get("expires_in_days"))
+    max_downloads = normalize_max_downloads(payload.get("max_downloads"))
+    password = str(payload.get("password") or "").strip()
+    password_hash = hash_password(password) if password else None
+    expires_at = datetime.now(timezone.utc) + timedelta(days=expires_in_days) if expires_in_days else None
+    token = secrets.token_urlsafe(DRIVE_SHARE_TOKEN_BYTES)
+
+    with engine.begin() as conn:
+        item = require_drive_item(conn, user_id, item_id)
+        row = conn.execute(
+            text(
+                """
+                insert into drive_shares(owner_id, item_id, token, password_hash, expires_at, max_downloads)
+                values (:owner_id, :item_id, :token, :password_hash, :expires_at, :max_downloads)
+                returning id, owner_id, item_id, token, password_hash, expires_at, max_downloads,
+                          download_count, created_at, revoked_at
+                """
+            ),
+            {
+                "owner_id": user_id,
+                "item_id": item_id,
+                "token": token,
+                "password_hash": password_hash,
+                "expires_at": expires_at,
+                "max_downloads": max_downloads,
+            },
+        ).mappings().first()
+        audit_log(
+            conn,
+            user_id=user_id,
+            action="drive.share.create",
+            resource_type="drive_item",
+            resource_id=item_id,
+            metadata={
+                "name": item["name"],
+                "kind": item["kind"],
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "max_downloads": max_downloads,
+                "password": bool(password_hash),
+            },
+        )
+        return {"share": share_row_to_payload(row, request)}
+
+
+@router.delete("/api/drive/shares/{share_id}")
+def revoke_drive_share(share_id: int, request: Request, user=Depends(require_user)):
+    ensure_drive_schema_ready()
+    user_id = int(user["id"])
+    share_id = parse_item_id(share_id)
+    check_rate_limit(client_key(request, "drive-share-revoke", str(user_id)), max_calls=120, window_seconds=3600)
+    with engine.begin() as conn:
+        row = require_share_for_owner(conn, user_id, share_id)
+        conn.execute(
+            text("update drive_shares set revoked_at = now() where owner_id = :owner_id and id = :share_id"),
+            {"owner_id": user_id, "share_id": share_id},
+        )
+        audit_log(
+            conn,
+            user_id=user_id,
+            action="drive.share.revoke",
+            resource_type="drive_share",
+            resource_id=share_id,
+            metadata={"item_id": int(row["item_id"]), "token": row["token"]},
+        )
+    return {"ok": True}
+
+
+@router.get("/api/drive/shares/{token}")
+def public_drive_share(token: str):
+    ensure_drive_schema_ready()
+    with engine.connect() as conn:
+        row = require_share_by_token(conn, token)
+        return {
+            "share": {
+                "token": row["token"],
+                "name": row["name"],
+                "kind": row["kind"],
+                "content_type": row["content_type"],
+                "size_bytes": int(row["size_bytes"] or 0),
+                "owner_username": row["owner_username"],
+                "expires_at": row["expires_at"],
+                "max_downloads": int(row["max_downloads"]) if row["max_downloads"] is not None else None,
+                "download_count": int(row["download_count"] or 0),
+                "requires_password": bool(row["password_hash"]),
+                "previewable": row["kind"] == DRIVE_FILE_KIND and previewable_content_type(row["content_type"]),
+                "download_url": f"/api/drive/shares/{token}/download",
+                "preview_url": f"/api/drive/shares/{token}/preview",
+            }
+        }
+
+
+@router.get("/api/drive/shares/{token}/preview")
+def preview_public_drive_share(token: str, password: str | None = Query(None)):
+    ensure_drive_schema_ready()
+    with engine.connect() as conn:
+        row = require_share_by_token(conn, token)
+        ensure_share_password(row, password)
+        if row["kind"] != DRIVE_FILE_KIND:
+            raise HTTPException(status_code=400, detail="Folders cannot be previewed")
+        if not previewable_content_type(row["content_type"]):
+            raise HTTPException(status_code=400, detail="This file type cannot be previewed")
+
+    try:
+        obj = get_object(S3_BUCKET_DRIVE, row["object_key"])
+    except ClientError as exc:
+        raise HTTPException(status_code=404, detail="Stored file not found") from exc
+    headers = {
+        "Content-Disposition": f"inline; {content_disposition(row['name']).split('; ', 1)[1]}",
+        "Content-Length": str(int(row["size_bytes"] if row["size_bytes"] is not None else obj.get("ContentLength") or 0)),
+    }
+    return StreamingResponse(
+        obj["Body"].iter_chunks(chunk_size=1024 * 256),
+        media_type=row["content_type"] or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@router.get("/api/drive/shares/{token}/download")
+def download_public_drive_share(token: str, password: str | None = Query(None)):
+    ensure_drive_schema_ready()
+    with engine.begin() as conn:
+        row = require_share_by_token(conn, token)
+        ensure_share_password(row, password)
+        updated = conn.execute(
+            text(
+                """
+                update drive_shares
+                set download_count = download_count + 1
+                where id = :share_id
+                  and revoked_at is null
+                  and (expires_at is null or expires_at > now())
+                  and (max_downloads is null or download_count < max_downloads)
+                returning download_count
+                """
+            ),
+            {"share_id": int(row["id"])},
+        ).first()
+        if not updated:
+            raise HTTPException(status_code=410, detail="Share is no longer available")
+        item = dict(row)
+        if item["kind"] == DRIVE_FOLDER_KIND:
+            rows = drive_tree_rows(conn, int(item["owner_id"]), int(item["item_id"]))
+            return drive_zip_response(rows, folder_zip_name(item["name"]))
+
+    try:
+        obj = get_object(S3_BUCKET_DRIVE, item["object_key"])
+    except ClientError as exc:
+        raise HTTPException(status_code=404, detail="Stored file not found") from exc
+    headers = {
+        "Content-Disposition": content_disposition(item["name"]),
+        "Content-Length": str(int(item["size_bytes"] if item["size_bytes"] is not None else obj.get("ContentLength") or 0)),
+        "X-Content-Type-Options": "nosniff",
+    }
+    return StreamingResponse(
+        obj["Body"].iter_chunks(chunk_size=1024 * 256),
+        media_type=item["content_type"] or "application/octet-stream",
+        headers=headers,
+    )
+
+
 @router.patch("/api/drive/items/{item_id}")
 def update_drive_item(item_id: int, payload: dict, request: Request, user=Depends(require_user)):
     ensure_drive_schema_ready()
@@ -490,8 +1082,9 @@ def download_drive_item(item_id: int, user=Depends(require_user)):
     item_id = parse_item_id(item_id)
     with engine.connect() as conn:
         item = require_drive_item(conn, user_id, item_id)
-        if item["kind"] != DRIVE_FILE_KIND:
-            raise HTTPException(status_code=400, detail="Folders cannot be downloaded directly")
+        if item["kind"] == DRIVE_FOLDER_KIND:
+            rows = drive_tree_rows(conn, user_id, item_id)
+            return drive_zip_response(rows, folder_zip_name(item["name"]))
 
     try:
         obj = get_object(S3_BUCKET_DRIVE, item["object_key"])
