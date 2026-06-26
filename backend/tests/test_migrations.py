@@ -81,3 +81,16 @@ def test_ensure_drive_schema_compatibility_executes_idempotent_sql(monkeypatch):
     ensure_drive_schema_compatibility()
 
     assert conn.calls == [DRIVE_SCHEMA_COMPATIBILITY_SQL]
+
+
+def test_drive_schema_compatibility_repairs_existing_tables():
+    assert "alter table drive_items" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists owner_id" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists parent_id" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists kind" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists name" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists object_key" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists content_type" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add column if not exists size_bytes" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "add constraint drive_items_kind_check" in DRIVE_SCHEMA_COMPATIBILITY_SQL
+    assert "not valid" in DRIVE_SCHEMA_COMPATIBILITY_SQL
