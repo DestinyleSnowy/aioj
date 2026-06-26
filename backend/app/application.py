@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.bootstrap import ensure_admin, validate_runtime_configuration
 from app.migrations import ensure_drive_schema_compatibility, ensure_message_schema_compatibility, run_migrations
-from app.routers.admin_analytics import router as admin_analytics_router
 from app.routers.admin_users import router as admin_users_router
 from app.routers.audit_admin import router as audit_admin_router
 from app.routers.auth import router as auth_router
@@ -66,7 +65,6 @@ def create_app() -> FastAPI:
     for router in (
         system_router,
         auth_router,
-        admin_analytics_router,
         admin_users_router,
         audit_admin_router,
         judge_admin_router,

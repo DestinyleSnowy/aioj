@@ -8573,259 +8573,96 @@ function requireAdmin() {
   return true;
 }
 
-function formatCompactNumber(value) {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n)) return '0';
-  return new Intl.NumberFormat('zh-CN', { notation: n >= 10000 ? 'compact' : 'standard', maximumFractionDigits: 1 }).format(n);
-}
-
-function adminPercent(value, maxValue) {
-  const valueNum = Math.max(0, Number(value || 0));
-  const maxNum = Math.max(0, Number(maxValue || 0));
-  if (!maxNum) return 0;
-  return Math.max(0, Math.min(100, (valueNum / maxNum) * 100));
-}
-
-function renderAdminBars(items, {
-  labelKey = 'label',
-  valueKey = 'value',
-  valueFormatter = formatCompactNumber,
-  color = '',
-  emptyText = '暂无数据',
-} = {}) {
-  const rows = Array.isArray(items) ? items : [];
-  if (!rows.length) return emptyBox(emptyText);
-  const maxValue = rows.reduce((max, item) => Math.max(max, Number(item[valueKey] || 0)), 0);
-  return `
-    <div class="admin-bars">
-      ${rows.map(item => {
-        const width = adminPercent(item[valueKey], maxValue);
-        return `
-          <div class="admin-bar-row">
-            <div class="admin-bar-label" title="${esc(item[labelKey] || '')}">${esc(item[labelKey] || '—')}</div>
-            <div class="admin-bar-track"><span class="admin-bar-fill ${esc(color)}" style="width:${width.toFixed(2)}%"></span></div>
-            <div class="admin-bar-value">${esc(valueFormatter(item[valueKey], item))}</div>
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `;
-}
-
-function renderAdminMiniChart(items, {
-  valueKey = 'value',
-  labelKey = 'day',
-  valueFormatter = formatCompactNumber,
-  color = '',
-} = {}) {
-  const rows = Array.isArray(items) ? items : [];
-  const maxValue = rows.reduce((max, item) => Math.max(max, Number(item[valueKey] || 0)), 0);
-  return `
-    <div class="admin-mini-chart">
-      ${rows.map(item => {
-        const height = Math.max(4, adminPercent(item[valueKey], maxValue));
-        const date = item[labelKey] ? new Date(item[labelKey]) : null;
-        const label = date && !Number.isNaN(date.getTime()) ? `${date.getMonth() + 1}/${date.getDate()}` : String(item[labelKey] || '');
-        return `
-          <div class="admin-mini-chart-column" title="${esc(label)} · ${esc(valueFormatter(item[valueKey], item))}">
-            <div class="admin-mini-chart-bar ${esc(color)}" style="height:${height.toFixed(2)}%"></div>
-            <div class="admin-mini-chart-label">${esc(label)}</div>
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `;
-}
-
-function driveTypeLabel(category) {
-  return {
-    image: '图片',
-    video: '视频',
-    audio: '音频',
-    document: '文档',
-    archive: '压缩包',
-    other: '其他',
-  }[category] || category || '其他';
-}
-
 async function renderAdminDashboard() {
   const hostTitle = isDriveHost() ? 'Space 管理员看板' : isChatApp() ? 'Hello 管理员看板' : '管理员看板';
   setPage(hostTitle);
   if (!requireAdmin()) return;
   const app = $('app');
   app.innerHTML = `
+    <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
+      <div>
+        <h3 class="section-title" style="margin-bottom: 4px;">${esc(hostTitle)}</h3>
+        <div class="text-muted" style="font-size: 12px;">正在读取现有管理接口...</div>
+      </div>
+      <button class="btn btn-secondary" onclick="renderAdminDashboard()">刷新面板</button>
+    </div>
     <div class="loading-overlay">
       <div class="spinner-ring"></div>
-      <span class="loading-text">正在汇总 Hello、Space 与传输指标...</span>
+      <span class="loading-text">正在打开管理员看板...</span>
     </div>
   `;
   try {
-    const data = await api('/api/admin/analytics/overview', { headers: authHeaders() });
-    const overview = data.overview || {};
-    const users = overview.users || {};
-    const messages = overview.messages || {};
-    const drive = overview.drive || {};
-    const network = overview.network || {};
-    const hello = data.hello || {};
-    const driveData = data.drive || {};
-    const networkData = data.network || {};
-    const shares = driveData.shares || {};
-    const recentAudit = data.recent_audit || [];
-    const typeRows = (driveData.type_distribution || []).map(item => ({
-      label: driveTypeLabel(item.category),
-      value: Number(item.used_bytes || 0),
-      count: Number(item.file_count || 0),
-    }));
-    const driveUsers = (driveData.user_usage || []).map(item => {
-      const used = Number(item.used_bytes || 0);
-      const quota = Number(item.quota_bytes || 0);
-      return {
-        ...item,
-        label: item.username || `#${item.id}`,
-        value: used,
-        usage_percent: quota ? adminPercent(used, quota) : 0,
-      };
-    });
-    const messageUsers = (hello.user_rank || []).map(item => ({
-      ...item,
-      label: item.username || `#${item.id}`,
-      value: Number(item.message_count || 0),
-    }));
+    const [usersData, auditData, driveData] = await Promise.all([
+      api('/api/admin/users', { headers: authHeaders() }).catch(() => ({ items: [] })),
+      api('/api/admin/audit-logs?limit=8', { headers: authHeaders() }).catch(() => ({ items: [] })),
+      api('/api/drive/summary', { headers: authHeaders() }).catch(() => ({ usage: null })),
+    ]);
+    const users = usersData.items || [];
+    const auditItems = auditData.items || [];
+    const driveUsage = driveData.usage || state.driveUsage || {};
+    const activeUsers = users.filter(u => !u.is_disabled).length;
+    const adminUsers = users.filter(u => u.role === 'ADMIN').length;
+    const disabledUsers = users.filter(u => u.is_disabled).length;
+    const usedBytes = Number(driveUsage.used_bytes || 0);
+    const quotaBytes = Number(driveUsage.quota_bytes || 0);
+    const quotaPercent = quotaBytes ? Math.max(0, Math.min(100, (usedBytes / quotaBytes) * 100)) : 0;
 
     app.innerHTML = `
       <div class="row flex-between mb-lg" style="flex-wrap: wrap;">
         <div>
           <h3 class="section-title" style="margin-bottom: 4px;">${esc(hostTitle)}</h3>
-          <div class="text-muted" style="font-size: 12px;">只展示聚合元数据，不读取或展开用户消息正文。</div>
+          <div class="text-muted" style="font-size: 12px;">基础看板已打开；当前版本复用现有管理接口展示可用指标。</div>
         </div>
         <button class="btn btn-secondary" onclick="renderAdminDashboard()">刷新面板</button>
       </div>
 
       <div class="stats-row">
         <div class="stat-card">
-          <div class="stat-value">${formatCompactNumber(users.total_users)}</div>
+          <div class="stat-value">${users.length}</div>
           <div class="stat-label">注册用户</div>
         </div>
         <div class="stat-card" style="border-color: var(--color-success);">
-          <div class="stat-value" style="color: var(--color-success);">${formatCompactNumber(messages.total_messages)}</div>
-          <div class="stat-label">Hello 消息</div>
+          <div class="stat-value" style="color: var(--color-success);">${activeUsers}</div>
+          <div class="stat-label">正常账号</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value">${formatBytes(drive.used_bytes)}</div>
-          <div class="stat-label">Space 占用</div>
+          <div class="stat-value">${adminUsers}</div>
+          <div class="stat-label">管理员</div>
         </div>
         <div class="stat-card" style="border-color: var(--color-warning);">
-          <div class="stat-value" style="color: var(--color-warning);">${formatBytes(network.estimated_shared_download_bytes)}</div>
-          <div class="stat-label">分享下载估算</div>
+          <div class="stat-value" style="color: var(--color-warning);">${disabledUsers}</div>
+          <div class="stat-label">停用账号</div>
         </div>
       </div>
 
-      <div class="admin-dashboard-grid admin-dashboard-section">
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--space-lg);">
         <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">Hello 消息趋势</h3>
+          <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+            <h3 class="card-title">Space 当前账号空间</h3>
+            <a class="btn btn-secondary btn-sm" href="/drive" data-link>打开云盘</a>
           </div>
-          ${renderAdminMiniChart(hello.trend || [], {
-            valueKey: 'total_messages',
-            valueFormatter: (value, item) => `${formatCompactNumber(value)} 条 · 私聊 ${formatCompactNumber(item.direct_messages)} / 群聊 ${formatCompactNumber(item.group_messages)}`,
-            color: 'green',
-          })}
+          <div class="drive-quota" style="margin-top: 0;">
+            <div class="drive-quota-top">
+              <strong>已使用 ${formatBytes(usedBytes)}</strong>
+              <span>${quotaBytes ? `${formatBytes(quotaBytes)} · ${quotaPercent.toFixed(1)}%` : '暂无配额数据'}</span>
+            </div>
+            <div class="drive-quota-bar"><span style="width:${quotaPercent.toFixed(2)}%"></span></div>
+          </div>
         </div>
         <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">用户活跃概况</h3>
+          <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
+            <h3 class="card-title">管理入口</h3>
+            <a class="btn btn-secondary btn-sm" href="/admin/users" data-link>用户管理</a>
           </div>
-          <div class="admin-kv-list">
-            <div class="admin-kv-row"><span>24 小时活跃</span><strong>${formatCompactNumber(users.active_24h)} 人</strong></div>
-            <div class="admin-kv-row"><span>7 天活跃</span><strong>${formatCompactNumber(users.active_7d)} 人</strong></div>
-            <div class="admin-kv-row"><span>今日新增</span><strong>${formatCompactNumber(users.new_today)} 人</strong></div>
-            <div class="admin-kv-row"><span>管理员账号</span><strong>${formatCompactNumber(users.admin_users)} 人</strong></div>
-            <div class="admin-kv-row"><span>停用账号</span><strong>${formatCompactNumber(users.disabled_users)} 人</strong></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="admin-dashboard-grid admin-dashboard-section">
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">用户消息数排行</h3>
-          </div>
-          ${renderAdminBars(messageUsers, {
-            valueFormatter: (value, item) => `${formatCompactNumber(value)} 条`,
-            color: 'green',
-            emptyText: '暂无消息记录',
-          })}
-        </div>
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">Hello 结构指标</h3>
-          </div>
-          <div class="admin-kv-list">
-            <div class="admin-kv-row"><span>私聊消息</span><strong>${formatCompactNumber(messages.direct_messages)} 条</strong></div>
-            <div class="admin-kv-row"><span>群聊消息</span><strong>${formatCompactNumber(messages.group_messages)} 条</strong></div>
-            <div class="admin-kv-row"><span>今日消息</span><strong>${formatCompactNumber(messages.messages_today)} 条</strong></div>
-            <div class="admin-kv-row"><span>7 天消息</span><strong>${formatCompactNumber(messages.messages_7d)} 条</strong></div>
-            <div class="admin-kv-row"><span>附件体积</span><strong>${formatBytes(messages.attachment_bytes)}</strong></div>
-            <div class="admin-kv-row"><span>待处理举报</span><strong>${formatCompactNumber(messages.open_reports)} 条</strong></div>
+          <div class="row gap-sm" style="flex-wrap: wrap;">
+            <a class="btn btn-secondary btn-sm" href="/admin/audit" data-link>审计日志</a>
+            <a class="btn btn-secondary btn-sm" href="/messages" data-link>Hello 消息</a>
+            <a class="btn btn-secondary btn-sm" href="/judge-admin" data-link>评测运维</a>
           </div>
         </div>
       </div>
 
-      <div class="admin-dashboard-grid admin-dashboard-section">
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">Space 用户空间占用</h3>
-          </div>
-          ${renderAdminBars(driveUsers, {
-            valueFormatter: (value, item) => `${formatBytes(value)} · ${item.usage_percent.toFixed(1)}%`,
-            emptyText: '暂无云盘文件',
-          })}
-        </div>
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">Space 文件类型</h3>
-          </div>
-          ${renderAdminBars(typeRows, {
-            valueFormatter: (value, item) => `${formatBytes(value)} · ${formatCompactNumber(item.count)} 个`,
-            color: 'orange',
-            emptyText: '暂无文件类型数据',
-          })}
-        </div>
-      </div>
-
-      <div class="admin-dashboard-grid admin-dashboard-section">
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">可观测上传趋势</h3>
-          </div>
-          ${renderAdminMiniChart(networkData.upload_trend || [], {
-            valueKey: 'total_upload_bytes',
-            valueFormatter: (value, item) => `${formatBytes(value)} · 云盘 ${formatBytes(item.drive_upload_bytes)} / 消息 ${formatBytes(item.message_upload_bytes)}`,
-          })}
-          <div class="text-muted" style="font-size: 12px;">${esc(networkData.note || network.note || '')}</div>
-        </div>
-        <div class="card">
-          <div class="card-header">
-            <h3 class="card-title">Space 分享与大文件</h3>
-          </div>
-          <div class="admin-kv-list" style="margin-bottom: var(--space-md);">
-            <div class="admin-kv-row"><span>活跃分享</span><strong>${formatCompactNumber(shares.active_shares)} / ${formatCompactNumber(shares.total_shares)}</strong></div>
-            <div class="admin-kv-row"><span>累计分享下载</span><strong>${formatCompactNumber(shares.share_downloads)} 次</strong></div>
-            <div class="admin-kv-row"><span>下载体积估算</span><strong>${formatBytes(shares.estimated_download_bytes)}</strong></div>
-            <div class="admin-kv-row"><span>云盘用户</span><strong>${formatCompactNumber(drive.users_with_drive)} 人</strong></div>
-            <div class="admin-kv-row"><span>文件 / 文件夹</span><strong>${formatCompactNumber(drive.file_count)} / ${formatCompactNumber(drive.folder_count)}</strong></div>
-          </div>
-          ${renderAdminBars((driveData.largest_files || []).map(item => ({
-            label: `${item.owner_username || '用户'} / ${item.name || '文件'}`,
-            value: Number(item.size_bytes || 0),
-          })), {
-            valueFormatter: value => formatBytes(value),
-            emptyText: '暂无大文件',
-          })}
-        </div>
-      </div>
-
-      <div class="card">
+      <div class="card mt-lg">
         <div class="card-header row flex-between gap-sm" style="flex-wrap: wrap;">
           <h3 class="card-title">最近审计</h3>
           <a class="btn btn-secondary btn-sm" href="/admin/audit" data-link>查看全部</a>
@@ -8841,7 +8678,7 @@ async function renderAdminDashboard() {
               </tr>
             </thead>
             <tbody>
-              ${recentAudit.length === 0 ? `<tr><td colspan="4">${emptyBox('暂无审计记录')}</td></tr>` : recentAudit.map(item => `
+              ${auditItems.length === 0 ? `<tr><td colspan="4">${emptyBox('暂无审计记录')}</td></tr>` : auditItems.map(item => `
                 <tr>
                   <td style="font-size: 12px; color: var(--text-muted);">${formatDate(item.created_at)}</td>
                   <td><strong>${esc(item.username || 'system')}</strong></td>
