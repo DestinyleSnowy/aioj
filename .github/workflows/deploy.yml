@@ -75,6 +75,7 @@ jobs:
           rsync -az --delete \
             --exclude '.git/' \
             --exclude '.github/' \
+            --exclude '.ssh/' \
             --exclude '.env' \
             --exclude '.env.*' \
             --exclude '.venv/' \
