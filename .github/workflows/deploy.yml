@@ -66,16 +66,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/aioj_deploy_key -p "${VM_PORT}" "${VM_USER}@${VM_HOST}" "mkdir -p '${VM_PATH}'"
+          ssh -i ~/.ssh/aioj_deploy_key -p "${VM_PORT}" "${VM_USER}@${VM_HOST}" "mkdir -p '${VM_PATH}' && printf '[remote] home=%s\n' \"\$HOME\" && ls -ld \"\$HOME/.ssh\" \"\$HOME/.ssh/authorized_keys\" 2>/dev/null || true"
 
       - name: Sync files to VM
         shell: bash
         run: |
           set -euo pipefail
           rsync -az --delete \
+            --filter 'P .ssh/***' \
             --exclude '.git/' \
             --exclude '.github/' \
-            --exclude '.ssh/' \
+            --exclude '.ssh/***' \
             --exclude '.env' \
             --exclude '.env.*' \
             --exclude '.venv/' \
@@ -97,4 +98,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/aioj_deploy_key -p "${VM_PORT}" "${VM_USER}@${VM_HOST}" "cd '${VM_PATH}' && bash scripts/server_deploy.sh"
+          ssh -i ~/.ssh/aioj_deploy_key -p "${VM_PORT}" "${VM_USER}@${VM_HOST}" "printf '[remote] post-sync ssh files:\n' && ls -ld \"\$HOME/.ssh\" \"\$HOME/.ssh/authorized_keys\" 2>/dev/null || true && cd '${VM_PATH}' && bash scripts/server_deploy.sh"
